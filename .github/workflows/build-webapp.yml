@@ -30,29 +30,8 @@ jobs:
           cache: npm
           cache-dependency-path: webapp/package-lock.json
 
-      - name: Install dependencies
-        working-directory: webapp
-        run: npm ci
-
-      - name: Lint
-        working-directory: webapp
-        run: npm run lint
-
-      - name: Build hosted application
-        working-directory: webapp
-        run: npm run build
-
-      - name: Run model and geometry tests
-        working-directory: webapp
-        run: node --test tests/layout-data.test.mjs
-
-      - name: Run application interface tests
-        working-directory: webapp
-        run: node --test --test-name-pattern='viewer|named-frame|dependency hierarchy|collapsible controls|top-bar action' tests/ui-components.test.mjs
-
-      - name: Rebuild standalone application
-        working-directory: webapp
-        run: npm run build:standalone
+      - name: Build and test
+        run: make -C webapp check
 
       - name: Validate standalone application
         run: |
