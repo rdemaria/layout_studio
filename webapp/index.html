@@ -11,6 +11,83 @@
     <meta name="color-scheme" content="light dark" />
     <title>Layout Studio</title>
     <link rel="stylesheet" href="src/styles.css" />
+    <style>
+      .server-layout-loader {
+        display: grid;
+        grid-template-columns: 20px minmax(150px, 270px);
+        align-items: center;
+        min-width: 0;
+        border: 1px solid #c7d2d4;
+        border-radius: 7px;
+        color: #799097;
+        background: #fff;
+        overflow: hidden;
+      }
+      .server-layout-loader > span { text-align: right; font-size: .75rem; }
+      .server-layout-loader select {
+        height: 34px;
+        border: 0;
+        border-radius: 0;
+        padding: 0 27px 0 8px;
+        color: #253940;
+        background: transparent;
+        font-family: var(--font-mono);
+        font-size: .69rem;
+      }
+      .server-layout-loader select:focus-visible { outline: 0; box-shadow: inset 0 0 0 2px #58a7a5; }
+      .server-layout-loader select:disabled { color: #87969b; background: #f1f4f4; }
+      .internal-loader { display: none !important; }
+      .axis-scale-control {
+        display: grid;
+        grid-template-columns: auto 72px 34px;
+        align-items: center;
+        gap: 5px;
+        color: #a9b8bf;
+        font-size: .61rem;
+        white-space: nowrap;
+      }
+      .axis-scale-control input[type="range"] { width: 72px; accent-color: #4aa7a5; cursor: ew-resize; }
+      .axis-scale-control output {
+        color: #c6d5da;
+        font-family: var(--font-mono);
+        font-size: .57rem;
+        text-align: right;
+      }
+      .standard-view-menu { position: relative; flex: 0 0 auto; }
+      .standard-view-menu > summary { list-style: none; display: inline-flex; align-items: center; }
+      .standard-view-menu > summary::-webkit-details-marker { display: none; }
+      .standard-view-menu[open] > summary { color: #eaffff; background: #286d70; }
+      .standard-view-options {
+        position: absolute;
+        z-index: 12;
+        top: calc(100% + 5px);
+        right: 0;
+        display: grid;
+        min-width: 118px;
+        padding: 4px;
+        border: 1px solid #354a5b;
+        border-radius: 6px;
+        background: #111b26;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, .32);
+      }
+      .standard-view-options button {
+        min-height: 29px;
+        border: 0;
+        border-radius: 4px;
+        padding: 0 8px;
+        color: #b8c7cd;
+        background: transparent;
+        text-align: left;
+        cursor: pointer;
+        font-size: .64rem;
+      }
+      .standard-view-options button:hover { color: #fff; background: #20303e; }
+      @media (max-width: 900px) {
+        .server-layout-loader { grid-template-columns: 18px minmax(120px, 1fr); }
+        .axis-scale-control { grid-template-columns: auto 58px 31px; }
+        .axis-scale-control input[type="range"] { width: 58px; }
+      }
+    </style>
   </head>
   <body>
     <main class="app-shell">
@@ -27,12 +104,15 @@
         </div>
         <div class="import-cluster" aria-label="Layout file actions">
           <button class="button button-ghost" id="clear-button" type="button" title="Clear layout">Clear</button>
-          <div class="url-loader">
-            <span aria-hidden="true">↗</span>
-            <label class="sr-only" for="layout-url">Layout JSON URL</label>
-            <input id="layout-url" type="url" inputmode="url" placeholder="https://…/layout.json" autocomplete="off" />
-            <button class="button button-secondary button-small" id="load-url-button" type="button">Load URL</button>
+          <div class="server-layout-loader">
+            <span aria-hidden="true">▾</span>
+            <label class="sr-only" for="server-layout-select">Server layout</label>
+            <select id="server-layout-select" disabled>
+              <option value="">Loading server layouts…</option>
+            </select>
           </div>
+          <input class="internal-loader" id="layout-url" type="url" tabindex="-1" aria-hidden="true" />
+          <button class="internal-loader" id="load-url-button" type="button" tabindex="-1" aria-hidden="true">Load server layout</button>
           <button class="button button-outline" id="import-button" type="button">Import file</button>
           <button class="button button-primary" id="download-button" type="button">Download JSON</button>
           <input class="sr-only" id="file-input" type="file" accept="application/json,.json" />
@@ -103,8 +183,23 @@
                     <button type="button" class="viewer-mode active" data-viewer-mode="orbit">Orbit</button>
                     <button type="button" class="viewer-mode" data-viewer-mode="pan">Pan</button>
                     <button type="button" class="viewer-mode" data-viewer-mode="select">Select</button>
+                    <button type="button" class="viewer-mode" data-viewer-mode="zoom">Zoom box</button>
                   </div>
                   <button type="button" class="viewer-tool" id="fit-layout-button">Fit layout</button>
+                  <details class="standard-view-menu">
+                    <summary class="viewer-tool">View ▾</summary>
+                    <div class="standard-view-options" role="menu" aria-label="Canonical views">
+                      <button type="button" role="menuitem" data-standard-view="+x">From +X</button>
+                      <button type="button" role="menuitem" data-standard-view="-x">From −X</button>
+                      <button type="button" role="menuitem" data-standard-view="+y">From +Y</button>
+                      <button type="button" role="menuitem" data-standard-view="-y">From −Y</button>
+                    </div>
+                  </details>
+                  <label class="axis-scale-control" for="axis-scale-slider">
+                    <span>Axes</span>
+                    <input id="axis-scale-slider" type="range" min="0" max="4" step="0.1" value="1" />
+                    <output id="axis-scale-value" for="axis-scale-slider">100%</output>
+                  </label>
                   <label class="switch-label"><input type="checkbox" id="show-curves" checked /><span></span>Curves</label>
                   <label class="switch-label"><input type="checkbox" id="show-objects" checked /><span></span>Objects</label>
                   <label class="switch-label"><input type="checkbox" id="show-beam-frames" /><span></span>Beam entry/exit</label>
@@ -112,7 +207,7 @@
                 <div class="viewport-stage" id="viewport-stage">
                   <canvas id="layout-canvas" class="viewport-canvas" aria-label="Interactive three-dimensional layout view"></canvas>
                   <div class="viewer-tooltip" id="viewer-tooltip" hidden></div>
-                  <div class="viewer-hint">Drag to orbit · Shift-drag or right-drag to pan · wheel to zoom · double-click to fit</div>
+                  <div class="viewer-hint">Drag to orbit · Shift-drag or right-drag to pan · Zoom box draws a rectangle · wheel to zoom · double-click to fit</div>
                 </div>
                 <section class="pose-panel" id="world-pose" aria-live="polite">
                   <div class="pose-empty">Select a curve, object or frame to inspect its world pose.</div>
@@ -180,8 +275,9 @@
             <p>A world or object-frame reference can be paired with <code>reference_curve</code>. When its transformation contains <code>ts</code>, the referenced origin P is mapped to a curve station satisfying <code>(P − r(s)) · t(s) = 0</code>. If several stations satisfy the plane equation, the closest curve-frame origin is selected; an error is reported only when there is no solution or the closest solution is ambiguous.</p>
           </section>
           <section>
-            <h3>Viewer interaction</h3>
-            <p>Use Orbit, Pan and Select in the spatial view. Selecting an entity synchronizes the editors, dependency tree and world-pose panel. The dependency tree starts collapsed at World and follows the actual reference hierarchy.</p>
+            <h3>Server catalogue and viewer interaction</h3>
+            <p>When the web-server root contains <code>list.json</code>, the top bar offers its same-origin JSON layouts in a dropdown. Local file import remains available when the catalogue is absent.</p>
+            <p>Use Orbit, Pan, Select, or Zoom box in the spatial view. Zoom box fits the drawn rectangle while preserving the orientation. The Axes slider changes the world-axis length, and the View menu selects the canonical ±X and ±Y directions. Selecting an entity synchronizes the editors, dependency tree and world-pose panel.</p>
           </section>
         </div>
         <footer><button class="button button-primary" value="cancel">Close</button></footer>
@@ -206,6 +302,8 @@
 
     <script src="src/model.js"></script>
     <script src="src/viewer.js"></script>
+    <script src="src/viewer-controls.js"></script>
+    <script src="src/server-layouts.js"></script>
     <script src="src/app.js"></script>
   </body>
 </html>
