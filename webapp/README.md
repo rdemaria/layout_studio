@@ -1,9 +1,9 @@
 # Layout Studio web application
 
-This directory contains the browser editor and 3D viewer for the Layout Studio JSON
-model. It has no runtime dependencies. The editable modules live under `src/`, while the
-checked-in `index.html` is a generated, self-contained build that can be opened directly
-or hosted as a static page.
+This directory contains the browser editor and interactive 3D viewer for the Layout
+Studio JSON model. It has no runtime dependencies. The editable modules live under `src/`, while the
+checked-in `index.html` is the generated entry page and can be opened directly or hosted
+as a static site.
 
 ## Use the standalone app
 
@@ -28,15 +28,15 @@ npm test
 npm run check
 ```
 
-For ordinary development with the unbundled modules, temporarily change the two inlined
-build markers only through `src/index.template.html`, rebuild, and serve the directory:
+To serve the generated application locally:
 
 ```bash
 python3 -m http.server 8000
 ```
 
-The generated `index.html` remains the default entry point and behaves identically when
-served.
+Then open `http://localhost:8000/`. The generated `index.html` loads the dependency-free
+assets directly from `src/`; `build.py` keeps the checked-in page synchronized with its
+template.
 
 ## Files
 
@@ -50,8 +50,7 @@ served.
   selection, fitting, and beam-frame overlays.
 - `src/styles.css` — responsive application styling.
 - `tests/model.test.mjs` — dependency-free model and geometry regression tests.
-- `package.json` — ES-module metadata and lightweight `build`, `serve`, `test`, and
-  `check` scripts.
+- `package.json` — lightweight `build`, `serve`, `test`, and `check` scripts.
 
 ## Layout JSON
 
@@ -71,10 +70,16 @@ rotation values are radians. The supported operations are `tx`, `ty`, `ts`, `tt`
 degrees by the editor.
 
 The app imports local JSON files, loads JSON over HTTP(S), validates references, resolves
-curve/object dependency chains, and exports the current canonical document.
+curve/object dependency chains, and exports the current canonical document. The
+reference graph is rooted at World and starts collapsed; it can be expanded branch by
+branch or with the Expand all control.
+
+For large machines, the viewer switches distant/small objects to compact glyphs while
+keeping detailed wireframes for selected or nearby geometry. This keeps the SPS-sized
+conversion practical without changing the JSON model.
 
 ## Browser support
 
-The app uses JavaScript modules, Canvas 2D, `ResizeObserver`, `structuredClone` (with a
-JSON fallback), and the native `<dialog>` element. Current Firefox, Chromium, and Safari
-releases are supported.
+The app uses Canvas 2D, `ResizeObserver`, `structuredClone` (with a JSON fallback), and
+the native `<dialog>` element. Current Firefox, Chromium, and Safari releases are
+supported.

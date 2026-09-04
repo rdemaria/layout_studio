@@ -154,6 +154,7 @@ test("normal-plane station inference handles a displaced world reference", () =>
       reference_curve: "line",
     },
   };
+  // World is in the normal plane at s=0, so ts=2 selects s=2.
   const resolver = new M.Resolver(M.validateLayout(layout)).resolveAll();
   closeVector(resolver.objectCenter("M").frame.o, [1, 0, 2]);
 });
