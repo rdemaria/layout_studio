@@ -15,6 +15,7 @@ from layout_studio import (
     Segment,
     StationOutOfRangeError,
 )
+from layout_studio.resolver import Resolver
 
 
 def add_curve(layout, name, segments, *, starting_frame=None):
@@ -366,3 +367,51 @@ def test_station_inference_rejects_a_closest_continuous_solution():
     # The arc center is (-1, 0, 0), which lies in every transverse plane.
     with pytest.raises(AmbiguousStationError):
         circle.infer_station([-1.0, 0.0, 0.0])
+
+
+def test_station_inference_preserves_distant_equidistant_roots():
+    layout = Layout()
+    curve = add_curve(
+        layout,
+        "hairpin",
+        [
+            Segment(2.0),
+            Segment(math.pi, math.pi),
+            Segment(2.0),
+        ],
+    )
+
+    # The two straight legs have distinct station roots at the same distance.
+    # A proximity-ordered search must retain the second root for ambiguity.
+    with pytest.raises(AmbiguousStationError):
+        curve.infer_station([-1.0, 0.0, 1.0])
+
+
+def test_station_inference_matches_known_frames_on_a_mixed_curve():
+    layout = Layout()
+    curve = add_curve(
+        layout,
+        "mixed",
+        [
+            Segment(2.0),
+            Segment(math.pi / 2.0, math.pi / 2.0, 0.35),
+            Segment(3.0),
+        ],
+    )
+
+    for station in (0.4, 2.3, curve.length - 0.6):
+        pose = curve.get_frame(station)
+        point = pose.origin + 0.17 * pose.x + 0.31 * pose.y
+        assert curve.infer_station(point) == pytest.approx(station, abs=1.0e-11)
+
+
+def test_station_inference_cache_is_fresh_after_live_curve_edit():
+    layout = Layout()
+    curve = add_curve(layout, "editable", [Segment(3.0)])
+    resolver = Resolver(layout)
+
+    assert resolver.infer_station(curve, [0.0, 0.0, 2.5]) == pytest.approx(2.5)
+    curve.segments[0] = Segment(2.0)
+
+    with pytest.raises(NoStationSolutionError):
+        resolver.infer_station(curve, [0.0, 0.0, 2.5])

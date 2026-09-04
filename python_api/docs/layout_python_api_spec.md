@@ -93,7 +93,7 @@ class Pose:                                 # immutable
     transform_point(self, xyz: ArrayLike) -> NDArray[float]
 
 
-class LayoutViewer:                         # VTK-backed, returned by plot3D
+class LayoutViewer:                         # VTK-backed, returned by plot3d
     renderer: vtkRenderer
     render_window: vtkRenderWindow
     interactor: vtkRenderWindowInteractor
@@ -110,6 +110,10 @@ class LayoutViewer:                         # VTK-backed, returned by plot3D
     set_beam_frames_visible(self, visible=True) -> Self
     screenshot(self, filename=None, *, scale=1, transparent=False)
     close(self) -> None
+
+    # Constructor viewer kwargs include frames=None, curve_resolution=None,
+    # object_resolution=None, radial_resolution=None, batch_objects=None,
+    # and object_batch_size=256. None selects adaptive behaviour.
 
 
 class LayoutViewer2D:                       # Matplotlib-backed, returned by plot2d
@@ -136,6 +140,11 @@ class LayoutViewer2D:                       # Matplotlib-backed, returned by plo
     savefig(self, filename, **kwargs) -> Path
     screenshot(self, filename=None, **kwargs) -> Path | NDArray[np.uint8]
     close(self) -> None
+
+    # Constructor viewer kwargs include frames=None, curve_resolution=None,
+    # object_resolution=None, radial_resolution=None, batch_objects=None,
+    # batch_threshold=128, and hover_interval=1/30. None selects adaptive
+    # behaviour; the resolution kwargs also accept "auto".
 
 
 class Layout(JsonValue):
@@ -183,7 +192,7 @@ class Layout(JsonValue):
         figsize: tuple[float, float] = (10.0, 7.2),
         **viewer_kwargs,
     ) -> LayoutViewer2D
-    plot3D(
+    plot3d(
         self,
         *,
         curves: bool = True,
@@ -195,7 +204,6 @@ class Layout(JsonValue):
         window_size: tuple[int, int] = (1000, 720),
         **viewer_kwargs,
     ) -> LayoutViewer
-    plot3d(...) -> LayoutViewer               # identical spelling alias
 
 
 class Curve(OwnedValue):
@@ -230,10 +238,9 @@ class Curve(OwnedValue):
     plot2d(self, projection: Projection2D | str = "xy", *, selection=None,
            show=True, figsize=(10.0, 7.2), **viewer_kwargs) -> LayoutViewer2D
         # displays this curve only; dependencies are resolved but not drawn
-    plot3D(self, *, selection=None, show=True, off_screen=False,
+    plot3d(self, *, selection=None, show=True, off_screen=False,
            window_size=(1000, 720), **viewer_kwargs) -> LayoutViewer
         # displays this curve only; dependencies are resolved but not drawn
-    plot3d(...) -> LayoutViewer
 
 
 class Type(OwnedValue):
@@ -285,11 +292,10 @@ class Object(OwnedValue):
            frames=True, selection=None, show=True, figsize=(10.0, 7.2),
            **viewer_kwargs) -> LayoutViewer2D
         # displays this object and its requested frames only
-    plot3D(self, *, beam_frames=True, frames=True, selection=None,
+    plot3d(self, *, beam_frames=True, frames=True, selection=None,
            show=True, off_screen=False, window_size=(1000, 720),
            **viewer_kwargs) -> LayoutViewer
         # displays this object and its requested frames only
-    plot3d(...) -> LayoutViewer
 
 
 class Frame(OwnedValue):
@@ -499,17 +505,21 @@ q1 = layout.new_object(
 q2 = layout.new_object(
     "Q2",
     type=quad,
-    position=Position(
-        "Q1->magnetic_exit",
-        target="magnetic_entry",
-        reference_curve=main,
-    ).ts(0.3).tx(0.001),
+    position=(
+        Position(
+            "Q1->magnetic_exit",
+            target="magnetic_entry",
+            reference_curve=main,
+        )
+        .ts(0.3)
+        .tx(0.001)
+    ),
 )
 
 layout.search(r"^Q", kind="object")
 layout["Q1"].get_frame("magnetic_exit")
 layout.plot2d("xy")
-layout.plot3D()
+layout.plot3d()
 layout.save("layout.json")
 ```
 
@@ -527,6 +537,15 @@ GUI window, permitting headless inspection and export with `savefig()` or
 `screenshot()`. Native Matplotlib toolbar pan and zoom remain available. An
 existing Matplotlib axes can be supplied with `ax=...` for composed figures.
 
+For scopes of at least 128 objects, automatic mode represents each projected
+object by its convex silhouette and places all objects in one collection. This
+keeps drawing and interaction costs bounded while preserving object-level
+selection through a vectorized bounds index. Straight extrusions use exactly
+two longitudinal sections. Curved objects, cylinders, and reference curves use
+adaptive tessellation budgets unless an explicit `curve_resolution`,
+`object_resolution`, or `radial_resolution` is supplied. `batch_objects=False`
+requests the detailed per-object representation.
+
 Hovering shows the entity name and world pose. For curves, the nearest sampled
 chord in the projection supplies a continuously interpolated station and its
 pose. Left-click
@@ -536,24 +555,41 @@ keys `c`, `o`, and `b` toggle curve, object, and Beam-frame layers; `g` toggles
 the grid; `f` and `r` fit the scoped geometry; and Escape clears selection.
 
 The layout view can toggle curves, objects, stored frames, and Beam entry/exit
-frames. `Curve.plot2d()` and `Object.plot2d()` use the same strict entity scope
-as their 3D counterparts: upstream dependencies are resolved, but unrelated
-geometry is neither drawn nor included in fitting.
+frames. Frame layers are lazy; their adaptive default is on for small scopes
+and off for large ones, and an explicit boolean is always honoured. Batched
+scopes also batch enabled frames. `Curve.plot2d()` and `Object.plot2d()` use the
+same strict entity scope as their 3D counterparts: upstream dependencies are
+resolved, but unrelated geometry is neither drawn nor included in fitting.
 
 ## VTK viewer
 
-`plot3D()` and its identical `plot3d()` alias return a `LayoutViewer`.  With
+`plot3d()` returns a `LayoutViewer`. With
 `show=True` the viewer opens its native VTK interactor; `show=False` builds and
 returns the scene without entering the event loop, which is convenient in
 IPython and for programmatic inspection.
 
+The VTK viewer automatically batches scopes of at least 128 objects into
+256-object actors with per-cell colours and selection identities. It uses
+static cell locators, restricts picking to interactive props, and throttles
+hover work. Straight extrusions use an exact two-section mesh; curved/radial
+tessellation follows a scene-size budget. Explicit `curve_resolution`,
+`object_resolution`, `radial_resolution`, `batch_objects`, and
+`object_batch_size` values override these choices.
+
 The layout view can toggle reference curves, objects, stored frames, and Beam
-entry/exit frames.  It provides Y-up trackball navigation, fit/reset, an X–Z
-ground grid, a world orientation triad, hover labels, click selection,
-selection highlighting, a local x/y/s triad, and a world-pose readout using
-MAD-X theta/phi/psi angles.  `Curve.plot3D()` and `Object.plot3D()` use strict
-entity scope: upstream dependencies are resolved but unrelated geometry is not
-shown and does not affect camera fitting.
+entry/exit frames. Frame layers are lazy and default off only for a large
+scope; explicitly enabled large frame layers are batched. It provides Y-up
+trackball navigation, fit/reset, an X–Z ground grid, a world orientation triad,
+hover labels, click selection, selection highlighting, a local x/y/s triad,
+and a world-pose readout using MAD-X theta/phi/psi angles. `Curve.plot3d()` and
+`Object.plot3d()` use strict entity scope: upstream dependencies are resolved
+but unrelated geometry is not shown and does not affect camera fitting.
+
+The native `show()` loop handles VTK `ExitEvent` explicitly. Closing the window
+terminates the interactor, finalizes and detaches the render window, removes
+observers and props, and releases scene-sized caches while a closed viewer
+remains referenced by IPython. `close()` performs the same teardown and is
+idempotent.
 
 ## Exceptions
 

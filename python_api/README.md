@@ -49,11 +49,15 @@ q1 = layout.new_object(
 q2 = layout.new_object(
     "Q2",
     type=quadrupole,
-    position=Position(
-        "Q1->magnetic_exit",
-        target="magnetic_entry",
-        reference_curve=main,
-    ).ts(0.3).tx(0.001),
+    position=(
+        Position(
+            "Q1->magnetic_exit",
+            target="magnetic_entry",
+            reference_curve=main,
+        )
+        .ts(0.3)
+        .tx(0.001)
+    ),
 )
 
 layout.validate()
@@ -70,14 +74,13 @@ view2d.show()
 main.plot2d("xy")
 q1.plot2d("yz", beam_frames=True)
 
-# Both spellings are available because they were used in the original API
-# discussion.  They return a LayoutViewer; show=False builds without starting
-# the blocking native interactor.
-viewer = layout.plot3D(beam_frames=True, show=False)
+# plot3d() returns a LayoutViewer; show=False builds without starting the
+# blocking native interactor.
+viewer = layout.plot3d(beam_frames=True, show=False)
 viewer.show()
 
 main.plot3d()
-q1.plot3D(beam_frames=True)
+q1.plot3d(beam_frames=True)
 ```
 
 ## Reference shorthand
@@ -127,6 +130,16 @@ without opening a GUI window, so it is suitable for notebooks, headless tests,
 and programmatic export. Pass an existing Matplotlib axes as `ax=...` to draw
 the projection inside a larger figure.
 
+Large scopes use an adaptive level of detail automatically. Straight objects
+keep their exact two-section extrusion, and scopes of 128 objects or more are
+drawn as one collection of projected silhouettes instead of thousands of
+per-object artists. Stored and Beam-frame layers are built lazily and default
+off for a large scope; passing `frames=True` or `beam_frames=True` still builds
+them in batched collections. `curve_resolution`, `object_resolution`, and
+`radial_resolution` override automatic tessellation. `batch_objects` and
+`batch_threshold` override automatic 2D batching, while `hover_interval`
+controls pointer throttling.
+
 ## 3D viewer controls
 
 The VTK viewer uses trackball-camera navigation.  Left drag orbits, middle
@@ -143,5 +156,16 @@ principal layers and restore the fitted camera:
 | `Escape` | Clear selection |
 
 The `LayoutViewer` also exposes `set_curves_visible()`,
-`set_objects_visible()`, `set_beam_frames_visible()`, `fit()`, `select()`,
-`screenshot()`, and `close()` for interactive Python use.
+`set_objects_visible()`, `set_frames_visible()`,
+`set_beam_frames_visible()`, `fit()`, `select()`, `screenshot()`, and `close()`
+for interactive Python use. Large scopes automatically use exact low-detail
+straight extrusions, chunked object actors, cell-aware picking, and lazy,
+batched frame layers. The automatic choices can be overridden with
+`curve_resolution`, `object_resolution`, `radial_resolution`, `batch_objects`,
+and `object_batch_size`.
+
+`show()` enters the native VTK interaction loop. Closing that window terminates
+the loop, finalizes the render window, disconnects observers, and releases the
+scene even if IPython retains the returned viewer in `Out[...]`. For notebook
+construction or export without entering the loop, use `show=False` and call
+`close()` when finished; repeated calls to `close()` are harmless.

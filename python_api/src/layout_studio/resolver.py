@@ -18,6 +18,7 @@ import re
 from bisect import bisect_right
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from math import atan2, ceil, cos, floor, hypot, isfinite, pi, sin
 from typing import TYPE_CHECKING, Any
 
@@ -650,6 +651,31 @@ def _point3(point: Any) -> FloatVector:
     return np.array(result, dtype=float, copy=True)
 
 
+@dataclass(frozen=True, slots=True)
+class _CurveStationGeometry:
+    """Session-local values reused by exact station inference.
+
+    ``midpoints`` and ``sphere_radii`` define conservative bounding spheres
+    for the centreline segments.  A point on a segment is at most half that
+    segment's path length from its midpoint, so the spheres also enclose
+    circular arcs.  This lets inference discard distant segments only after a
+    closer transverse-plane solution has been found, without changing the
+    exact root, tie, or ambiguity rules.
+    """
+
+    boundaries: NDArray[np.float64]
+    starts: NDArray[np.float64]
+    lengths: NDArray[np.float64]
+    angles: NDArray[np.float64]
+    rolls: NDArray[np.float64]
+    curvatures: NDArray[np.float64]
+    midpoints: NDArray[np.float64]
+    sphere_radii: NDArray[np.float64]
+    base_origin_scale: float
+    path_tolerance: float
+    geometry_scale_tolerance: float
+
+
 class Resolver:
     """Evaluate a layout's symbolic frame graph analytically.
 
@@ -667,6 +693,7 @@ class Resolver:
         self._curve_data_cache: dict[
             int, tuple[list[Any], list[float], list[FloatMatrix]]
         ] = {}
+        self._curve_station_geometry_cache: dict[int, _CurveStationGeometry] = {}
         self._object_centers: dict[int, FloatMatrix] = {}
         self._active: list[tuple[str, str]] = []
 
@@ -695,6 +722,7 @@ class Resolver:
         if outermost:
             self._curve_starts = {}
             self._curve_data_cache = {}
+            self._curve_station_geometry_cache = {}
             self._object_centers = {}
             self._active = []
             if self.layout is not None:
@@ -1094,6 +1122,60 @@ class Resolver:
         self._curve_data_cache[id(curve)] = result
         return result
 
+    def _curve_station_geometry(self, curve: Any) -> _CurveStationGeometry:
+        """Return immutable per-segment station data for the active session."""
+
+        key_id = id(curve)
+        cached = self._curve_station_geometry_cache.get(key_id)
+        if cached is not None:
+            return cached
+
+        segments, boundary_values, start_values = self._curve_data(curve)
+        values = np.asarray([_segment_values(segment) for segment in segments])
+        lengths = values[:, 0]
+        angles = values[:, 1]
+        rolls = values[:, 2]
+        curvatures = angles / lengths
+        boundaries = np.asarray(boundary_values, dtype=float)
+        starts = np.stack(start_values[:-1])
+        midpoints = np.stack(
+            [
+                advance(start, 0.5 * length, curvature, roll)[:3, 3]
+                for start, length, curvature, roll in zip(
+                    starts, lengths, curvatures, rolls
+                )
+            ]
+        )
+
+        total = float(boundaries[-1])
+        bent = np.abs(angles) >= 1.0e-10
+        bend_radii = np.abs(lengths[bent] / angles[bent])
+        geometry_scale = max(
+            1.0,
+            total,
+            float(np.max(lengths)),
+            float(np.max(bend_radii)) if bend_radii.size else 1.0,
+        )
+        result = _CurveStationGeometry(
+            boundaries=boundaries,
+            starts=starts,
+            lengths=lengths,
+            angles=angles,
+            rolls=rolls,
+            curvatures=curvatures,
+            midpoints=midpoints,
+            sphere_radii=0.5 * lengths,
+            base_origin_scale=max(
+                1.0,
+                total,
+                float(np.max(np.abs(np.stack(start_values)[:, :3, 3]))),
+            ),
+            path_tolerance=max(1.0e-12, 1.0e-9 * max(1.0, total)),
+            geometry_scale_tolerance=max(1.0e-10, 1.0e-12 * geometry_scale),
+        )
+        self._curve_station_geometry_cache[key_id] = result
+        return result
+
     def _curve_frame_matrix(
         self, curve: Any, station: float, extrapolate: bool = True
     ) -> FloatMatrix:
@@ -1360,34 +1442,50 @@ class Resolver:
 
     def _infer_station(self, curve: Any, point: Any) -> float:
         point = _point3(point)
-        segments, boundaries, starts = self._curve_data(curve)
-        total = boundaries[-1]
-        lengths = [_segment_values(segment)[0] for segment in segments]
-        radii = [
-            abs(length / angle)
-            for segment, length in zip(segments, lengths)
-            if abs(angle := _segment_values(segment)[1]) >= 1.0e-10
-        ]
-        origin_scale = max(
-            [1.0, float(np.max(np.abs(point))), total]
-            + [float(np.max(np.abs(frame[:3, 3]))) for frame in starts]
-        )
-        path_tolerance = max(1.0e-12, 1.0e-9 * max(1.0, total))
+        geometry = self._curve_station_geometry(curve)
+        boundaries = geometry.boundaries
+        total = float(boundaries[-1])
+        origin_scale = max(geometry.base_origin_scale, float(np.max(np.abs(point))))
+        path_tolerance = geometry.path_tolerance
         geometry_tolerance = max(
-            1.0e-10,
-            1.0e-12 * max([1.0, total, *lengths, *radii]),
+            geometry.geometry_scale_tolerance,
             32.0 * _EPS * origin_scale,
         )
         isolated: list[tuple[float, float]] = []
         intervals: list[float] = []
 
-        for index, segment in enumerate(segments):
-            length, angle, roll = _segment_values(segment)
-            start = starts[index]
+        # Every centreline point in a segment is within half its path length
+        # of that segment's midpoint.  The resulting sphere lower bounds are
+        # conservative for both lines and arcs.  Visit nearby segments first,
+        # and stop only once every remaining segment is too distant to affect
+        # either the closest root or its ambiguity tolerance.
+        lower_bounds = np.maximum(
+            0.0,
+            np.linalg.norm(geometry.midpoints - point, axis=1)
+            - geometry.sphere_radii
+            - geometry_tolerance,
+        )
+        order = np.argsort(lower_bounds, kind="stable")
+        closest_seen = float("inf")
+
+        for index_value in order:
+            index = int(index_value)
+            if isfinite(closest_seen):
+                distance_tolerance = max(
+                    geometry_tolerance,
+                    1.0e-10 * max(1.0, closest_seen, origin_scale),
+                )
+                if float(lower_bounds[index]) > closest_seen + distance_tolerance:
+                    break
+
+            length = float(geometry.lengths[index])
+            angle = float(geometry.angles[index])
+            roll = float(geometry.rolls[index])
+            start = geometry.starts[index]
             origin = start[:3, 3]
             x_axis, y_axis, tangent = start[:3, 0], start[:3, 1], start[:3, 2]
             q = point - origin
-            curvature = angle / length
+            curvature = float(geometry.curvatures[index])
 
             # The web implementation and reference conformance notes treat
             # vanishingly small bend angles as straight to avoid enormous arc
@@ -1397,12 +1495,9 @@ class Resolver:
                 if -path_tolerance <= local <= length + path_tolerance:
                     local = min(max(local, 0.0), length)
                     candidate_origin = advance(start, local, 0.0, roll)[:3, 3]
-                    isolated.append(
-                        (
-                            boundaries[index] + local,
-                            float(np.linalg.norm(point - candidate_origin)),
-                        )
-                    )
+                    distance = float(np.linalg.norm(point - candidate_origin))
+                    isolated.append((float(boundaries[index]) + local, distance))
+                    closest_seen = min(closest_seen, distance)
                 continue
 
             normal = -cos(roll) * x_axis - sin(roll) * y_axis
@@ -1416,9 +1511,9 @@ class Resolver:
                 32.0 * _EPS * local_scale,
             )
             if abs(a) <= degeneracy_tolerance and abs(b) <= degeneracy_tolerance:
-                midpoint = 0.5 * length
-                middle_origin = advance(start, midpoint, curvature, roll)[:3, 3]
-                intervals.append(float(np.linalg.norm(point - middle_origin)))
+                distance = float(np.linalg.norm(point - geometry.midpoints[index]))
+                intervals.append(distance)
+                closest_seen = min(closest_seen, distance)
                 continue
 
             base = atan2(b, a) + 0.5 * pi
@@ -1437,12 +1532,9 @@ class Resolver:
                     continue
                 local = min(max(local, 0.0), length)
                 candidate_origin = advance(start, local, curvature, roll)[:3, 3]
-                isolated.append(
-                    (
-                        boundaries[index] + local,
-                        float(np.linalg.norm(point - candidate_origin)),
-                    )
-                )
+                distance = float(np.linalg.norm(point - candidate_origin))
+                isolated.append((float(boundaries[index]) + local, distance))
+                closest_seen = min(closest_seen, distance)
 
         isolated = self._deduplicate_candidates(isolated, path_tolerance)
         all_distances = [distance for _, distance in isolated] + intervals

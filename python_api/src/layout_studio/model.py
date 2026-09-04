@@ -1538,8 +1538,6 @@ class Curve(OwnedValue):
             **viewer_kwargs,
         )
 
-    plot3D = plot3d
-
     def plot2d(
         self,
         projection: str = "xy",
@@ -1988,8 +1986,6 @@ class Object(OwnedValue):
             window_size=window_size,
             **viewer_kwargs,
         )
-
-    plot3D = plot3d
 
     def plot2d(
         self,
@@ -2793,8 +2789,6 @@ class Layout(JsonValue):
             window_size=window_size,
             **viewer_kwargs,
         )
-
-    plot3D = plot3d
 
     def plot2d(
         self,

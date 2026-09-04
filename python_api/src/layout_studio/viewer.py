@@ -13,7 +13,9 @@ never adds those dependencies to the scene.
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,12 @@ _DEFAULT_BACKGROUND = "#090e16"
 _CURVE_FALLBACK = "#68d5c8"
 _OBJECT_FALLBACK = "#f0a84b"
 _SELECTION_COLOR = "#ffbe5d"
+_AUTO_CURVE_RESOLUTION = 64
+_AUTO_OBJECT_RESOLUTION = 8
+_AUTO_RADIAL_RESOLUTION = 12
+_OBJECT_BATCH_THRESHOLD = 128
+_OBJECT_BATCH_SIZE = 256
+_OBJECT_TRIANGLE_BUDGET = 200_000
 
 
 def _require_vtk() -> Any:
@@ -219,6 +227,7 @@ class _ObjectVisual:
     name: str
     entity: Any
     vertices: np.ndarray
+    faces: np.ndarray
     actor: Any
     color: tuple[float, float, float]
     pose: Any
@@ -267,12 +276,17 @@ class LayoutViewer:
         curves: bool | Any | Iterable[Any] = True,
         objects: bool | Any | Iterable[Any] = True,
         beam_frames: bool = False,
-        frames: bool = True,
+        frames: bool | None = None,
         selection: Any = None,
         show: bool = True,
         off_screen: bool = False,
         window_size: tuple[int, int] = (1000, 720),
         background: Any = _DEFAULT_BACKGROUND,
+        curve_resolution: int | None = None,
+        object_resolution: int | None = None,
+        radial_resolution: int | None = None,
+        batch_objects: bool | None = None,
+        object_batch_size: int = _OBJECT_BATCH_SIZE,
         curves_visible: bool | None = None,
         objects_visible: bool | None = None,
     ) -> None:
@@ -287,7 +301,6 @@ class LayoutViewer:
         from .resolver import Resolver
 
         self.resolver = Resolver(layout)
-        self._validate_resolver()
 
         all_curves = _mapping_items(getattr(layout, "curves", None))
         if not all_curves:
@@ -303,6 +316,47 @@ class LayoutViewer:
         )
         self.curve_scope = tuple(entity for _, entity in self._curve_items)
         self.object_scope = tuple(entity for _, entity in self._object_items)
+        self._curve_count = len(self._curve_items)
+        self._object_count = len(self._object_items)
+
+        object_count = len(self._object_items)
+        self._requested_curve_resolution = curve_resolution
+        self._requested_object_resolution = object_resolution
+        self._requested_radial_resolution = radial_resolution
+        self.radial_resolution = self._viewer_resolution(
+            radial_resolution,
+            "radial_resolution",
+            self._auto_radial_resolution(object_count),
+            minimum=3,
+        )
+        self.curve_resolution = self._viewer_resolution(
+            curve_resolution,
+            "curve_resolution",
+            self._auto_curve_resolution(len(self._curve_items)),
+        )
+        self.object_resolution = self._viewer_resolution(
+            object_resolution,
+            "object_resolution",
+            self._auto_object_resolution(object_count, self.radial_resolution),
+        )
+        self.curve_resolution_effective = self.curve_resolution
+        self.object_resolution_effective = self.object_resolution
+        self.radial_resolution_effective = self.radial_resolution
+        if batch_objects is not None and not isinstance(
+            batch_objects, (bool, np.bool_)
+        ):
+            raise TypeError("batch_objects must be a bool or None")
+        self.batch_objects = batch_objects
+        self.batched_objects = (
+            object_count >= _OBJECT_BATCH_THRESHOLD
+            if batch_objects is None
+            else bool(batch_objects)
+        )
+        self.object_batch_size = self._viewer_resolution(
+            object_batch_size,
+            "object_batch_size",
+            _OBJECT_BATCH_SIZE,
+        )
 
         self.curves_visible = (
             bool_curves if curves_visible is None else bool(curves_visible)
@@ -311,49 +365,84 @@ class LayoutViewer:
             bool_objects if objects_visible is None else bool(objects_visible)
         )
         self.beam_frames_visible = bool(beam_frames)
-        self.frames_visible = bool(frames)
+        self.frames_visible = (
+            object_count < _OBJECT_BATCH_THRESHOLD if frames is None else bool(frames)
+        )
 
         self._closed = False
+        self._closing = False
+        self._exit_requested = False
+        self._in_interactor = False
         self._render_started = False
         self._interactor_initialised = False
         self._orientation_enabled = False
         self._press_position: tuple[int, int] | None = None
+        self._camera_interacting = False
         self._selection: _Selection | None = None
         self._hover: _Selection | None = None
+        self._last_hover_pick = 0.0
+        self._last_hover_position: tuple[int, int] | None = None
+        target_rate = 20.0 if object_count >= _OBJECT_BATCH_THRESHOLD else 30.0
+        self._hover_interval = 1.0 / target_rate
+        self._observer_tags: list[tuple[Any, int]] = []
 
         self._curve_visuals: dict[str, _CurveVisual] = {}
         self._object_visuals: dict[str, _ObjectVisual] = {}
+        self._object_visual_by_identity: dict[int, _ObjectVisual] = {}
         self._pick_targets: dict[Any, _PickTarget] = {}
+        self._batched_pick_targets: dict[Any, tuple[np.ndarray, list[_PickTarget]]] = {}
+        self._pending_object_visuals: list[_ObjectVisual] = []
+        self._pick_locators: list[Any] = []
         self._curve_actors: list[Any] = []
         self._object_actors: list[Any] = []
         self._beam_frame_actors: list[Any] = []
         self._named_frame_actors: list[Any] = []
         self._decoration_actors: list[Any] = []
         self._bounds_points: list[np.ndarray] = []
+        self._named_frames_built = False
+        self._beam_frames_built = False
+        self._object_highlight_actor: Any = None
+        self._resolver_context = self.resolver._session()
+        self._resolver_context.__enter__()
 
-        self._build_window()
-        self._build_entity_geometry()
-        self._finish_bounds()
-        self._build_ground_grid()
-        self._build_object_frames()
-        self._build_readouts()
-        self._build_orientation_widget()
-        self._install_interaction()
-        self._apply_layer_visibility()
-        self.fit()
+        try:
+            self._build_window()
+            # The viewer represents a geometry snapshot.  Keep one resolver
+            # session for its lifetime so hover, selection, and lazy layers do
+            # not revalidate a large layout or discard resolved world poses.
+            self._build_entity_geometry()
+            self._finish_bounds()
+            self._build_ground_grid()
+            if self.frames_visible:
+                self._ensure_named_frames()
+            if self.beam_frames_visible:
+                self._ensure_beam_frames()
+            self._build_readouts()
+            self._build_orientation_widget()
+            self._install_interaction()
+            self._apply_layer_visibility()
+            self.fit()
+        except BaseException:
+            self._resolver_context.__exit__(None, None, None)
+            self._resolver_context = None
+            raise
 
-        # Public conveniences used in notebooks and by lightweight smoke tests.
-        self.curve_actors = {
-            name: visual.actor for name, visual in self._curve_visuals.items()
-        }
-        self.object_actors = {
-            name: visual.actor for name, visual in self._object_visuals.items()
-        }
+        try:
+            # Public conveniences used in notebooks and lightweight smoke tests.
+            self.curve_actors = {
+                name: visual.actor for name, visual in self._curve_visuals.items()
+            }
+            self.object_actors = {
+                name: visual.actor for name, visual in self._object_visuals.items()
+            }
 
-        if selection is not None:
-            self.select(selection)
-        if show:
-            self.show()
+            if selection is not None:
+                self.select(selection)
+            if show:
+                self.show()
+        except BaseException:
+            self.close()
+            raise
 
     @staticmethod
     def _validate_window_size(value: Any) -> tuple[int, int]:
@@ -365,6 +454,52 @@ class LayoutViewer:
         if width <= 0 or height <= 0:
             raise ValueError("window_size dimensions must be positive")
         return width, height
+
+    @staticmethod
+    def _viewer_resolution(
+        value: Any, name: str, automatic: int, *, minimum: int = 1
+    ) -> int:
+        """Validate an explicit tessellation value or return its auto value."""
+
+        if value is None:
+            return int(automatic)
+        if isinstance(value, (bool, np.bool_)):
+            raise TypeError(f"{name} must be an integer of at least {minimum}")
+        try:
+            result = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{name} must be an integer of at least {minimum}"
+            ) from exc
+        if result != value or result < minimum:
+            raise ValueError(f"{name} must be an integer of at least {minimum}")
+        return result
+
+    @staticmethod
+    def _auto_curve_resolution(curve_count: int) -> int:
+        # Segment boundaries are inserted by Resolver, so even the floor keeps
+        # every element junction while limiting regular samples in huge scenes.
+        if curve_count <= 0:
+            return _AUTO_CURVE_RESOLUTION
+        return max(8, min(_AUTO_CURVE_RESOLUTION, 32_768 // curve_count))
+
+    @staticmethod
+    def _auto_radial_resolution(object_count: int) -> int:
+        if object_count >= 2_000:
+            return 6
+        if object_count >= _OBJECT_BATCH_THRESHOLD:
+            return 8
+        return _AUTO_RADIAL_RESOLUTION
+
+    @staticmethod
+    def _auto_object_resolution(object_count: int, radial_resolution: int) -> int:
+        if object_count <= 0:
+            return _AUTO_OBJECT_RESOLUTION
+        cross_section_sides = max(4, radial_resolution)
+        budget_value = _OBJECT_TRIANGLE_BUDGET // (
+            2 * object_count * cross_section_sides
+        )
+        return max(1, min(_AUTO_OBJECT_RESOLUTION, budget_value))
 
     def _validate_resolver(self) -> None:
         validate = getattr(self.resolver, "validate", None)
@@ -486,13 +621,17 @@ class LayoutViewer:
             self.renderer.GradientBackgroundOn()
         if hasattr(self.renderer, "SetUseDepthPeeling"):
             self.renderer.SetUseDepthPeeling(True)
-            self.renderer.SetMaximumNumberOfPeels(100)
-            self.renderer.SetOcclusionRatio(0.1)
+            # A handful of peels is enough for an overview.  The former 100
+            # passes made translucent accelerator-scale scenes needlessly
+            # expensive, especially while the camera was moving.
+            peels = 8 if self.batched_objects else 32
+            self.renderer.SetMaximumNumberOfPeels(peels)
+            self.renderer.SetOcclusionRatio(0.2 if self.batched_objects else 0.1)
 
         self.render_window = vtk.vtkRenderWindow()
         self.render_window.AddRenderer(self.renderer)
         self.render_window.SetSize(*self.window_size)
-        self.render_window.SetWindowName("Layout Studio — plot3D")
+        self.render_window.SetWindowName("Layout Studio — plot3d")
         if hasattr(self.render_window, "SetAlphaBitPlanes"):
             self.render_window.SetAlphaBitPlanes(1)
         if hasattr(self.render_window, "SetMultiSamples"):
@@ -517,9 +656,11 @@ class LayoutViewer:
             self._add_curve(_safe_name(curve, fallback_name), curve)
         for fallback_name, obj in self._object_items:
             self._add_object(_safe_name(obj, fallback_name), obj)
+        if self.batched_objects:
+            self._finish_object_batches()
 
     def _add_curve(self, name: str, curve: Any) -> None:
-        data = self.resolver.sampled_curve(curve)
+        data = self.resolver.sampled_curve(curve, self.curve_resolution)
         points = _as_points(_data_field(data, "points", ()))
         if len(points) == 0:
             return
@@ -567,7 +708,7 @@ class LayoutViewer:
         )
         self._curve_visuals[name] = visual
         self._curve_actors.extend((halo, actor))
-        self._pick_targets[actor] = _PickTarget("curve", name, curve)
+        self._register_pick_target(actor, _PickTarget("curve", name, curve))
         self._bounds_points.append(points)
 
     def _polyline_data(self, points: np.ndarray) -> Any:
@@ -598,10 +739,28 @@ class LayoutViewer:
             method()
 
     def _add_object(self, name: str, obj: Any) -> None:
-        data = self.resolver.swept_object_mesh(obj)
+        type_ = self._object_type(obj)
+        mesh_resolution = self._object_mesh_resolution(type_)
+        data = self.resolver.swept_object_mesh(
+            obj,
+            resolution=mesh_resolution,
+            radial_resolution=self.radial_resolution,
+        )
         vertices = _as_points(_data_field(data, "vertices", ()))
-        faces = _data_field(data, "faces", ())
+        faces = self._triangulated_faces(vertices, _data_field(data, "faces", ()))
         if len(vertices) == 0:
+            return
+
+        pose = self.resolver.object_frame(obj)
+        color_value = _data_field(data, "color", getattr(type_, "color", None))
+        color = _hex_color(color_value, _OBJECT_FALLBACK)
+        visual = _ObjectVisual(name, obj, vertices, faces, None, color, pose)
+        self._object_visuals[name] = visual
+        self._object_visual_by_identity[id(obj)] = visual
+        self._bounds_points.append(vertices)
+
+        if self.batched_objects:
+            self._pending_object_visuals.append(visual)
             return
 
         polydata = self._surface_data(vertices, faces)
@@ -615,9 +774,6 @@ class LayoutViewer:
         mapper.SetInputConnection(normals.GetOutputPort())
         actor = self._vtk.vtkActor()
         actor.SetMapper(mapper)
-        type_ = self._object_type(obj)
-        color_value = _data_field(data, "color", getattr(type_, "color", None))
-        color = _hex_color(color_value, _OBJECT_FALLBACK)
         prop = actor.GetProperty()
         prop.SetColor(*color)
         prop.SetOpacity(0.34)
@@ -631,12 +787,139 @@ class LayoutViewer:
         prop.SetSpecularPower(20.0)
         self.renderer.AddActor(actor)
 
-        pose = self.resolver.object_frame(obj)
-        visual = _ObjectVisual(name, obj, vertices, actor, color, pose)
-        self._object_visuals[name] = visual
+        visual.actor = actor
         self._object_actors.append(actor)
-        self._pick_targets[actor] = _PickTarget("object", name, obj, pose)
-        self._bounds_points.append(vertices)
+        self._register_pick_target(actor, _PickTarget("object", name, obj, pose))
+
+    def _object_mesh_resolution(self, type_: Any) -> int:
+        """Use the exact two-end-section skin for every straight primitive."""
+
+        shape = getattr(type_, "shape", None)
+        curvature = getattr(shape, "curvature", None)
+        length = getattr(shape, "dz", None)
+        if (
+            curvature is None
+            and isinstance(shape, Sequence)
+            and not isinstance(shape, (str, bytes))
+        ):
+            values = list(shape)
+            if values:
+                kind = str(values[0]).lower()
+                index = 4 if kind == "box" else 3 if kind == "cylinder" else -1
+                if index >= 0 and len(values) > index:
+                    curvature = values[index]
+                    length = values[3 if kind == "box" else 2]
+        try:
+            curvature_value = abs(float(curvature or 0.0))
+            length_value = abs(float(length or 0.0))
+        except (TypeError, ValueError):
+            return self.object_resolution
+        if curvature_value <= 1.0e-14:
+            return 1
+        if self._requested_object_resolution is not None:
+            return self.object_resolution
+        # Retain large arcs even when the scene-wide polygon budget reduced
+        # the baseline: at most roughly 7.5 degrees of bend per chord.
+        angle_resolution = math.ceil(curvature_value * length_value / math.radians(7.5))
+        return max(2, self.object_resolution, min(64, angle_resolution))
+
+    @staticmethod
+    def _triangulated_faces(vertices: np.ndarray, faces: Any) -> np.ndarray:
+        triangles: list[tuple[int, int, int]] = []
+        for face in faces:
+            ids = [int(index) for index in face]
+            if len(ids) < 3:
+                continue
+            if any(index < 0 or index >= len(vertices) for index in ids):
+                raise ValueError("object mesh face contains an invalid vertex index")
+            triangles.extend(
+                (ids[0], ids[index], ids[index + 1]) for index in range(1, len(ids) - 1)
+            )
+        return np.asarray(triangles, dtype=np.int64).reshape((-1, 3))
+
+    def _finish_object_batches(self) -> None:
+        """Build chunked, directly-coloured object actors for large layouts."""
+
+        visuals = self._pending_object_visuals
+        for first in range(0, len(visuals), self.object_batch_size):
+            self._add_object_batch(visuals[first : first + self.object_batch_size])
+        visuals.clear()
+
+    def _add_object_batch(self, visuals: list[_ObjectVisual]) -> None:
+        if not visuals:
+            return
+        vertices_parts: list[np.ndarray] = []
+        face_parts: list[np.ndarray] = []
+        color_parts: list[np.ndarray] = []
+        targets: list[_PickTarget] = []
+        cell_ends: list[int] = []
+        vertex_offset = 0
+        cell_offset = 0
+        for visual in visuals:
+            vertices_parts.append(visual.vertices)
+            face_parts.append(visual.faces + vertex_offset)
+            rgb = np.rint(np.asarray(visual.color) * 255.0).astype(np.uint8)
+            color_parts.append(np.repeat(rgb[None, :], len(visual.faces), axis=0))
+            vertex_offset += len(visual.vertices)
+            if len(visual.faces):
+                cell_offset += len(visual.faces)
+                cell_ends.append(cell_offset)
+                targets.append(
+                    _PickTarget("object", visual.name, visual.entity, visual.pose)
+                )
+
+        vertices = np.concatenate(vertices_parts, axis=0)
+        faces = np.concatenate(face_parts, axis=0)
+        colors = np.concatenate(color_parts, axis=0)
+        polydata = self._surface_data(vertices, faces)
+
+        from vtk.util.numpy_support import (  # type: ignore[import-not-found]
+            numpy_to_vtk,
+        )
+
+        vtk_colors = numpy_to_vtk(
+            np.ascontiguousarray(colors),
+            deep=True,
+            array_type=self._vtk.VTK_UNSIGNED_CHAR,
+        )
+        vtk_colors.SetName("LayoutObjectColor")
+        polydata.GetCellData().SetScalars(vtk_colors)
+
+        mapper = self._vtk.vtkPolyDataMapper()
+        mapper.SetInputData(polydata)
+        mapper.SetScalarModeToUseCellData()
+        mapper.SetColorModeToDirectScalars()
+        mapper.ScalarVisibilityOn()
+        actor = self._vtk.vtkActor()
+        actor.SetMapper(mapper)
+        prop = actor.GetProperty()
+        prop.SetOpacity(0.34)
+        # Overview scenes trade per-triangle outlines and Phong normals for a
+        # vastly smaller render pipeline.  Selection still gets a crisp overlay.
+        if len(self._object_items) < 2_000:
+            prop.EdgeVisibilityOn()
+            prop.SetEdgeColor(*_hex_color("#9eb0bb", "#9eb0bb"))
+            prop.SetLineWidth(1.0)
+        else:
+            prop.EdgeVisibilityOff()
+        prop.SetInterpolationToFlat()
+        prop.SetAmbient(0.28)
+        prop.SetDiffuse(0.72)
+        self.renderer.AddActor(actor)
+        self._object_actors.append(actor)
+
+        for visual in visuals:
+            visual.actor = actor
+        if targets:
+            self._batched_pick_targets[actor] = (
+                np.asarray(cell_ends, dtype=np.int64),
+                targets,
+            )
+
+        locator = self._vtk.vtkStaticCellLocator()
+        locator.SetDataSet(polydata)
+        locator.BuildLocator()
+        self._pick_locators.append(locator)
 
     def _surface_data(self, vertices: np.ndarray, faces: Any) -> Any:
         vtk = self._vtk
@@ -761,22 +1044,57 @@ class LayoutViewer:
         self._decoration_actors.append(actor)
         return actor
 
-    def _build_object_frames(self) -> None:
-        for name, visual in self._object_visuals.items():
-            obj = visual.entity
-            type_ = self._object_type(obj)
-            frames = _mapping_items(getattr(type_, "frames", None))
-            for fallback_frame_name, _frame in frames:
-                frame_name = str(fallback_frame_name)
-                pose = self.resolver.object_named_frame(obj, frame_name)
+    def _ensure_named_frames(self) -> None:
+        """Build stored frame markers only when their layer is first shown."""
+
+        if self._named_frames_built:
+            return
+        records: list[tuple[str, Any, str, Any]] = []
+        with self.resolver._session():
+            for name, visual in self._object_visuals.items():
+                obj = visual.entity
+                type_ = self._object_type(obj)
+                for fallback_frame_name, _frame in _mapping_items(
+                    getattr(type_, "frames", None)
+                ):
+                    frame_name = str(fallback_frame_name)
+                    pose = self.resolver.object_named_frame(obj, frame_name)
+                    records.append((name, obj, frame_name, pose))
+
+        if self.batched_objects:
+            self._add_batched_named_frames(records)
+        else:
+            for name, obj, frame_name, pose in records:
                 self._add_named_frame(name, obj, frame_name, pose)
                 self._extend_bounds([_pose_origin(pose)])
-            for frame_name in ("magnetic_entry", "magnetic_exit"):
-                pose = self.resolver.object_named_frame(obj, frame_name)
-                vertices = self._beam_plane_vertices(type_, pose)
+        self._named_frames_built = True
+        self._refresh_scene_scale()
+
+    def _ensure_beam_frames(self) -> None:
+        """Build Beam entry/exit planes only when their layer is first shown."""
+
+        if self._beam_frames_built:
+            return
+        records: list[tuple[str, Any, str, Any, np.ndarray]] = []
+        with self.resolver._session():
+            for name, visual in self._object_visuals.items():
+                obj = visual.entity
+                type_ = self._object_type(obj)
+                for frame_name in ("magnetic_entry", "magnetic_exit"):
+                    pose = self.resolver.object_named_frame(obj, frame_name)
+                    vertices = self._beam_plane_vertices(type_, pose)
+                    records.append((name, obj, frame_name, pose, vertices))
+
+        if self.batched_objects:
+            self._add_batched_beam_frames(records)
+        else:
+            for name, obj, frame_name, pose, vertices in records:
                 self._add_beam_frame(name, obj, frame_name, pose, vertices)
                 self._extend_bounds(vertices)
+        self._beam_frames_built = True
+        self._refresh_scene_scale()
 
+    def _refresh_scene_scale(self) -> None:
         # Frame extents can be farther from the object's shell than its center.
         extent = np.asarray(
             [
@@ -786,6 +1104,119 @@ class LayoutViewer:
             ]
         )
         self._scene_scale = max(1.0, float(np.linalg.norm(extent)))
+
+    def _add_batched_named_frames(
+        self, records: list[tuple[str, Any, str, Any]]
+    ) -> None:
+        if not records:
+            return
+        vtk = self._vtk
+        points = vtk.vtkPoints()
+        cells = vtk.vtkCellArray()
+        targets: list[_PickTarget] = []
+        origins: list[np.ndarray] = []
+        for index, (object_name, obj, frame_name, pose) in enumerate(records):
+            origin = _pose_origin(pose)
+            points.InsertNextPoint(*(float(value) for value in origin))
+            cells.InsertNextCell(1)
+            cells.InsertCellPoint(index)
+            origins.append(origin)
+            targets.append(
+                _PickTarget(
+                    "frame", f"{object_name}.{frame_name}", obj, pose, obj, frame_name
+                )
+            )
+        polydata = vtk.vtkPolyData()
+        polydata.SetPoints(points)
+        polydata.SetVerts(cells)
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputData(polydata)
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        prop = actor.GetProperty()
+        prop.SetColor(*_hex_color("#ffca75", "#ffca75"))
+        prop.SetPointSize(7.0)
+        render_as_spheres = getattr(prop, "RenderPointsAsSpheresOn", None)
+        if callable(render_as_spheres):
+            render_as_spheres()
+        self.renderer.AddActor(actor)
+        self._named_frame_actors.append(actor)
+        self._register_batched_targets(actor, targets)
+        self._extend_bounds(origins)
+
+    def _add_batched_beam_frames(
+        self, records: list[tuple[str, Any, str, Any, np.ndarray]]
+    ) -> None:
+        if not records:
+            return
+        vtk = self._vtk
+        points = vtk.vtkPoints()
+        polygons = vtk.vtkCellArray()
+        targets: list[_PickTarget] = []
+        colors = np.empty((len(records), 3), dtype=np.uint8)
+        point_index = 0
+        all_vertices: list[np.ndarray] = []
+        for cell_index, (object_name, obj, frame_name, pose, vertices) in enumerate(
+            records
+        ):
+            polygons.InsertNextCell(len(vertices))
+            for vertex in vertices:
+                points.InsertNextPoint(*(float(value) for value in vertex))
+                polygons.InsertCellPoint(point_index)
+                point_index += 1
+            color_text = "#66c7ff" if frame_name == "magnetic_entry" else "#ff9b78"
+            colors[cell_index] = np.rint(
+                np.asarray(_hex_color(color_text, color_text)) * 255.0
+            ).astype(np.uint8)
+            targets.append(
+                _PickTarget(
+                    "beam_frame",
+                    f"{object_name}.{frame_name}",
+                    obj,
+                    pose,
+                    obj,
+                    frame_name,
+                )
+            )
+            all_vertices.append(vertices)
+        polydata = vtk.vtkPolyData()
+        polydata.SetPoints(points)
+        polydata.SetPolys(polygons)
+
+        from vtk.util.numpy_support import (  # type: ignore[import-not-found]
+            numpy_to_vtk,
+        )
+
+        vtk_colors = numpy_to_vtk(
+            np.ascontiguousarray(colors),
+            deep=True,
+            array_type=vtk.VTK_UNSIGNED_CHAR,
+        )
+        vtk_colors.SetName("LayoutBeamFrameColor")
+        polydata.GetCellData().SetScalars(vtk_colors)
+
+        actors = []
+        for wireframe in (False, True):
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputData(polydata)
+            mapper.SetScalarModeToUseCellData()
+            mapper.SetColorModeToDirectScalars()
+            mapper.ScalarVisibilityOn()
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            prop = actor.GetProperty()
+            if wireframe:
+                prop.SetRepresentationToWireframe()
+                prop.SetOpacity(0.9)
+                prop.SetLineWidth(1.5)
+                self._render_lines_as_tubes(actor)
+            else:
+                prop.SetOpacity(0.15)
+            self.renderer.AddActor(actor)
+            self._register_batched_targets(actor, targets)
+            actors.append(actor)
+        self._beam_frame_actors.extend(actors)
+        self._extend_bounds(np.concatenate(all_vertices, axis=0))
 
     def _add_named_frame(
         self, object_name: str, obj: Any, frame_name: str, pose: Any
@@ -817,8 +1248,11 @@ class LayoutViewer:
         marker.GetProperty().SetColor(*_hex_color("#ffca75", "#ffca75"))
         marker.GetProperty().SetAmbient(0.5)
         self.renderer.AddActor(marker)
-        self._pick_targets[marker] = _PickTarget(
-            "frame", f"{object_name}.{frame_name}", obj, pose, obj, frame_name
+        self._register_pick_target(
+            marker,
+            _PickTarget(
+                "frame", f"{object_name}.{frame_name}", obj, pose, obj, frame_name
+            ),
         )
 
         label = self._billboard_label(
@@ -908,8 +1342,8 @@ class LayoutViewer:
             obj,
             frame_name,
         )
-        self._pick_targets[fill] = target
-        self._pick_targets[outline] = target
+        self._register_pick_target(fill, target)
+        self._register_pick_target(outline, target)
         short_label = "IN" if frame_name == "magnetic_entry" else "OUT"
         scale = max(0.035, self._scene_scale * 0.018)
         label = self._billboard_label(
@@ -1010,13 +1444,46 @@ class LayoutViewer:
         vtk = self._vtk
         self.picker = vtk.vtkCellPicker()
         self.picker.SetTolerance(0.006)
+        self.picker.PickFromListOn()
+        for actor in (*self._pick_targets, *self._batched_pick_targets):
+            self.picker.AddPickList(actor)
+        add_locator = getattr(self.picker, "AddLocator", None)
+        if callable(add_locator):
+            for locator in self._pick_locators:
+                add_locator(locator)
         self.interactor.SetPicker(self.picker)
-        self.interactor.AddObserver("KeyPressEvent", self._on_key_press)
-        self.interactor.AddObserver("LeftButtonPressEvent", self._on_left_press)
-        self.interactor.AddObserver("LeftButtonReleaseEvent", self._on_left_release)
-        self.interactor.AddObserver("MouseMoveEvent", self._on_mouse_move)
-        self.interactor.AddObserver("LeaveEvent", self._on_mouse_leave)
-        self.interactor.AddObserver("ExitEvent", self._on_exit)
+        self._observe(self.interactor, "KeyPressEvent", self._on_key_press)
+        self._observe(self.interactor, "LeftButtonPressEvent", self._on_left_press)
+        self._observe(self.interactor, "LeftButtonReleaseEvent", self._on_left_release)
+        self._observe(self.interactor, "MouseMoveEvent", self._on_mouse_move)
+        self._observe(self.interactor, "LeaveEvent", self._on_mouse_leave)
+        self._observe(self.interactor, "ExitEvent", self._on_exit)
+        self._observe(self.render_window, "DeleteEvent", self._on_window_delete)
+        self._observe(self.style, "StartInteractionEvent", self._on_interaction_start)
+        self._observe(self.style, "EndInteractionEvent", self._on_interaction_end)
+
+    def _observe(self, subject: Any, event: str, callback: Any) -> None:
+        tag = subject.AddObserver(event, callback)
+        self._observer_tags.append((subject, int(tag)))
+
+    def _add_to_pick_list(self, actor: Any) -> None:
+        picker = getattr(self, "picker", None)
+        if picker is not None:
+            picker.AddPickList(actor)
+
+    def _register_pick_target(self, actor: Any, target: _PickTarget) -> None:
+        self._pick_targets[actor] = target
+        self._add_to_pick_list(actor)
+
+    def _register_batched_targets(
+        self, actor: Any, targets: Sequence[_PickTarget]
+    ) -> None:
+        if targets:
+            self._batched_pick_targets[actor] = (
+                np.arange(1, len(targets) + 1, dtype=np.int64),
+                list(targets),
+            )
+        self._add_to_pick_list(actor)
 
     # --------------------------------------------------------------- layers
 
@@ -1029,6 +1496,12 @@ class LayoutViewer:
             actor.SetVisibility(self.objects_visible and self.beam_frames_visible)
         for actor in self._named_frame_actors:
             actor.SetVisibility(self.objects_visible and self.frames_visible)
+        if self._object_highlight_actor is not None:
+            self._object_highlight_actor.SetVisibility(
+                self.objects_visible
+                and self._selection is not None
+                and self._selection.kind != "curve"
+            )
 
     def set_curves_visible(self, visible: bool = True) -> LayoutViewer:
         self.curves_visible = bool(visible)
@@ -1044,6 +1517,8 @@ class LayoutViewer:
 
     def set_beam_frames_visible(self, visible: bool = True) -> LayoutViewer:
         self.beam_frames_visible = bool(visible)
+        if self.beam_frames_visible:
+            self._ensure_beam_frames()
         self._apply_layer_visibility()
         self._request_render()
         return self
@@ -1052,6 +1527,8 @@ class LayoutViewer:
         """Show or hide stored, named type-frame markers."""
 
         self.frames_visible = bool(visible)
+        if self.frames_visible:
+            self._ensure_named_frames()
         self._apply_layer_visibility()
         self._request_render()
         return self
@@ -1122,6 +1599,8 @@ class LayoutViewer:
         """Render the scene and, for native windows, start the interactor."""
 
         self._ensure_open()
+        if self._in_interactor:
+            raise RuntimeError("the LayoutViewer interactor is already running")
         if not self.off_screen and not self._interactor_initialised:
             self.interactor.Initialize()
             self._interactor_initialised = True
@@ -1129,7 +1608,23 @@ class LayoutViewer:
         self._render_started = True
         self.render_window.Render()
         if not self.off_screen:
-            self.interactor.Start()
+            self._exit_requested = False
+            self._in_interactor = True
+            try:
+                self.interactor.Start()
+            except BaseException:
+                self._in_interactor = False
+                # Teardown must not replace the exception raised by Start().
+                with suppress(Exception):
+                    self.close()
+                raise
+            else:
+                self._in_interactor = False
+                # Native Start() is blocking. Its return means the event loop
+                # ended even on backends which report neither ExitEvent nor a
+                # reliable Done flag, so always detach before IPython resumes.
+                if not self._closed:
+                    self.close()
         return self
 
     def render(self) -> LayoutViewer:
@@ -1214,18 +1709,92 @@ class LayoutViewer:
     def close(self) -> None:
         """Release VTK window resources.  Calling this twice is harmless."""
 
-        if self._closed:
+        if self._closed or self._closing:
             return
-        if self._orientation_enabled:
-            self.orientation_widget.SetEnabled(False)
-            self._orientation_enabled = False
-        terminate = getattr(self.interactor, "TerminateApp", None)
-        if callable(terminate):
-            terminate()
-        finalize = getattr(self.render_window, "Finalize", None)
-        if callable(finalize):
-            finalize()
+        self._closing = True
+        # Mark the Python facade closed before invoking VTK teardown: some
+        # backends dispatch events synchronously from TerminateApp/Finalize.
         self._closed = True
+        self._exit_requested = True
+        self._render_started = False
+        self._press_position = None
+        self._hover = None
+        try:
+            if self._orientation_enabled:
+                self.orientation_widget.SetEnabled(False)
+                self._orientation_enabled = False
+            detach_widget = getattr(self.orientation_widget, "SetInteractor", None)
+            if callable(detach_widget):
+                detach_widget(None)
+
+            for subject, tag in reversed(self._observer_tags):
+                try:
+                    subject.RemoveObserver(tag)
+                except (AttributeError, RuntimeError):
+                    pass
+            self._observer_tags.clear()
+
+            remove_locators = getattr(self.picker, "RemoveAllLocators", None)
+            if callable(remove_locators):
+                remove_locators()
+            clear_pick_list = getattr(self.picker, "InitializePickList", None)
+            if callable(clear_pick_list):
+                clear_pick_list()
+            self._pick_locators.clear()
+            set_picker = getattr(self.interactor, "SetPicker", None)
+            if callable(set_picker):
+                set_picker(None)
+
+            terminate = getattr(self.interactor, "TerminateApp", None)
+            if callable(terminate):
+                terminate()
+            disable = getattr(self.interactor, "Disable", None)
+            if self._interactor_initialised and callable(disable):
+                disable()
+
+            finalize = getattr(self.render_window, "Finalize", None)
+            if callable(finalize):
+                finalize()
+            set_window = getattr(self.interactor, "SetRenderWindow", None)
+            if callable(set_window):
+                set_window(None)
+            set_style = getattr(self.interactor, "SetInteractorStyle", None)
+            if callable(set_style):
+                set_style(None)
+            self.renderer.RemoveAllViewProps()
+            self.render_window.RemoveRenderer(self.renderer)
+
+            # IPython retains the value of the last expression in Out[n].
+            # Release scene-sized Python/VTK references even while the closed
+            # viewer facade itself remains reachable there.
+            self._curve_visuals.clear()
+            self._object_visuals.clear()
+            self._object_visual_by_identity.clear()
+            self._pick_targets.clear()
+            self._batched_pick_targets.clear()
+            self._pending_object_visuals.clear()
+            self._curve_actors.clear()
+            self._object_actors.clear()
+            self._beam_frame_actors.clear()
+            self._named_frame_actors.clear()
+            self._decoration_actors.clear()
+            self._bounds_points.clear()
+            self.curve_actors.clear()
+            self.object_actors.clear()
+            self._object_highlight_actor = None
+            self._selection = None
+            self._hover = None
+            self._curve_items.clear()
+            self._object_items.clear()
+            self.curve_scope = ()
+            self.object_scope = ()
+            self.layout = None
+        finally:
+            if self._resolver_context is not None:
+                self._resolver_context.__exit__(None, None, None)
+                self._resolver_context = None
+            self.resolver = None
+            self._closing = False
 
     def _ensure_open(self) -> None:
         if self._closed:
@@ -1410,12 +1979,16 @@ class LayoutViewer:
             visual.halo.GetProperty().SetColor(*visual.color)
             visual.halo.GetProperty().SetLineWidth(9.0)
             visual.halo.GetProperty().SetOpacity(0.18)
-        for visual in self._object_visuals.values():
-            prop = visual.actor.GetProperty()
-            prop.SetColor(*visual.color)
-            prop.SetOpacity(0.34)
-            prop.SetEdgeColor(*_lighten(visual.color, 0.22))
-            prop.SetLineWidth(1.15)
+        if self.batched_objects:
+            if self._object_highlight_actor is not None:
+                self._object_highlight_actor.SetVisibility(False)
+        else:
+            for visual in self._object_visuals.values():
+                prop = visual.actor.GetProperty()
+                prop.SetColor(*visual.color)
+                prop.SetOpacity(0.34)
+                prop.SetEdgeColor(*_lighten(visual.color, 0.22))
+                prop.SetLineWidth(1.15)
 
     def _apply_highlight(self, selection: _Selection) -> None:
         highlight = _hex_color(_SELECTION_COLOR, _SELECTION_COLOR)
@@ -1429,12 +2002,42 @@ class LayoutViewer:
                 visual.halo.GetProperty().SetOpacity(0.38)
             return
         owner = selection.owner if selection.owner is not None else selection.entity
-        for visual in self._object_visuals.values():
-            if visual.entity is owner:
-                prop = visual.actor.GetProperty()
-                prop.SetOpacity(0.62)
-                prop.SetEdgeColor(*highlight)
-                prop.SetLineWidth(2.8)
+        visual = self._object_visual_by_identity.get(id(owner))
+        if visual is None:
+            return
+        if self.batched_objects:
+            self._show_batched_object_highlight(visual, highlight)
+            return
+        prop = visual.actor.GetProperty()
+        prop.SetOpacity(0.62)
+        prop.SetEdgeColor(*highlight)
+        prop.SetLineWidth(2.8)
+
+    def _show_batched_object_highlight(
+        self, visual: _ObjectVisual, color: Sequence[float]
+    ) -> None:
+        polydata = self._surface_data(visual.vertices, visual.faces)
+        if self._object_highlight_actor is None:
+            mapper = self._vtk.vtkPolyDataMapper()
+            set_offset = getattr(
+                mapper, "SetResolveCoincidentTopologyToPolygonOffset", None
+            )
+            if callable(set_offset):
+                set_offset()
+            actor = self._vtk.vtkActor()
+            actor.SetMapper(mapper)
+            actor.PickableOff()
+            self.renderer.AddActor(actor)
+            self._object_highlight_actor = actor
+        actor = self._object_highlight_actor
+        actor.GetMapper().SetInputData(polydata)
+        prop = actor.GetProperty()
+        prop.SetRepresentationToWireframe()
+        prop.SetColor(*(float(value) for value in color))
+        prop.SetOpacity(1.0)
+        prop.SetLineWidth(3.0)
+        self._render_lines_as_tubes(actor)
+        actor.SetVisibility(self.objects_visible)
 
     def _set_pose_text(self, selection: _Selection) -> None:
         origin = _pose_origin(selection.pose)
@@ -1497,9 +2100,17 @@ class LayoutViewer:
         self._set_selection(selection)
 
     def _on_mouse_move(self, caller: Any, _event: str) -> None:
-        if self._press_position is not None:
+        if self._press_position is not None or self._camera_interacting:
             return
         x, y = (int(value) for value in caller.GetEventPosition())
+        position = (x, y)
+        now = time.monotonic()
+        if position == self._last_hover_position:
+            return
+        if now - self._last_hover_pick < self._hover_interval:
+            return
+        self._last_hover_position = position
+        self._last_hover_pick = now
         selection = self._pick_selection(x, y)
         self._hover = selection
         if selection is None:
@@ -1523,6 +2134,7 @@ class LayoutViewer:
 
     def _on_mouse_leave(self, _caller: Any, _event: str) -> None:
         self._hover = None
+        self._last_hover_position = None
         self.tooltip.SetVisibility(False)
         if self._selection is None:
             self.pose_text.SetInput(self._empty_pose_message())
@@ -1532,8 +2144,31 @@ class LayoutViewer:
             self._show_local_axes(self._selection.pose)
         self._request_render()
 
-    def _on_exit(self, _caller: Any, _event: str) -> None:
+    def _on_interaction_start(self, _caller: Any, _event: str) -> None:
+        self._camera_interacting = True
+
+    def _on_interaction_end(self, _caller: Any, _event: str) -> None:
+        self._camera_interacting = False
+        self._last_hover_position = None
+
+    def _on_exit(self, caller: Any, _event: str) -> None:
+        # Installing an ExitEvent observer suppresses VTK's default exit
+        # callback.  Explicit termination is therefore required or Start()
+        # remains stuck after q/e or a window-manager close.
+        self._exit_requested = True
         self._render_started = False
+        terminate = getattr(caller, "TerminateApp", None)
+        if callable(terminate):
+            terminate()
+
+    def _on_window_delete(self, _caller: Any, _event: str) -> None:
+        """Ensure a backend-driven window deletion also releases Start()."""
+
+        self._exit_requested = True
+        self._render_started = False
+        terminate = getattr(self.interactor, "TerminateApp", None)
+        if callable(terminate):
+            terminate()
 
     def _pick_selection(self, x: int, y: int) -> _Selection | None:
         if not self.picker.Pick(int(x), int(y), 0.0, self.renderer):
@@ -1541,7 +2176,7 @@ class LayoutViewer:
         prop = self.picker.GetViewProp()
         if prop is None:
             prop = self.picker.GetActor()
-        target = self._target_for_prop(prop)
+        target = self._target_for_prop(prop, int(self.picker.GetCellId()))
         if target is None:
             return None
         if target.kind == "curve":
@@ -1570,13 +2205,30 @@ class LayoutViewer:
             target.frame_name,
         )
 
-    def _target_for_prop(self, prop: Any) -> _PickTarget | None:
+    def _target_for_prop(
+        self, prop: Any, cell_id: int | None = None
+    ) -> _PickTarget | None:
+        try:
+            batch = self._batched_pick_targets.get(prop)
+        except TypeError:
+            batch = None
+        if batch is not None and cell_id is not None and cell_id >= 0:
+            cell_ends, targets = batch
+            index = int(np.searchsorted(cell_ends, cell_id, side="right"))
+            if index < len(targets):
+                return targets[index]
         try:
             result = self._pick_targets.get(prop)
         except TypeError:
             result = None
         if result is not None:
             return result
+        for actor, (cell_ends, targets) in self._batched_pick_targets.items():
+            if prop is actor or prop == actor:
+                if cell_id is None or cell_id < 0:
+                    return None
+                index = int(np.searchsorted(cell_ends, cell_id, side="right"))
+                return targets[index] if index < len(targets) else None
         for actor, target in self._pick_targets.items():
             if prop is actor or prop == actor:
                 return target
@@ -1593,34 +2245,28 @@ class LayoutViewer:
                 int(visual.segment_indices[0]) if len(visual.segment_indices) else 0
             )
             return station, segment
-        best_distance = math.inf
-        best_station = float(visual.stations[0])
-        best_segment = int(visual.segment_indices[0])
-        for index in range(len(points) - 1):
-            start, end = points[index], points[index + 1]
-            chord = end - start
-            denominator = float(np.dot(chord, chord))
-            fraction = (
-                0.0
-                if denominator <= 1e-20
-                else max(
-                    0.0, min(1.0, float(np.dot(point - start, chord)) / denominator)
-                )
-            )
-            projected = start + chord * fraction
-            distance = float(np.dot(point - projected, point - projected))
-            if distance < best_distance:
-                best_distance = distance
-                best_station = float(
-                    visual.stations[index]
-                    + fraction * (visual.stations[index + 1] - visual.stations[index])
-                )
-                best_segment = int(
-                    visual.segment_indices[index]
-                    if fraction < 1.0
-                    else visual.segment_indices[index + 1]
-                )
-        return best_station, best_segment
+        starts = points[:-1]
+        chords = points[1:] - starts
+        offsets = point[None, :] - starts
+        denominators = np.einsum("ij,ij->i", chords, chords)
+        fractions = np.zeros(len(chords), dtype=float)
+        nonzero = denominators > 1.0e-20
+        fractions[nonzero] = (
+            np.einsum("ij,ij->i", offsets[nonzero], chords[nonzero])
+            / denominators[nonzero]
+        )
+        np.clip(fractions, 0.0, 1.0, out=fractions)
+        projected = starts + fractions[:, None] * chords
+        residual = point[None, :] - projected
+        index = int(np.argmin(np.einsum("ij,ij->i", residual, residual)))
+        fraction = float(fractions[index])
+        station = float(
+            visual.stations[index]
+            + fraction * (visual.stations[index + 1] - visual.stations[index])
+        )
+        segment_index = index if fraction < 1.0 else index + 1
+        segment = int(visual.segment_indices[segment_index])
+        return station, segment
 
     @staticmethod
     def _same_selection(left: _Selection, right: _Selection | None) -> bool:
@@ -1642,8 +2288,8 @@ class LayoutViewer:
     def __repr__(self) -> str:
         state = "closed" if self._closed else "open"
         return (
-            f"LayoutViewer(curves={len(self._curve_visuals)}, "
-            f"objects={len(self._object_visuals)}, off_screen={self.off_screen}, "
+            f"LayoutViewer(curves={self._curve_count}, "
+            f"objects={self._object_count}, off_screen={self.off_screen}, "
             f"state={state!r})"
         )
 

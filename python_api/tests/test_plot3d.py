@@ -50,7 +50,7 @@ def viewer_spy(monkeypatch):
 def test_layout_plot3d_forwards_viewer_controls(viewer_spy):
     layout, _curve, object_ = populated_layout()
 
-    viewer = layout.plot3D(
+    viewer = layout.plot3d(
         curves=False,
         objects=True,
         beam_frames=True,
@@ -74,17 +74,19 @@ def test_layout_plot3d_forwards_viewer_controls(viewer_spy):
         "background": "#010203",
     }
 
-    alias = layout.plot3d(show=False)
-    assert alias is viewer_spy[-1]
-    assert alias.layout is layout
-    assert alias.kwargs["show"] is False
+
+def test_plot3d_is_the_only_public_spelling():
+    layout, curve, object_ = populated_layout()
+
+    for entity in (layout, curve, object_):
+        assert callable(entity.plot3d)
+        assert not hasattr(entity, "plot3D")
 
 
-@pytest.mark.parametrize("spelling", ["plot3d", "plot3D"])
-def test_curve_plot_is_limited_to_that_curve(viewer_spy, spelling):
+def test_curve_plot_is_limited_to_that_curve(viewer_spy):
     layout, curve, _ = populated_layout()
 
-    viewer = getattr(curve, spelling)(show=False, beam_frames=True)
+    viewer = curve.plot3d(show=False, beam_frames=True)
 
     assert viewer is viewer_spy[-1]
     assert viewer.layout is layout
@@ -94,11 +96,10 @@ def test_curve_plot_is_limited_to_that_curve(viewer_spy, spelling):
     assert viewer.kwargs["show"] is False
 
 
-@pytest.mark.parametrize("spelling", ["plot3d", "plot3D"])
-def test_object_plot_is_limited_to_that_object(viewer_spy, spelling):
+def test_object_plot_is_limited_to_that_object(viewer_spy):
     layout, _, object_ = populated_layout()
 
-    viewer = getattr(object_, spelling)(show=False, beam_frames=True)
+    viewer = object_.plot3d(show=False, beam_frames=True)
 
     assert viewer is viewer_spy[-1]
     assert viewer.layout is layout
@@ -115,7 +116,7 @@ def test_detached_curve_or_object_cannot_be_plotted(viewer_spy):
 
     assert layout is curve.layout is object_.layout
     with pytest.raises(AttachmentError):
-        detached_curve.plot3D(show=False)
+        detached_curve.plot3d(show=False)
     with pytest.raises(AttachmentError):
         detached_object.plot3d(show=False)
 
@@ -140,11 +141,11 @@ def test_real_vtk_builds_full_and_entity_scoped_topologies_without_rendering():
 
     viewers = []
     try:
-        full = layout.plot3D(show=False, off_screen=True, beam_frames=True)
+        full = layout.plot3d(show=False, off_screen=True, beam_frames=True)
         viewers.append(full)
         curve_only = main.plot3d(show=False, off_screen=True)
         viewers.append(curve_only)
-        object_only = q2.plot3D(show=False, off_screen=True, beam_frames=True)
+        object_only = q2.plot3d(show=False, off_screen=True, beam_frames=True)
         viewers.append(object_only)
 
         assert set(full.curve_actors) == {"main", "auxiliary"}
@@ -188,9 +189,144 @@ def test_real_vtk_off_screen_smoke_only_with_a_known_render_backend():
     # This is deliberately the only test that calls Render().  All dispatch
     # and scoping tests above replace the viewer at the lazy import boundary.
     layout, _, _ = populated_layout()
-    viewer = layout.plot3D(show=False, off_screen=True, window_size=(160, 120))
+    viewer = layout.plot3d(show=False, off_screen=True, window_size=(160, 120))
     try:
         viewer.render_window.Render()
         assert viewer.render_window.GetSize() == (160, 120)
     finally:
         viewer.close()
+
+
+def test_native_show_start_return_always_closes_and_detaches_without_display():
+    from layout_studio.viewer import LayoutViewer
+
+    calls = []
+
+    class StubWindow:
+        def Render(self):
+            calls.append("render")
+
+    class StubInteractor:
+        def __init__(self, window, failure=None):
+            self.window = window
+            self.failure = failure
+
+        def Initialize(self):
+            calls.append("initialize")
+
+        def Start(self):
+            calls.append("start")
+            if self.failure is not None:
+                raise self.failure
+
+        def SetRenderWindow(self, window):
+            self.window = window
+
+    def stub_viewer(*, failure=None, close_failure=None):
+        viewer = LayoutViewer.__new__(LayoutViewer)
+        viewer.off_screen = False
+        viewer._closed = False
+        viewer._in_interactor = False
+        viewer._interactor_initialised = False
+        viewer._render_started = False
+        viewer._exit_requested = False
+        viewer.render_window = StubWindow()
+        viewer.interactor = StubInteractor(viewer.render_window, failure)
+        viewer._enable_orientation_widget = lambda: calls.append("orientation")
+
+        def close():
+            calls.append("close")
+            viewer._closed = True
+            viewer.interactor.SetRenderWindow(None)
+            if close_failure is not None:
+                raise close_failure
+
+        viewer.close = close
+        return viewer
+
+    viewer = stub_viewer()
+    assert viewer.show() is viewer
+    assert calls == ["initialize", "orientation", "render", "start", "close"]
+    assert viewer._closed
+    assert viewer.interactor.window is None
+    assert not viewer._in_interactor
+
+    calls.clear()
+    start_failure = RuntimeError("start failed")
+    viewer = stub_viewer(
+        failure=start_failure, close_failure=ValueError("teardown failed")
+    )
+    with pytest.raises(RuntimeError) as caught:
+        viewer.show()
+    assert caught.value is start_failure
+    assert calls == ["initialize", "orientation", "render", "start", "close"]
+    assert viewer._closed
+    assert viewer.interactor.window is None
+    assert not viewer._in_interactor
+
+    calls.clear()
+    viewer = stub_viewer()
+    viewer._in_interactor = True
+    with pytest.raises(RuntimeError, match="already running"):
+        viewer.show()
+    assert calls == []
+
+
+def test_auto_object_lod_keeps_curves_but_explicit_one_is_honored():
+    from layout_studio import Type
+    from layout_studio.viewer import LayoutViewer
+
+    straight = Type(
+        shape=Box(1.0, 1.0, 10.0),
+        color="#abcdef",
+        magnetic_center=Frame(),
+        magnetic_length=1.0,
+    )
+    curved = Type(
+        shape=Box(1.0, 1.0, 10.0, curvature=0.01),
+        color="#abcdef",
+        magnetic_center=Frame(),
+        magnetic_length=1.0,
+    )
+    viewer = LayoutViewer.__new__(LayoutViewer)
+    viewer.object_resolution = 1
+    viewer._requested_object_resolution = None
+
+    assert viewer._object_mesh_resolution(straight) == 1
+    assert viewer._object_mesh_resolution(curved) >= 2
+
+    viewer._requested_object_resolution = 1
+    assert viewer._object_mesh_resolution(curved) == 1
+
+
+def test_real_vtk_close_releases_scene_and_model_without_rendering():
+    pytest.importorskip("vtkmodules")
+
+    layout, curve, object_ = populated_layout()
+    viewer = layout.plot3d(show=False, off_screen=True)
+    assert not viewer._render_started
+    assert not viewer._interactor_initialised
+
+    viewer.close()
+    viewer.close()
+
+    assert viewer._closed
+    assert viewer.layout is None
+    assert viewer.resolver is None
+    assert viewer.curve_scope == ()
+    assert viewer.object_scope == ()
+    assert viewer._curve_items == []
+    assert viewer._object_items == []
+    assert viewer.curve_actors == {}
+    assert viewer.object_actors == {}
+    assert viewer._pick_targets == {}
+    assert viewer._batched_pick_targets == {}
+    assert viewer.renderer.GetViewProps().GetNumberOfItems() == 0
+    assert viewer.interactor.GetRenderWindow() is None
+    assert "curves=1" in repr(viewer)
+    assert "objects=1" in repr(viewer)
+    assert "state='closed'" in repr(viewer)
+
+    # The test itself keeps these alive; the viewer no longer does.
+    assert curve.layout is layout
+    assert object_.layout is layout

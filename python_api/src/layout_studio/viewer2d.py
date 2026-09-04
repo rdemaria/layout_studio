@@ -13,6 +13,7 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from types import SimpleNamespace
 from typing import Any
 
@@ -31,6 +32,10 @@ _AXIS_COLORS = ("#f07178", "#8bd49c", "#6cb6ff")
 _AXIS_NAMES = ("x", "y", "s")
 _WORLD_AXES = {"x": 0, "y": 1, "z": 2}
 _VALID_PROJECTIONS = ("xy", "xz", "yx", "yz", "zx", "zy")
+_OBJECT_BATCH_THRESHOLD = 128
+_CURVE_SAMPLE_BUDGET = 8192
+_OBJECT_SECTION_BUDGET = 4096
+_OBJECT_RADIAL_BUDGET = 16384
 
 
 def _require_matplotlib() -> SimpleNamespace:
@@ -181,6 +186,7 @@ class _CurveVisual:
     line: Any
     halo: Any
     color: tuple[float, float, float]
+    bounds: np.ndarray
 
 
 @dataclass
@@ -195,6 +201,9 @@ class _ObjectVisual:
     edges: Any
     color: tuple[float, float, float]
     pose: Any
+    bounds: np.ndarray
+    batch_index: int | None = None
+    batch_indices: np.ndarray | None = None
 
 
 @dataclass
@@ -228,6 +237,14 @@ class _PickCandidate:
     order: int
 
 
+@dataclass
+class _BatchedFrameVisual:
+    target: _PickTarget
+    projected: np.ndarray
+    bounds: np.ndarray
+    depth: float
+
+
 class LayoutViewer2D:
     """Interactive orthographic projection of a layout or a scoped subset.
 
@@ -241,6 +258,14 @@ class LayoutViewer2D:
     Matplotlib is imported lazily, and ``show=False`` never opens a GUI or
     enters an event loop, which makes an Agg-backed viewer safe in headless
     tests and batch jobs.
+
+    Geometry detail is automatic when ``curve_resolution``,
+    ``object_resolution`` or ``radial_resolution`` is ``None`` (or ``"auto"``).
+    Explicit positive integers always take precedence.  Large object scopes
+    are rendered as one collection of projected silhouettes; set
+    ``batch_objects=False`` to retain the face-by-face small-scene rendering.
+    Named frames also default adaptively: visible for small scopes and lazy/off
+    for a batched layout, while an explicit ``frames`` value is honoured.
     """
 
     def __init__(
@@ -252,7 +277,7 @@ class LayoutViewer2D:
         curves: bool | Any | Iterable[Any] = True,
         objects: bool | Any | Iterable[Any] = True,
         beam_frames: bool = False,
-        frames: bool = True,
+        frames: bool | None = None,
         selection: Any = None,
         show: bool = True,
         figsize: tuple[float, float] = (10.0, 7.2),
@@ -260,6 +285,12 @@ class LayoutViewer2D:
         background: Any = _DEFAULT_BACKGROUND,
         curves_visible: bool | None = None,
         objects_visible: bool | None = None,
+        curve_resolution: int | str | None = None,
+        object_resolution: int | str | None = None,
+        radial_resolution: int | str | None = None,
+        batch_objects: bool | None = None,
+        batch_threshold: int = _OBJECT_BATCH_THRESHOLD,
+        hover_interval: float = 1.0 / 30.0,
         ax: Any = None,
     ) -> None:
         self.layout = layout
@@ -271,15 +302,27 @@ class LayoutViewer2D:
         self.figsize = self._validate_figsize(figsize)
         self.dpi = self._validate_dpi(dpi)
         self.background = background
+        self._requested_curve_resolution = self._validate_resolution(
+            curve_resolution, "curve_resolution", minimum=1
+        )
+        self._requested_object_resolution = self._validate_resolution(
+            object_resolution, "object_resolution", minimum=1
+        )
+        self._requested_radial_resolution = self._validate_resolution(
+            radial_resolution, "radial_resolution", minimum=3
+        )
+        self.batch_threshold = self._validate_positive_integer(
+            batch_threshold, "batch_threshold"
+        )
+        self.hover_interval = self._validate_nonnegative_number(
+            hover_interval, "hover_interval"
+        )
         self._mpl = _require_matplotlib()
         self._plt = self._mpl.pyplot
 
         from .resolver import Resolver
 
         self.resolver = Resolver(layout)
-        validate = getattr(self.resolver, "validate", None)
-        if callable(validate):
-            validate()
 
         all_curves = _mapping_items(getattr(layout, "curves", None))
         if not all_curves:
@@ -294,6 +337,38 @@ class LayoutViewer2D:
         )
         self.curve_scope = tuple(entity for _, entity in self._curve_items)
         self.object_scope = tuple(entity for _, entity in self._object_items)
+        self._curve_count = len(self._curve_items)
+        self._object_count = len(self._object_items)
+        curve_count = max(1, len(self._curve_items))
+        object_count = max(1, len(self._object_items))
+        self.curve_resolution = (
+            self._requested_curve_resolution
+            if self._requested_curve_resolution is not None
+            else max(4, min(128, _CURVE_SAMPLE_BUDGET // curve_count))
+        )
+        self.object_resolution = (
+            self._requested_object_resolution
+            if self._requested_object_resolution is not None
+            else max(1, min(32, _OBJECT_SECTION_BUDGET // object_count))
+        )
+        self.radial_resolution = (
+            self._requested_radial_resolution
+            if self._requested_radial_resolution is not None
+            else max(8, min(24, _OBJECT_RADIAL_BUDGET // object_count))
+        )
+        self.curve_resolution_effective = self.curve_resolution
+        self.object_resolution_effective = self.object_resolution
+        self.radial_resolution_effective = self.radial_resolution
+        if batch_objects is not None and not isinstance(
+            batch_objects, (bool, np.bool_)
+        ):
+            raise TypeError("batch_objects must be a boolean or None")
+        self.batch_objects = (
+            len(self._object_items) >= self.batch_threshold
+            if batch_objects is None
+            else bool(batch_objects)
+        )
+        self.batched_objects = self.batch_objects
         self.curves_visible = (
             bool_curves if curves_visible is None else bool(curves_visible)
         )
@@ -301,7 +376,15 @@ class LayoutViewer2D:
             bool_objects if objects_visible is None else bool(objects_visible)
         )
         self.beam_frames_visible = bool(beam_frames)
-        self.frames_visible = bool(frames)
+        # Named frames are useful by default for small scoped views, but tens of
+        # thousands of axes, markers, and labels overwhelm interactive backends.
+        # ``None`` therefore means an adaptive default; an explicit boolean is
+        # always honoured.
+        self.frames_visible = (
+            len(self._object_items) < self.batch_threshold
+            if frames is None
+            else bool(frames)
+        )
         self.grid_visible = True
 
         self._closed = False
@@ -317,31 +400,96 @@ class LayoutViewer2D:
         self._named_frame_artists: list[Any] = []
         self._bounds_points: list[np.ndarray] = []
         self._callbacks: list[int] = []
+        self._resolver_session: Any = None
+        self._named_frames_built = False
+        self._beam_frames_built = False
+        self._batch_entries: list[
+            tuple[str, np.ndarray, tuple[float, ...], tuple[float, ...], float]
+        ] = []
+        self._batch_object_collection: Any = None
+        self._batch_base_facecolors = np.empty((0, 4), dtype=float)
+        self._batch_base_edgecolors = np.empty((0, 4), dtype=float)
+        self._batch_current_facecolors = np.empty((0, 4), dtype=float)
+        self._batch_current_edgecolors = np.empty((0, 4), dtype=float)
+        self._object_pick_visuals: list[_ObjectVisual] = []
+        self._object_pick_bounds = np.empty((0, 4), dtype=float)
+        self._batched_frame_visuals: list[_BatchedFrameVisual] = []
+        self._batched_frame_bounds = np.empty((0, 4), dtype=float)
+        self._last_hover_time = -math.inf
+        self._last_hover_pixel: tuple[float, float] | None = None
 
         self._build_figure(ax)
-        self._build_entity_geometry()
-        self._finish_bounds()
-        self._build_object_frames()
-        self._finish_bounds()
-        self._build_overlays()
-        self._install_interaction()
-        self._apply_layer_visibility()
-        self.fit()
+        try:
+            self._build_entity_geometry()
+            self._finish_bounds()
+            self._ensure_object_frames(
+                named=self.frames_visible, beam=self.beam_frames_visible
+            )
+            self._finish_bounds()
+            self._build_overlays()
+            self._install_interaction()
+            self._apply_layer_visibility()
+            self.fit()
 
-        self.curve_artists = {
-            name: visual.line for name, visual in self._curve_visuals.items()
-        }
-        self.object_artists = {
-            name: visual.fill for name, visual in self._object_visuals.items()
-        }
-        # Familiar aliases for code that also deals with the VTK viewer.
-        self.curve_actors = self.curve_artists
-        self.object_actors = self.object_artists
+            self.curve_artists = {
+                name: visual.line for name, visual in self._curve_visuals.items()
+            }
+            self.object_artists = {
+                name: visual.fill for name, visual in self._object_visuals.items()
+            }
+            # Familiar aliases for code that also deals with the VTK viewer.
+            self.curve_actors = self.curve_artists
+            self.object_actors = self.object_artists
 
-        if selection is not None:
-            self.select(selection)
-        if show:
-            self.show()
+            if selection is not None:
+                self.select(selection)
+            if show:
+                self.show()
+        except BaseException:
+            self._disconnect_callbacks()
+            self._close_resolver_session()
+            if self._owns_figure:
+                self._plt.close(self.figure)
+            self._closed = True
+            self._release_scene_references(clear_figure=self._owns_figure)
+            raise
+
+    @staticmethod
+    def _validate_resolution(value: Any, name: str, *, minimum: int) -> int | None:
+        if value is None or (isinstance(value, str) and value.lower() == "auto"):
+            return None
+        if isinstance(value, (bool, np.bool_)):
+            raise TypeError(f"{name} must be an integer or None")
+        try:
+            result = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be an integer or None") from exc
+        if result != value or result < minimum:
+            qualifier = "positive" if minimum == 1 else f"at least {minimum}"
+            raise ValueError(f"{name} must be {qualifier} or None")
+        return result
+
+    @staticmethod
+    def _validate_positive_integer(value: Any, name: str) -> int:
+        if isinstance(value, (bool, np.bool_)):
+            raise TypeError(f"{name} must be a positive integer")
+        try:
+            result = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be a positive integer") from exc
+        if result != value or result < 1:
+            raise ValueError(f"{name} must be a positive integer")
+        return result
+
+    @staticmethod
+    def _validate_nonnegative_number(value: Any, name: str) -> float:
+        try:
+            result = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be a non-negative number") from exc
+        if not math.isfinite(result) or result < 0.0:
+            raise ValueError(f"{name} must be a non-negative number")
+        return result
 
     @staticmethod
     def _validate_figsize(value: Any) -> tuple[float, float]:
@@ -509,13 +657,34 @@ class LayoutViewer2D:
         return values[:, self.axis_indices]
 
     def _build_entity_geometry(self) -> None:
-        for fallback_name, curve in self._curve_items:
-            self._add_curve(_safe_name(curve, fallback_name), curve)
-        for fallback_name, obj in self._object_items:
-            self._add_object(_safe_name(obj, fallback_name), obj)
+        # Keep one resolver session for the lifetime of this geometry snapshot.
+        # Besides making the initial build linear for dependency-linked layouts,
+        # this prevents hover callbacks from validating a 10k-object model on
+        # every call to ``curve_frame``.
+        session = getattr(self.resolver, "_session", None)
+        if callable(session) and self._resolver_session is None:
+            self._resolver_session = session()
+            self._resolver_session.__enter__()
+        try:
+            for fallback_name, curve in self._curve_items:
+                self._add_curve(_safe_name(curve, fallback_name), curve)
+            for fallback_name, obj in self._object_items:
+                self._add_object(_safe_name(obj, fallback_name), obj)
+            if self.batch_objects:
+                self._finish_object_batch()
+            self._object_pick_visuals = list(self._object_visuals.values())
+            if self._object_pick_visuals:
+                self._object_pick_bounds = np.stack(
+                    [visual.bounds for visual in self._object_pick_visuals]
+                )
+        except BaseException:
+            self._close_resolver_session()
+            raise
 
     def _add_curve(self, name: str, curve: Any) -> None:
-        data = self.resolver.sampled_curve(curve)
+        data = self.resolver.sampled_curve(
+            curve, resolution=self.curve_resolution_effective
+        )
         points = _as_points(_data_field(data, "points", ()))
         if not len(points):
             return
@@ -552,8 +721,18 @@ class LayoutViewer2D:
             zorder=4,
         )
         line.set_gid(f"curve:{name}")
+        low, high = np.min(projected, axis=0), np.max(projected, axis=0)
         visual = _CurveVisual(
-            name, curve, points, projected, stations, indices, line, halo, color
+            name,
+            curve,
+            points,
+            projected,
+            stations,
+            indices,
+            line,
+            halo,
+            color,
+            np.asarray([low[0], high[0], low[1], high[1]], dtype=float),
         )
         self._curve_visuals[name] = visual
         self._curve_artists.extend((halo, line))
@@ -561,7 +740,11 @@ class LayoutViewer2D:
         self._bounds_points.append(points)
 
     def _add_object(self, name: str, obj: Any) -> None:
-        data = self.resolver.swept_object_mesh(obj)
+        data = self.resolver.swept_object_mesh(
+            obj,
+            resolution=self._object_mesh_resolution(obj),
+            radial_resolution=self.radial_resolution_effective,
+        )
         vertices = _as_points(_data_field(data, "vertices", ()))
         faces = np.asarray(_data_field(data, "faces", ()), dtype=int).reshape((-1, 3))
         if not len(vertices):
@@ -584,34 +767,66 @@ class LayoutViewer2D:
                 kind="stable",
             )
             front_faces = front_faces[order]
-        polygons = [projected[face] for face in front_faces]
         type_ = self._object_type(obj)
         color_value = _data_field(data, "color", getattr(type_, "color", None))
         color = self._color(color_value, _OBJECT_FALLBACK)
-        fill = self._mpl.PolyCollection(
-            polygons,
-            facecolors=[(*color, 0.20)],
-            edgecolors="none",
-            closed=True,
-            picker=True,
-            zorder=3,
-        )
-        self.ax.add_collection(fill)
         edge_pairs = self._feature_edges(vertices, faces)
-        segments = [
-            [projected[first], projected[second]] for first, second in edge_pairs
-        ]
         edge_color = self._lighten(color, 0.24)
-        edges = self._mpl.LineCollection(
-            segments,
-            colors=[(*edge_color, 0.68)],
-            linewidths=0.7,
-            picker=5,
-            zorder=3.2,
-        )
-        self.ax.add_collection(edges)
-        fill.set_gid(f"object:{name}")
-        edges.set_gid(f"object:{name}:edges")
+        low, high = np.min(projected, axis=0), np.max(projected, axis=0)
+        bounds = np.asarray([low[0], high[0], low[1], high[1]], dtype=float)
+
+        fill = edges = None
+        if self.batch_objects:
+            bend_angle = self._shape_bend_angle(obj)
+            if bend_angle <= 1.0e-12:
+                # A straight convex extrusion has one exact projected hull.
+                render_faces = [self._convex_hull(projected)]
+                render_depths = [float(np.mean(vertices[:, self.depth_axis]))]
+            else:
+                # A curved extrusion need not be convex (a semicircle is the
+                # clearest counterexample).  Keep its true projected visible
+                # skin inside the shared collection so empty interiors remain
+                # empty while artist count stays constant.
+                render_faces = [projected[face] for face in front_faces]
+                render_depths = [
+                    float(np.mean(vertices[face, self.depth_axis]))
+                    for face in front_faces
+                ]
+                if not render_faces:
+                    render_faces = [self._convex_hull(projected)]
+                    render_depths = [float(np.mean(vertices[:, self.depth_axis]))]
+            self._batch_entries.extend(
+                (
+                    name,
+                    polygon,
+                    (*color, 0.20),
+                    (*edge_color, 0.68),
+                    depth,
+                )
+                for polygon, depth in zip(render_faces, render_depths)
+            )
+        else:
+            polygons = [projected[face] for face in front_faces]
+            fill = self._mpl.PolyCollection(
+                polygons,
+                facecolors=[(*color, 0.20)],
+                edgecolors="none",
+                closed=True,
+                zorder=3,
+            )
+            self.ax.add_collection(fill)
+            segments = [
+                [projected[first], projected[second]] for first, second in edge_pairs
+            ]
+            edges = self._mpl.LineCollection(
+                segments,
+                colors=[(*edge_color, 0.68)],
+                linewidths=0.7,
+                zorder=3.2,
+            )
+            self.ax.add_collection(edges)
+            fill.set_gid(f"object:{name}")
+            edges.set_gid(f"object:{name}:edges")
         pose = self.resolver.object_frame(obj)
         visual = _ObjectVisual(
             name,
@@ -624,13 +839,101 @@ class LayoutViewer2D:
             edges,
             color,
             pose,
+            bounds,
         )
         self._object_visuals[name] = visual
-        self._object_artists.extend((fill, edges))
-        target = _PickTarget("object", name, obj, pose)
-        self._pick_targets[fill] = target
-        self._pick_targets[edges] = target
+        if not self.batch_objects:
+            self._object_artists.extend((fill, edges))
         self._bounds_points.append(vertices)
+
+    def _object_mesh_resolution(self, obj: Any) -> int:
+        """Return exact requested detail or a bend-aware automatic LOD."""
+
+        if self._requested_object_resolution is not None:
+            return self.object_resolution
+        bend_angle = self._shape_bend_angle(obj)
+        if bend_angle <= 1.0e-12:
+            # A straight extrusion is represented exactly by its two end rings.
+            return 1
+        desired = max(2, math.ceil(bend_angle / math.radians(5.0)))
+        return max(2, min(self.object_resolution_effective, desired))
+
+    def _shape_bend_angle(self, obj: Any) -> float:
+        shape = getattr(self._object_type(obj), "shape", None)
+        curvature = float(getattr(shape, "curvature", 0.0))
+        length = float(getattr(shape, "dz", 0.0))
+        if isinstance(shape, Sequence) and not isinstance(shape, (str, bytes)):
+            try:
+                if shape and str(shape[0]).lower() == "box":
+                    length = float(shape[3])
+                    curvature = float(shape[4]) if len(shape) > 4 else 0.0
+                elif shape and str(shape[0]).lower() == "cylinder":
+                    length = float(shape[2])
+                    curvature = float(shape[3]) if len(shape) > 3 else 0.0
+            except (TypeError, ValueError, IndexError):
+                pass
+        return abs(curvature * length)
+
+    @staticmethod
+    def _convex_hull(points: np.ndarray) -> np.ndarray:
+        """Return the counter-clockwise hull of 2D points without SciPy."""
+
+        unique = np.unique(np.asarray(points, dtype=float), axis=0)
+        if len(unique) <= 2:
+            return unique
+        ordered = unique[np.lexsort((unique[:, 1], unique[:, 0]))]
+
+        def cross(origin: np.ndarray, first: np.ndarray, second: np.ndarray) -> float:
+            one, two = first - origin, second - origin
+            return float(one[0] * two[1] - one[1] * two[0])
+
+        lower: list[np.ndarray] = []
+        for point in ordered:
+            while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0.0:
+                lower.pop()
+            lower.append(point)
+        upper: list[np.ndarray] = []
+        for point in reversed(ordered):
+            while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0.0:
+                upper.pop()
+            upper.append(point)
+        return np.asarray([*lower[:-1], *upper[:-1]], dtype=float)
+
+    def _finish_object_batch(self) -> None:
+        if not self._batch_entries:
+            return
+        # Painter's algorithm for translucent projected silhouettes.
+        entries = sorted(self._batch_entries, key=lambda entry: entry[4])
+        polygons = [entry[1] for entry in entries]
+        self._batch_base_facecolors = np.asarray(
+            [entry[2] for entry in entries], dtype=float
+        )
+        self._batch_base_edgecolors = np.asarray(
+            [entry[3] for entry in entries], dtype=float
+        )
+        collection = self._mpl.PolyCollection(
+            polygons,
+            facecolors=self._batch_base_facecolors,
+            edgecolors=self._batch_base_edgecolors,
+            linewidths=0.7,
+            closed=True,
+            zorder=3,
+        )
+        collection.set_gid("objects:batch")
+        self.ax.add_collection(collection)
+        self._batch_object_collection = collection
+        self._object_artists.append(collection)
+        self._batch_current_facecolors = self._batch_base_facecolors.copy()
+        self._batch_current_edgecolors = self._batch_base_edgecolors.copy()
+        indices_by_name: dict[str, list[int]] = {}
+        for index, (name, _polygon, _face, _edge, _depth) in enumerate(entries):
+            indices_by_name.setdefault(name, []).append(index)
+        for name, indices in indices_by_name.items():
+            visual = self._object_visuals[name]
+            visual.fill = collection
+            visual.edges = collection
+            visual.batch_index = indices[0]
+            visual.batch_indices = np.asarray(indices, dtype=np.int64)
 
     @staticmethod
     def _feature_edges(
@@ -702,20 +1005,170 @@ class LayoutViewer2D:
         self.world_bounds = tuple(float(item) for item in self._world_bounds)
         self.bounds = tuple(float(item) for item in self._bounds)
 
-    def _build_object_frames(self) -> None:
+    def _ensure_object_frames(self, *, named: bool = False, beam: bool = False) -> None:
+        build_named = bool(named and not self._named_frames_built)
+        build_beam = bool(beam and not self._beam_frames_built)
+        if not build_named and not build_beam:
+            return
+        if self.batch_objects:
+            if build_named:
+                self._build_batched_named_frames()
+            if build_beam:
+                self._build_batched_beam_frames()
+            self._refresh_batched_frame_index()
+            self._named_frames_built = self._named_frames_built or build_named
+            self._beam_frames_built = self._beam_frames_built or build_beam
+            return
+
+        from .model import Pose
+
         for object_name, visual in self._object_visuals.items():
             obj = visual.entity
             type_ = self._object_type(obj)
+            center = _pose_matrix(visual.pose)
+            if build_named:
+                for fallback_name, _frame in _mapping_items(
+                    getattr(type_, "frames", None)
+                ):
+                    frame_name = str(fallback_name)
+                    local = self.resolver._type_frame_matrix(type_, frame_name)
+                    pose = Pose(center @ local, space="world")
+                    self._add_named_frame(object_name, obj, frame_name, pose)
+                    self._bounds_points.append(_pose_origin(pose).reshape(1, 3))
+            if build_beam:
+                for frame_name in ("magnetic_entry", "magnetic_exit"):
+                    local = self.resolver._type_frame_matrix(type_, frame_name)
+                    pose = Pose(center @ local, space="world")
+                    vertices = self._beam_plane_vertices(type_, pose)
+                    self._add_beam_frame(object_name, obj, frame_name, pose, vertices)
+                    self._bounds_points.append(vertices)
+        self._named_frames_built = self._named_frames_built or build_named
+        self._beam_frames_built = self._beam_frames_built or build_beam
+
+    def _frame_pose(self, visual: _ObjectVisual, type_: Any, frame_name: str) -> Any:
+        from .model import Pose
+
+        local = self.resolver._type_frame_matrix(type_, frame_name)
+        return Pose(_pose_matrix(visual.pose) @ local, space="world")
+
+    def _build_batched_named_frames(self) -> None:
+        segments: list[np.ndarray] = []
+        colors: list[str] = []
+        points: list[np.ndarray] = []
+        for object_name, visual in self._object_visuals.items():
+            obj = visual.entity
+            type_ = self._object_type(obj)
+            object_scale = float(np.linalg.norm(np.ptp(visual.vertices, axis=0)))
+            axis_scale = max(
+                0.035, min(self._scene_scale * 0.025, max(object_scale * 0.25, 0.035))
+            )
             for fallback_name, _frame in _mapping_items(getattr(type_, "frames", None)):
                 frame_name = str(fallback_name)
-                pose = self.resolver.object_named_frame(obj, frame_name)
-                self._add_named_frame(object_name, obj, frame_name, pose)
-                self._bounds_points.append(_pose_origin(pose).reshape(1, 3))
+                pose = self._frame_pose(visual, type_, frame_name)
+                origin = _pose_origin(pose)
+                for axis, color in zip(_pose_axes(pose), _AXIS_COLORS):
+                    segments.append(
+                        self._project(np.asarray([origin, origin + axis_scale * axis]))
+                    )
+                    colors.append(color)
+                point = self._project(origin.reshape(1, 3))[0]
+                points.append(point)
+                target = _PickTarget(
+                    "frame", f"{object_name}.{frame_name}", obj, pose, obj, frame_name
+                )
+                self._append_batched_frame_visual(target, point.reshape(1, 2))
+                self._bounds_points.append(origin.reshape(1, 3))
+        if not points:
+            return
+        axes = self._mpl.LineCollection(
+            segments, colors=colors, linewidths=0.7, zorder=7
+        )
+        self.ax.add_collection(axes)
+        point_array = np.asarray(points, dtype=float)
+        markers = self.ax.scatter(
+            point_array[:, 0],
+            point_array[:, 1],
+            s=7.0,
+            c="#ffca75",
+            edgecolors="#4e3921",
+            linewidths=0.25,
+            zorder=8,
+        )
+        self._named_frame_artists.extend((axes, markers))
+
+    def _build_batched_beam_frames(self) -> None:
+        polygons: list[np.ndarray] = []
+        facecolors: list[tuple[float, ...]] = []
+        edgecolors: list[tuple[float, ...]] = []
+        points: list[np.ndarray] = []
+        marker_colors: list[tuple[float, float, float]] = []
+        for object_name, visual in self._object_visuals.items():
+            obj = visual.entity
+            type_ = self._object_type(obj)
             for frame_name in ("magnetic_entry", "magnetic_exit"):
-                pose = self.resolver.object_named_frame(obj, frame_name)
+                pose = self._frame_pose(visual, type_, frame_name)
                 vertices = self._beam_plane_vertices(type_, pose)
-                self._add_beam_frame(object_name, obj, frame_name, pose, vertices)
+                projected = self._project(vertices)
+                color_text = "#66c7ff" if frame_name == "magnetic_entry" else "#ff9b78"
+                color = self._color(color_text, color_text)
+                polygons.append(projected)
+                facecolors.append((*color, 0.14))
+                edgecolors.append((*color, 1.0))
+                point = self._project(_pose_origin(pose).reshape(1, 3))[0]
+                points.append(point)
+                marker_colors.append(color)
+                target = _PickTarget(
+                    "beam_frame",
+                    f"{object_name}.{frame_name}",
+                    obj,
+                    pose,
+                    obj,
+                    frame_name,
+                )
+                self._append_batched_frame_visual(target, projected)
                 self._bounds_points.append(vertices)
+        if not points:
+            return
+        planes = self._mpl.PolyCollection(
+            polygons,
+            facecolors=facecolors,
+            edgecolors=edgecolors,
+            linewidths=0.65,
+            closed=True,
+            zorder=5,
+        )
+        self.ax.add_collection(planes)
+        point_array = np.asarray(points, dtype=float)
+        markers = self.ax.scatter(
+            point_array[:, 0],
+            point_array[:, 1],
+            s=8.0,
+            c=marker_colors,
+            edgecolors="#0c1620",
+            linewidths=0.25,
+            marker="s",
+            zorder=6,
+        )
+        self._beam_frame_artists.extend((planes, markers))
+
+    def _append_batched_frame_visual(
+        self, target: _PickTarget, projected: np.ndarray
+    ) -> None:
+        low, high = np.min(projected, axis=0), np.max(projected, axis=0)
+        self._batched_frame_visuals.append(
+            _BatchedFrameVisual(
+                target,
+                projected,
+                np.asarray([low[0], high[0], low[1], high[1]], dtype=float),
+                float(_pose_origin(target.pose)[self.depth_axis]),
+            )
+        )
+
+    def _refresh_batched_frame_index(self) -> None:
+        if self._batched_frame_visuals:
+            self._batched_frame_bounds = np.stack(
+                [visual.bounds for visual in self._batched_frame_visuals]
+            )
 
     def _add_named_frame(
         self, object_name: str, obj: Any, frame_name: str, pose: Any
@@ -785,7 +1238,12 @@ class LayoutViewer2D:
                     origin
                     + hx * math.cos(angle) * x_axis
                     + hy * math.sin(angle) * y_axis
-                    for angle in np.linspace(0.0, 2.0 * math.pi, 32, endpoint=False)
+                    for angle in np.linspace(
+                        0.0,
+                        2.0 * math.pi,
+                        self.radial_resolution_effective,
+                        endpoint=False,
+                    )
                 ]
             )
         return np.asarray(
@@ -966,30 +1424,41 @@ class LayoutViewer2D:
         self._sync_selection_overlay()
 
     def set_curves_visible(self, visible: bool = True) -> Self:
+        self._ensure_open()
         self.curves_visible = bool(visible)
         self._apply_layer_visibility()
         self._request_draw()
         return self
 
     def set_objects_visible(self, visible: bool = True) -> Self:
+        self._ensure_open()
         self.objects_visible = bool(visible)
         self._apply_layer_visibility()
         self._request_draw()
         return self
 
     def set_beam_frames_visible(self, visible: bool = True) -> Self:
+        self._ensure_open()
         self.beam_frames_visible = bool(visible)
+        if self.beam_frames_visible:
+            self._ensure_object_frames(beam=True)
+            self._finish_bounds()
         self._apply_layer_visibility()
         self._request_draw()
         return self
 
     def set_frames_visible(self, visible: bool = True) -> Self:
+        self._ensure_open()
         self.frames_visible = bool(visible)
+        if self.frames_visible:
+            self._ensure_object_frames(named=True)
+            self._finish_bounds()
         self._apply_layer_visibility()
         self._request_draw()
         return self
 
     def set_grid_visible(self, visible: bool = True) -> Self:
+        self._ensure_open()
         self.grid_visible = bool(visible)
         if self.grid_visible:
             self.ax.grid(True, color="#7891a8", alpha=0.24, linewidth=0.65)
@@ -1087,20 +1556,87 @@ class LayoutViewer2D:
 
         if self._closed:
             self._disconnect_callbacks()
+            self._close_resolver_session()
             return
         self._disconnect_callbacks()
+        self._close_resolver_session()
         if self._owns_figure:
             self._plt.close(self.figure)
         self._closed = True
+        self._release_scene_references(clear_figure=self._owns_figure)
 
     def _on_close_event(self, _event: Any) -> None:
         self._disconnect_callbacks()
+        self._close_resolver_session()
         self._closed = True
+        self._release_scene_references(clear_figure=False)
 
     def _disconnect_callbacks(self) -> None:
         for callback in self._callbacks:
             self.canvas.mpl_disconnect(callback)
         self._callbacks.clear()
+
+    def _close_resolver_session(self) -> None:
+        session, self._resolver_session = self._resolver_session, None
+        if session is not None:
+            session.__exit__(None, None, None)
+
+    def _release_scene_references(self, *, clear_figure: bool) -> None:
+        """Drop geometry retained by a closed viewer (notably in IPython Out)."""
+
+        figure = getattr(self, "figure", None)
+        if clear_figure and figure is not None:
+            figure.clear()
+        for name in (
+            "_curve_visuals",
+            "_object_visuals",
+            "_pick_targets",
+            "curve_artists",
+            "object_artists",
+            "curve_actors",
+            "object_actors",
+        ):
+            value = getattr(self, name, None)
+            if hasattr(value, "clear"):
+                value.clear()
+        self._curve_items.clear()
+        self._object_items.clear()
+        self._selection = None
+        self._hover = None
+        for name in (
+            "_curve_artists",
+            "_object_artists",
+            "_beam_frame_artists",
+            "_named_frame_artists",
+            "_bounds_points",
+            "_batch_entries",
+            "_object_pick_visuals",
+            "_batched_frame_visuals",
+        ):
+            value = getattr(self, name, None)
+            if hasattr(value, "clear"):
+                value.clear()
+        empty4 = np.empty((0, 4), dtype=float)
+        self._object_pick_bounds = empty4
+        self._batched_frame_bounds = empty4
+        self._batch_base_facecolors = empty4
+        self._batch_base_edgecolors = empty4
+        self._batch_current_facecolors = empty4
+        self._batch_current_edgecolors = empty4
+        self._batch_object_collection = None
+        self.curve_scope = ()
+        self.object_scope = ()
+        self.layout = None
+        self.resolver = None
+        for name in ("pose_text", "tooltip", "local_axes", "local_origin"):
+            setattr(self, name, None)
+        labels = getattr(self, "local_axis_labels", None)
+        if hasattr(labels, "clear"):
+            labels.clear()
+        self.ax = None
+        self.axes = None
+        self.canvas = None
+        self.figure = None
 
     def _ensure_open(self) -> None:
         if self._closed:
@@ -1123,6 +1659,7 @@ class LayoutViewer2D:
     def select(self, entity: Any = None, *, station: float | None = None) -> Self:
         """Highlight a scoped entity/frame, or clear selection with ``None``."""
 
+        self._ensure_open()
         if entity is None:
             self._set_selection(None)
         else:
@@ -1267,6 +1804,13 @@ class LayoutViewer2D:
             visual.halo.set_color(visual.color)
             visual.halo.set_linewidth(8.0)
             visual.halo.set_alpha(0.18)
+        if self._batch_object_collection is not None:
+            self._batch_current_facecolors = self._batch_base_facecolors.copy()
+            self._batch_current_edgecolors = self._batch_base_edgecolors.copy()
+            self._batch_object_collection.set_facecolors(self._batch_current_facecolors)
+            self._batch_object_collection.set_edgecolors(self._batch_current_edgecolors)
+            self._batch_object_collection.set_linewidth(0.7)
+            return
         for visual in self._object_visuals.values():
             visual.fill.set_facecolor([(*visual.color, 0.20)])
             visual.edges.set_color([(*self._lighten(visual.color, 0.24), 0.68)])
@@ -1286,6 +1830,20 @@ class LayoutViewer2D:
         owner = selection.owner if selection.owner is not None else selection.entity
         for visual in self._object_visuals.values():
             if visual.entity is owner:
+                if (
+                    self._batch_object_collection is not None
+                    and visual.batch_indices is not None
+                ):
+                    indices = visual.batch_indices
+                    self._batch_current_facecolors[indices] = (*visual.color, 0.38)
+                    self._batch_current_edgecolors[indices] = (*highlight, 0.98)
+                    self._batch_object_collection.set_facecolors(
+                        self._batch_current_facecolors
+                    )
+                    self._batch_object_collection.set_edgecolors(
+                        self._batch_current_edgecolors
+                    )
+                    continue
                 visual.fill.set_facecolor([(*visual.color, 0.38)])
                 visual.edges.set_color([(*highlight, 0.98)])
                 visual.edges.set_linewidth(1.8)
@@ -1385,6 +1943,18 @@ class LayoutViewer2D:
         if getattr(event, "inaxes", None) is not self.ax:
             self._clear_hover()
             return
+        toolbar = getattr(getattr(self.canvas, "toolbar", None), "mode", "")
+        if toolbar or getattr(event, "button", None) is not None:
+            return
+        x, y = getattr(event, "x", None), getattr(event, "y", None)
+        pixel = (float(x), float(y)) if x is not None and y is not None else None
+        if pixel is not None and pixel == self._last_hover_pixel:
+            return
+        now = monotonic()
+        if now - self._last_hover_time < self.hover_interval:
+            return
+        self._last_hover_time = now
+        self._last_hover_pixel = pixel
         selection = self._pick_selection(event)
         self._hover = selection
         if selection is None:
@@ -1416,6 +1986,7 @@ class LayoutViewer2D:
 
     def _clear_hover(self) -> None:
         self._hover = None
+        self._last_hover_pixel = None
         self.tooltip.set_visible(False)
         if self._selection is None:
             self.pose_text.set_text(self._empty_pose_message())
@@ -1447,9 +2018,17 @@ class LayoutViewer2D:
     def _pick_selection(self, event: Any) -> _Selection | None:
         candidates: dict[tuple[Any, ...], _PickCandidate] = {}
         priorities = {"curve": 1, "object": 2, "beam_frame": 3, "frame": 4}
+        data_point = self._event_data(event)
+        tolerance = self._pick_data_tolerance(event, 7.0)
         for order, (artist, target) in enumerate(self._pick_targets.items()):
             if not artist.get_visible():
                 continue
+            if target.kind == "curve":
+                visual = self._curve_visuals.get(target.name)
+                if visual is None or not self._bounds_hit(
+                    visual.bounds, data_point, tolerance
+                ):
+                    continue
             try:
                 contains, _details = artist.contains(event)
             except (AttributeError, TypeError, ValueError):
@@ -1506,9 +2085,184 @@ class LayoutViewer2D:
             old = candidates.get(key)
             if old is None or self._candidate_key(candidate) > self._candidate_key(old):
                 candidates[key] = candidate
+
+        # Object artists are deliberately not individually pickable.  A
+        # vectorised projected-bounds query first reduces a 10k-object layout
+        # to the handful of shapes near the pointer, after which the existing
+        # face/edge metric retains depth-aware selection semantics.
+        if (
+            self.objects_visible
+            and data_point is not None
+            and len(self._object_pick_visuals)
+        ):
+            nearby = self._nearby_object_indices(data_point, max_distance=7.0)
+            base_order = len(self._pick_targets)
+            for index in nearby:
+                visual = self._object_pick_visuals[int(index)]
+                depth, distance = self._object_pick_metrics(visual, event)
+                if distance > 7.0:
+                    continue
+                selection = _Selection(
+                    "object", visual.name, visual.entity, visual.pose
+                )
+                candidate = _PickCandidate(
+                    selection,
+                    depth,
+                    distance,
+                    priorities["object"],
+                    base_order + int(index),
+                )
+                key = ("object", id(visual.entity), visual.name, None)
+                old = candidates.get(key)
+                if old is None or self._candidate_key(candidate) > self._candidate_key(
+                    old
+                ):
+                    candidates[key] = candidate
+
+        if data_point is not None and len(self._batched_frame_visuals):
+            x, y = data_point
+            tx, ty = tolerance
+            bounds = self._batched_frame_bounds
+            nearby = np.flatnonzero(
+                (bounds[:, 0] - tx <= x)
+                & (x <= bounds[:, 1] + tx)
+                & (bounds[:, 2] - ty <= y)
+                & (y <= bounds[:, 3] + ty)
+            )
+            base_order = len(self._pick_targets) + len(self._object_pick_visuals)
+            for index in nearby:
+                visual = self._batched_frame_visuals[int(index)]
+                target = visual.target
+                if target.kind == "frame" and not (
+                    self.objects_visible and self.frames_visible
+                ):
+                    continue
+                if target.kind == "beam_frame" and not (
+                    self.objects_visible and self.beam_frames_visible
+                ):
+                    continue
+                distance = self._projected_pick_distance(visual.projected, event)
+                if distance > 7.0:
+                    continue
+                selection = _Selection(
+                    target.kind,
+                    target.name,
+                    target.entity,
+                    target.pose,
+                    target.owner,
+                    target.frame_name,
+                )
+                candidate = _PickCandidate(
+                    selection,
+                    visual.depth,
+                    distance,
+                    priorities[target.kind],
+                    base_order + int(index),
+                )
+                key = (
+                    selection.kind,
+                    id(selection.entity),
+                    selection.name,
+                    selection.frame_name,
+                )
+                old = candidates.get(key)
+                if old is None or self._candidate_key(candidate) > self._candidate_key(
+                    old
+                ):
+                    candidates[key] = candidate
         if not candidates:
             return None
         return max(candidates.values(), key=self._candidate_key).selection
+
+    def _nearby_object_indices(
+        self, point: tuple[float, float], *, max_distance: float
+    ) -> np.ndarray:
+        """Return only the closest projected object bounds within a pixel radius."""
+
+        x, y = point
+        bounds = self._object_pick_bounds
+        dx = np.maximum.reduce(
+            (bounds[:, 0] - x, np.zeros(len(bounds)), x - bounds[:, 1])
+        )
+        dy = np.maximum.reduce(
+            (bounds[:, 2] - y, np.zeros(len(bounds)), y - bounds[:, 3])
+        )
+        transform = self.ax.transData
+        origin = np.asarray(transform.transform((0.0, 0.0)), dtype=float)
+        unit = np.asarray(transform.transform((1.0, 1.0)), dtype=float)
+        scale = np.abs(unit - origin)
+        distances = np.hypot(dx * scale[0], dy * scale[1])
+        within = np.flatnonzero(distances <= max_distance)
+        if not len(within):
+            return within
+        minimum = float(np.min(distances[within]))
+        # At overview scale hundreds of sub-pixel accelerator elements can lie
+        # inside a conventional seven-pixel pick aperture.  Exact hit testing
+        # only the nearest sub-pixel band is both faster and more intuitive.
+        return within[distances[within] <= minimum + 0.75]
+
+    def _projected_pick_distance(self, projected: np.ndarray, event: Any) -> float:
+        point = self._event_pixels(event)
+        if point is None or not len(projected):
+            return math.inf
+        pixels = np.asarray(self.ax.transData.transform(projected), dtype=float)
+        if len(pixels) == 1:
+            return float(np.linalg.norm(point - pixels[0]))
+        following = np.roll(pixels, -1, axis=0)
+        chords = following - pixels
+        denominators = np.einsum("ij,ij->i", chords, chords)
+        numerators = np.einsum("ij,ij->i", point - pixels, chords)
+        fractions = np.divide(
+            numerators,
+            denominators,
+            out=np.zeros_like(numerators),
+            where=denominators > 1.0e-20,
+        )
+        fractions = np.clip(fractions, 0.0, 1.0)
+        nearest = pixels + fractions[:, None] * chords
+        distance = float(np.min(np.linalg.norm(point - nearest, axis=1)))
+        if len(pixels) < 3:
+            return distance
+        # Even/odd ray crossing determines whether the pointer is inside the
+        # projected frame plane; its interior then has zero pick distance.
+        x, y = float(point[0]), float(point[1])
+        first_x, first_y = pixels[:, 0], pixels[:, 1]
+        next_x, next_y = following[:, 0], following[:, 1]
+        crosses = (first_y > y) != (next_y > y)
+        denominator = next_y - first_y
+        intersections = first_x + (y - first_y) * (next_x - first_x) / np.where(
+            np.abs(denominator) > 1.0e-20, denominator, 1.0
+        )
+        if int(np.count_nonzero(crosses & (x < intersections))) % 2:
+            return 0.0
+        return distance
+
+    def _pick_data_tolerance(self, event: Any, pixels: float) -> tuple[float, float]:
+        point = self._event_pixels(event)
+        if point is None:
+            return 0.0, 0.0
+        inverse = self.ax.transData.inverted()
+        center = np.asarray(inverse.transform(point), dtype=float)
+        offset = np.asarray(
+            inverse.transform(point + np.asarray([pixels, pixels])), dtype=float
+        )
+        delta = np.abs(offset - center)
+        return float(delta[0]), float(delta[1])
+
+    @staticmethod
+    def _bounds_hit(
+        bounds: np.ndarray,
+        point: tuple[float, float] | None,
+        tolerance: tuple[float, float],
+    ) -> bool:
+        if point is None:
+            return True
+        x, y = point
+        tx, ty = tolerance
+        return bool(
+            bounds[0] - tx <= x <= bounds[1] + tx
+            and bounds[2] - ty <= y <= bounds[3] + ty
+        )
 
     def _candidate_key(self, candidate: _PickCandidate) -> tuple[int, int, float, int]:
         # Values within numerical world-coordinate noise share a depth bucket;
@@ -1528,51 +2282,65 @@ class LayoutViewer2D:
         if point is None or not len(visual.vertices):
             return float(np.max(depths, initial=-math.inf)), 0.0
         pixels = np.asarray(self.ax.transData.transform(visual.projected), dtype=float)
-        inside_depths: list[float] = []
-        for face in visual.faces:
-            first, second, third = (pixels[int(index)] for index in face)
-            v0, v1, offset = second - first, third - first, point - first
-            denominator = float(v0[0] * v1[1] - v0[1] * v1[0])
-            if abs(denominator) <= 1e-14:
-                continue
-            second_weight = float((offset[0] * v1[1] - offset[1] * v1[0]) / denominator)
-            third_weight = float((v0[0] * offset[1] - v0[1] * offset[0]) / denominator)
+        faces = visual.faces
+        if len(faces):
+            triangles = pixels[faces]
+            first = triangles[:, 0]
+            v0 = triangles[:, 1] - first
+            v1 = triangles[:, 2] - first
+            offset = point - first
+            denominator = v0[:, 0] * v1[:, 1] - v0[:, 1] * v1[:, 0]
+            valid = np.abs(denominator) > 1.0e-14
+            second_weight = np.divide(
+                offset[:, 0] * v1[:, 1] - offset[:, 1] * v1[:, 0],
+                denominator,
+                out=np.full(len(faces), -math.inf),
+                where=valid,
+            )
+            third_weight = np.divide(
+                v0[:, 0] * offset[:, 1] - v0[:, 1] * offset[:, 0],
+                denominator,
+                out=np.full(len(faces), -math.inf),
+                where=valid,
+            )
             first_weight = 1.0 - second_weight - third_weight
-            if min(first_weight, second_weight, third_weight) >= -1e-9:
-                face_depths = depths[face]
-                inside_depths.append(
-                    float(
-                        first_weight * face_depths[0]
-                        + second_weight * face_depths[1]
-                        + third_weight * face_depths[2]
-                    )
+            inside = valid & (
+                np.minimum.reduce((first_weight, second_weight, third_weight))
+                >= -1.0e-9
+            )
+            if np.any(inside):
+                face_depths = depths[faces[inside]]
+                hit_depths = (
+                    first_weight[inside] * face_depths[:, 0]
+                    + second_weight[inside] * face_depths[:, 1]
+                    + third_weight[inside] * face_depths[:, 2]
                 )
-        if inside_depths:
-            return max(inside_depths), 0.0
+                return float(np.max(hit_depths)), 0.0
 
-        best_distance = math.inf
-        best_depth = -math.inf
-        for first_index, second_index in visual.feature_edges:
-            first, second = pixels[first_index], pixels[second_index]
-            chord = second - first
-            denominator = float(np.dot(chord, chord))
-            fraction = (
-                0.0
-                if denominator <= 1e-20
-                else float(np.clip(np.dot(point - first, chord) / denominator, 0, 1))
-            )
-            distance = float(np.linalg.norm(point - (first + fraction * chord)))
-            depth = float(
-                depths[first_index]
-                + fraction * (depths[second_index] - depths[first_index])
-            )
-            if distance < best_distance - 1e-9 or (
-                abs(distance - best_distance) <= 1e-9 and depth > best_depth
-            ):
-                best_distance, best_depth = distance, depth
-        if not math.isfinite(best_depth):
-            best_depth = float(np.max(depths, initial=-math.inf))
-        return best_depth, best_distance
+        edges = np.asarray(visual.feature_edges, dtype=np.int64).reshape((-1, 2))
+        if not len(edges):
+            return float(np.max(depths, initial=-math.inf)), math.inf
+        first_indices, second_indices = edges[:, 0], edges[:, 1]
+        first, second = pixels[first_indices], pixels[second_indices]
+        chords = second - first
+        denominators = np.einsum("ij,ij->i", chords, chords)
+        numerators = np.einsum("ij,ij->i", point - first, chords)
+        fractions = np.divide(
+            numerators,
+            denominators,
+            out=np.zeros_like(numerators),
+            where=denominators > 1.0e-20,
+        )
+        fractions = np.clip(fractions, 0.0, 1.0)
+        distances = np.linalg.norm(
+            point - (first + fractions[:, None] * chords), axis=1
+        )
+        edge_depths = depths[first_indices] + fractions * (
+            depths[second_indices] - depths[first_indices]
+        )
+        minimum = float(np.min(distances))
+        ties = distances <= minimum + 1.0e-9
+        return float(np.max(edge_depths[ties])), minimum
 
     def _nearest_curve_station(
         self, visual: _CurveVisual, event: Any
@@ -1608,50 +2376,50 @@ class LayoutViewer2D:
             )
             return station, segment, float(depths[0]), distance
 
-        choices: list[tuple[float, float, float, int, int, float]] = []
-        for index in range(len(screen_points) - 1):
-            first, second = screen_points[index], screen_points[index + 1]
-            chord = second - first
-            denominator = float(np.dot(chord, chord))
-            if denominator <= 1e-20:
-                first_depth, second_depth = (
-                    float(depths[index]),
-                    float(depths[index + 1]),
-                )
-                if second_depth > first_depth:
-                    fraction = 1.0
-                else:
-                    fraction = 0.0
-            else:
-                fraction = float(
-                    np.clip(np.dot(event_pixels - first, chord) / denominator, 0, 1)
-                )
-            nearest = first + fraction * chord
-            distance = float(np.linalg.norm(event_pixels - nearest))
-            station = float(
-                visual.stations[index]
-                + fraction * (visual.stations[index + 1] - visual.stations[index])
-            )
-            depth = float(
-                depths[index] + fraction * (depths[index + 1] - depths[index])
-            )
-            sample_index = index if fraction < 1.0 else index + 1
-            segment = int(visual.segment_indices[sample_index])
-            choices.append((distance, depth, station, segment, index, fraction))
+        first = screen_points[:-1]
+        chords = screen_points[1:] - first
+        denominators = np.einsum("ij,ij->i", chords, chords)
+        offsets = event_pixels - first
+        numerators = np.einsum("ij,ij->i", offsets, chords)
+        fractions = np.divide(
+            numerators,
+            denominators,
+            out=np.zeros_like(numerators),
+            where=denominators > 1.0e-20,
+        )
+        fractions = np.clip(fractions, 0.0, 1.0)
+        collapsed = denominators <= 1.0e-20
+        fractions[collapsed] = (depths[1:][collapsed] > depths[:-1][collapsed]).astype(
+            float
+        )
+        nearest = first + fractions[:, None] * chords
+        distances = np.linalg.norm(event_pixels - nearest, axis=1)
+        stations = visual.stations[:-1] + fractions * np.diff(visual.stations)
+        chord_depths = depths[:-1] + fractions * np.diff(depths)
+        chord_indices = np.arange(len(fractions), dtype=np.int64)
+        sample_indices = chord_indices + (fractions >= 1.0)
+        segments = visual.segment_indices[sample_indices]
 
-        minimum = min(choice[0] for choice in choices)
+        minimum = float(np.min(distances))
         tie_tolerance = max(1e-7, minimum * 1e-9)
-        near = [choice for choice in choices if choice[0] <= minimum + tie_tolerance]
-        distance, depth, station, segment, _index, _fraction = max(
-            near,
-            key=lambda choice: (
-                choice[1],
-                -choice[2],
-                -choice[4],
-                -choice[5],
+        near = np.flatnonzero(distances <= minimum + tie_tolerance)
+        # The usually-single tie set stays tiny; retaining the tuple comparison
+        # here exactly matches the deterministic frontmost/station/index rules.
+        index = max(
+            (int(value) for value in near),
+            key=lambda value: (
+                float(chord_depths[value]),
+                -float(stations[value]),
+                -value,
+                -float(fractions[value]),
             ),
         )
-        return station, segment, depth, distance
+        return (
+            float(stations[index]),
+            int(segments[index]),
+            float(chord_depths[index]),
+            float(distances[index]),
+        )
 
     @staticmethod
     def _same_selection(left: _Selection, right: _Selection | None) -> bool:
@@ -1674,7 +2442,7 @@ class LayoutViewer2D:
         state = "closed" if self._closed else "open"
         return (
             f"LayoutViewer2D(projection={self.projection!r}, "
-            f"curves={len(self._curve_visuals)}, objects={len(self._object_visuals)}, "
+            f"curves={self._curve_count}, objects={self._object_count}, "
             f"state={state!r})"
         )
 

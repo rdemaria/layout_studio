@@ -23,4 +23,4 @@ magnet = layout.new_object(
 )
 
 print(magnet.get_frame("magnetic_exit"))
-layout.plot3D(beam_frames=True)
+layout.plot3d(beam_frames=True)
