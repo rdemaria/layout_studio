@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import io
+import gzip
 import json
 import math
 
@@ -24,24 +24,38 @@ def test_canonical_dict_and_json_round_trip(canonical_layout_dict):
 
     assert layout.to_dict() == canonical_layout_dict
     assert (
-        Layout.from_json(layout.to_json(indent=None)).to_dict() == canonical_layout_dict
+        Layout.from_json(text=layout.to_json(indent=None)).to_dict()
+        == canonical_layout_dict
     )
     assert (
-        Layout.from_json(layout.to_json().encode()).to_dict() == canonical_layout_dict
+        Layout.from_json(text=layout.to_json(str).encode()).to_dict()
+        == canonical_layout_dict
     )
 
 
-def test_save_and_load_paths_and_text_streams(tmp_path, canonical_layout_dict):
+def test_json_local_paths_and_gzip(tmp_path, canonical_layout_dict):
     layout = Layout.from_dict(canonical_layout_dict)
     filename = tmp_path / "layout.json"
+    compressed_filename = tmp_path / "layout.json.gz"
 
-    layout.save(filename, indent=None)
-    assert Layout.load(filename).to_dict() == canonical_layout_dict
+    assert layout.to_json(filename_or_url=filename, indent=None) is None
+    assert Layout.from_json(filename_or_url=filename).to_dict() == canonical_layout_dict
 
-    stream = io.StringIO()
-    layout.save(stream)
-    stream.seek(0)
-    assert Layout.load(stream).to_dict() == canonical_layout_dict
+    assert layout.to_json(filename_or_url=compressed_filename, indent=None) is None
+    assert gzip.decompress(compressed_filename.read_bytes()) == filename.read_bytes()
+    assert (
+        Layout.from_json(filename_or_url=compressed_filename).to_dict()
+        == canonical_layout_dict
+    )
+
+
+def test_from_json_requires_exactly_one_source(canonical_layout_dict):
+    text = json.dumps(canonical_layout_dict)
+
+    with pytest.raises(TypeError, match="exactly one"):
+        Layout.from_json()
+    with pytest.raises(TypeError, match="exactly one"):
+        Layout.from_json(filename_or_url="layout.json", text=text)
 
 
 def test_python_shortcuts_serialize_to_canonical_json():
@@ -232,7 +246,7 @@ def test_individual_entity_roundtrip_stays_detached():
         segments=[Segment(1.0, 0.2, 0.3)],
     )
 
-    loaded = Curve.from_json(json.dumps(curve.to_dict()))
+    loaded = Curve.from_json(text=json.dumps(curve.to_dict()))
     assert loaded.to_dict() == curve.to_dict()
     assert loaded.name is None
     assert loaded.owner is None

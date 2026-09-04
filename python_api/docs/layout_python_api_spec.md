@@ -11,9 +11,10 @@ analytically; interactive 2D and 3D views use Matplotlib and VTK, respectively.
 - Distances are in metres, rotations in radians, and curvature in m⁻¹.
 - `Frame` means an editable symbolic transformation. `Pose` means an immutable
   evaluated 4×4 frame, either type-local or world-local.
-- To avoid guessing whether a string is JSON or a path, `from_json()` parses
-  text and `load()` reads a file. `to_json()` returns text and `save()` writes a
-  file.
+- JSON text and locations are explicit: `from_json()` requires exactly one of
+  `text=` or `filename_or_url=`. `to_json()` returns text when its destination
+  is omitted (or is the built-in `str` object); an actual filename or HTTP(S)
+  URL is written instead.
 - References accept concise strings when their meaning is syntactically
   unambiguous; explicit reference classes remain the lossless fallback.
 
@@ -33,12 +34,24 @@ FrameLike = Frame | ReferenceLike
 
 
 class JsonValue:
-    from_json(cls, text: str | bytes) -> Self
-    load(cls, filename: PathLike | TextIO) -> Self
+    from_json(
+        cls,
+        filename_or_url: PathLike[str] | str | None = None,
+        text: str | bytes | bytearray | None = None,
+    ) -> Self
     from_dict(cls, dct: Mapping[str, object]) -> Self
     to_dict(self) -> dict[str, object]
-    to_json(self, *, indent: int | None = 2) -> str
-    save(self, filename: PathLike | TextIO, *, indent: int | None = 2) -> None
+    @overload
+    to_json(
+        self, filename_or_url: type[str] = str, *, indent: int | None = 2
+    ) -> str
+    @overload
+    to_json(
+        self,
+        filename_or_url: PathLike[str] | str,
+        *,
+        indent: int | None = 2,
+    ) -> None
 
 
 class OwnedValue(JsonValue):
@@ -414,7 +427,8 @@ not encoded in strings, so forms such as `"curve:main@3.1"` are unsupported.
    requires `clone()`.
 3. Public attributes are live validated properties. For example,
    `curve.color = "#112233"` immediately changes its enclosing layout. Every
-   mutation is atomic, but no source file is rewritten until `save()`.
+   mutation is atomic, but no source file is rewritten until an explicit
+   `to_json(filename_or_url=...)` call.
 4. Names are read-only registry keys. `Layout.rename()` and
    `Type.rename_frame()` preserve identity-bound references. Removing a used
    entity raises `ReferenceInUseError`; version 0.3 has no cascading removal.
@@ -428,9 +442,9 @@ not encoded in strings, so forms such as `"curve:main@3.1"` are unsupported.
 7. A frame-instance `Position.target` must belong to the positioned object's
    type. A frame instance in `ObjectReference` must belong to the referenced
    object's type. Implicit frames are supplied by reserved string name.
-8. Loading a `Layout` creates a bound graph. Loading an individual entity
-   creates a detached value. An entity's `to_dict()` omits its registry name;
-   `Layout.to_dict()` supplies the name-indexed canonical dictionaries.
+8. Deserializing a `Layout` creates a bound graph. Deserializing an individual
+   entity creates a detached value. An entity's `to_dict()` omits its registry
+   name; `Layout.to_dict()` supplies the name-indexed canonical dictionaries.
 
 Local field constraints are checked immediately. Full graph validation—names,
 references, dependency cycles, and completeness—runs on `Layout.validate()`,
@@ -520,8 +534,34 @@ layout.search(r"^Q", kind="object")
 layout["Q1"].get_frame("magnetic_exit")
 layout.plot2d("xy")
 layout.plot3d()
-layout.save("layout.json")
+layout.to_json(filename_or_url="layout.json")
 ```
+
+## JSON I/O
+
+`from_json()` accepts exactly one source. `text=` always means literal JSON
+text and accepts `str`, `bytes`, or `bytearray`; `filename_or_url=` means a
+local filesystem path or an HTTP(S) URL (read with GET). Supplying neither
+source, or supplying both sources, raises `TypeError`, so a JSON-looking string
+is never mistaken for a filename.
+
+`to_json()` and `to_json(str)` return JSON text. Passing any actual `str` or
+`PathLike[str]` supplies a destination and returns `None`; an HTTP(S)
+destination is written with PUT. For example:
+
+```python
+text = layout.to_json()
+copy = Layout.from_json(text=text)
+
+layout.to_json(filename_or_url="layout.json")
+copy = Layout.from_json(filename_or_url="layout.json")
+```
+
+For input and output, a filename or URL path ending in `.gz` selects gzip
+decompression or compression automatically. Input bytes with the gzip magic
+header are also decompressed, including `text=` bytes and URL responses whose
+address does not end in `.gz`. Output is UTF-8 JSON; compressed HTTP PUTs set
+`Content-Encoding: gzip`.
 
 ## Matplotlib 2D viewer
 

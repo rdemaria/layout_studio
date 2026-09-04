@@ -62,7 +62,7 @@ q2 = layout.new_object(
 
 layout.validate()
 print(q2.get_frame("magnetic_exit"))
-layout.save("layout.json")
+layout.to_json(filename_or_url="layout.json")
 
 # plot2d() returns a Matplotlib-backed LayoutViewer2D.  Projection names are
 # ordered: the first letter is the horizontal axis and the second is vertical.
@@ -82,6 +82,26 @@ viewer.show()
 main.plot3d()
 q1.plot3d(beam_frames=True)
 ```
+
+## JSON input and output
+
+JSON text and locations are deliberately separate inputs. Pass literal JSON
+with `text=...`; pass a local filename or an HTTP(S) URL with
+`filename_or_url=...`:
+
+```python
+document = layout.to_json()  # Equivalent to layout.to_json(str).
+copy = Layout.from_json(text=document)
+
+layout.to_json(filename_or_url="layout.json")
+loaded = Layout.from_json(filename_or_url="layout.json")
+```
+
+`to_json()` returns a string only when its destination is omitted or is the
+built-in `str` object. Any actual string is a filename or URL. HTTP(S) reads
+use GET and writes use PUT. A location ending in `.gz` is decompressed or
+compressed automatically; gzip-compressed byte input is also accepted through
+`text=...`.
 
 ## Reference shorthand
 

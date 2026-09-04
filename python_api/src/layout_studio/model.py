@@ -8,10 +8,14 @@ small delegation methods near the end of the entity classes.
 
 from __future__ import annotations
 
+import gzip
 import json
 import math
 import os
 import re
+import sys
+import urllib.parse
+import urllib.request
 from collections import OrderedDict
 from collections.abc import (
     Callable,
@@ -26,10 +30,15 @@ from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 from re import Pattern
-from typing import Any, Generic, Literal, TextIO, TypeVar, overload
+from typing import Any, Generic, Literal, TypeVar, overload
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
+
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:  # pragma: no cover - exercised by the supported Python 3.10 runtime
+    from typing_extensions import Self
 
 from .errors import (
     AmbiguousNameError,
@@ -54,6 +63,8 @@ _IMPLICIT_FRAME_NAMES = frozenset(
     ("center", "magnetic_center", "magnetic_entry", "magnetic_exit")
 )
 _COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+_GZIP_MAGIC = b"\x1f\x8b"
+_REMOTE_URL_SCHEMES = frozenset(("http", "https"))
 
 
 class _Unset:
@@ -131,32 +142,86 @@ def _sequence(
     return value
 
 
+def _location_text(filename_or_url: os.PathLike[str] | str) -> str:
+    """Return a filesystem/URL location as text, rejecting bytes paths."""
+
+    try:
+        location = os.fspath(filename_or_url)
+    except TypeError as exc:
+        raise TypeError("filename_or_url must be str or os.PathLike[str]") from exc
+    if not isinstance(location, str):
+        raise TypeError("filename_or_url must be str or os.PathLike[str]")
+    return location
+
+
+def _is_remote_url(location: str) -> bool:
+    parts = urllib.parse.urlsplit(location)
+    return parts.scheme.lower() in _REMOTE_URL_SCHEMES and bool(parts.netloc)
+
+
+def _is_gzip_location(location: str) -> bool:
+    if _is_remote_url(location):
+        location = urllib.parse.urlsplit(location).path
+    return location.lower().endswith(".gz")
+
+
+def _decode_json_bytes(payload: bytes, *, gzip_expected: bool = False) -> bytes:
+    """Return an uncompressed JSON byte sequence.
+
+    A ``.gz`` location promises gzip data and therefore deliberately surfaces
+    :class:`gzip.BadGzipFile` when its contents are not a valid gzip stream.
+    Magic-byte detection also permits compressed in-memory input and servers
+    whose URL does not retain the original filename.
+    """
+
+    if gzip_expected or payload.startswith(_GZIP_MAGIC):
+        return gzip.decompress(payload)
+    return payload
+
+
 class JsonValue:
     """Mixin implementing unambiguous JSON text and file I/O."""
 
     __slots__ = ()
 
     @classmethod
-    def from_json(cls, text: str | bytes) -> Any:
-        """Parse one JSON value from *text*.  Strings are never treated as paths."""
+    def from_json(
+        cls,
+        filename_or_url: os.PathLike[str] | str | None = None,
+        text: str | bytes | bytearray | None = None,
+    ) -> Self:
+        """Read and parse one JSON value from exactly one source.
 
-        if not isinstance(text, (str, bytes, bytearray)):
-            raise TypeError("text must be str or bytes")
+        ``filename_or_url`` identifies a local file or an HTTP(S) URL.  ``text``
+        is always interpreted as literal JSON and may also be gzip-compressed
+        bytes.  Files and URLs ending in ``.gz`` are decompressed
+        transparently; gzip magic bytes are recognized regardless of suffix.
+        """
+
+        if (filename_or_url is None) == (text is None):
+            raise TypeError("provide exactly one of filename_or_url or text")
+
+        if filename_or_url is not None:
+            location = _location_text(filename_or_url)
+            if _is_remote_url(location):
+                with urllib.request.urlopen(location) as response:
+                    payload = response.read()
+            else:
+                payload = Path(location).read_bytes()
+            source: str | bytes = _decode_json_bytes(
+                payload,
+                gzip_expected=_is_gzip_location(location),
+            )
+        else:
+            if not isinstance(text, (str, bytes, bytearray)):
+                raise TypeError("text must be str, bytes, or bytearray")
+            source = text if isinstance(text, str) else _decode_json_bytes(bytes(text))
+
         try:
-            value = json.loads(text)
+            value = json.loads(source)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValidationError(f"invalid JSON: {exc}") from exc
         return cls.from_dict(value)
-
-    @classmethod
-    def load(cls, filename: os.PathLike[str] | str | TextIO) -> Any:
-        """Read and parse a JSON value from a path or open text stream."""
-
-        if hasattr(filename, "read"):
-            text = filename.read()  # type: ignore[union-attr]
-        else:
-            text = Path(filename).read_text(encoding="utf-8")
-        return cls.from_json(text)
 
     @classmethod
     def from_dict(cls, dct: object) -> Any:
@@ -165,28 +230,66 @@ class JsonValue:
     def to_dict(self) -> object:
         raise NotImplementedError(f"{type(self).__name__}.to_dict() is not implemented")
 
-    def to_json(self, *, indent: int | None = 2) -> str:
-        """Return canonical JSON text for this value."""
+    @overload
+    def to_json(
+        self,
+        filename_or_url: type[str] = str,
+        *,
+        indent: int | None = 2,
+    ) -> str: ...
+
+    @overload
+    def to_json(
+        self,
+        filename_or_url: os.PathLike[str] | str,
+        *,
+        indent: int | None = 2,
+    ) -> None: ...
+
+    def to_json(
+        self,
+        filename_or_url: type[str] | os.PathLike[str] | str = str,
+        *,
+        indent: int | None = 2,
+    ) -> str | None:
+        """Serialize to text, a local file, or an HTTP(S) URL.
+
+        Omitting ``filename_or_url`` (or passing the built-in :class:`str`
+        object) returns JSON text.  Every actual string, including instances of
+        a ``str`` subclass, is a location.  HTTP(S) destinations receive an
+        idempotent PUT request.  Destinations ending in ``.gz`` receive
+        gzip-compressed UTF-8 JSON.
+        """
 
         if indent is not None and (
             isinstance(indent, bool) or not isinstance(indent, int)
         ):
             raise TypeError("indent must be an int or None")
-        return json.dumps(self.to_dict(), indent=indent, allow_nan=False)
+        text = json.dumps(self.to_dict(), indent=indent, allow_nan=False)
+        if filename_or_url is str:
+            return text
 
-    def save(
-        self,
-        filename: os.PathLike[str] | str | TextIO,
-        *,
-        indent: int | None = 2,
-    ) -> None:
-        """Serialize this value to a path or open text stream."""
+        location = _location_text(filename_or_url)
+        payload = text.encode("utf-8")
+        compressed = _is_gzip_location(location)
+        if compressed:
+            payload = gzip.compress(payload, mtime=0)
 
-        text = self.to_json(indent=indent)
-        if hasattr(filename, "write"):
-            filename.write(text)  # type: ignore[union-attr]
+        if _is_remote_url(location):
+            headers = {"Content-Type": "application/json"}
+            if compressed:
+                headers["Content-Encoding"] = "gzip"
+            request = urllib.request.Request(
+                location,
+                data=payload,
+                headers=headers,
+                method="PUT",
+            )
+            with urllib.request.urlopen(request) as response:
+                response.read()
         else:
-            Path(filename).write_text(text, encoding="utf-8")
+            Path(location).write_bytes(payload)
+        return None
 
 
 @dataclass(frozen=True, slots=True)
