@@ -1,0 +1,71 @@
+{
+  "machine": "SPS",
+  "version": "LS3",
+  "curve_name": "SPS",
+  "machine_length": 6911.51818896,
+  "machine_length_source": "top-level mechanical/optic coverage",
+  "input_transformations": 12340,
+  "output_objects": 12339,
+  "skipped_objects": {
+    "VMFD.20902": "references missing LDB object 'BPCN.20902'"
+  },
+  "input_type_names": 678,
+  "output_types": 712,
+  "split_type_names": {
+    "SPS HALF ARC": [
+      "SPS HALF ARC__T_01",
+      "SPS HALF ARC__T_02"
+    ],
+    "SPS LSS": [
+      "SPS LSS__T_01",
+      "SPS LSS__T_02"
+    ],
+    "SPS PERIOD": [
+      "SPS PERIOD__1_01",
+      "SPS PERIOD__1_02",
+      "SPS PERIOD__1_03",
+      "SPS PERIOD__1_04",
+      "SPS PERIOD__1_05",
+      "SPS PERIOD__1_06",
+      "SPS PERIOD__2_07",
+      "SPS PERIOD__2_08",
+      "SPS PERIOD__2_09",
+      "SPS PERIOD__2_10",
+      "SPS PERIOD__2_11",
+      "SPS PERIOD__2_12",
+      "SPS PERIOD__3_13",
+      "SPS PERIOD__3_14",
+      "SPS PERIOD__3_15",
+      "SPS PERIOD__3_16",
+      "SPS PERIOD__4_17",
+      "SPS PERIOD__4_18",
+      "SPS PERIOD__4_19",
+      "SPS PERIOD__4_20",
+      "SPS PERIOD__4_21",
+      "SPS PERIOD__4_22",
+      "SPS PERIOD__5_23",
+      "SPS PERIOD__5_24",
+      "SPS PERIOD__5_25",
+      "SPS PERIOD__5_26",
+      "SPS PERIOD__6_27",
+      "SPS PERIOD__6_28",
+      "SPS PERIOD__6_29",
+      "SPS PERIOD__6_30",
+      "SPS PERIOD__6_31",
+      "SPS PERIOD__6_32",
+      "SPS PERIOD__6_33"
+    ]
+  },
+  "curve_segments": 1489,
+  "curve_total_angle": 6.283185307248,
+  "zero_mechanical_length_objects": 6733,
+  "zero_optic_length_objects": 10408,
+  "zero_length_display_value": 0.1,
+  "zero_magnetic_length_value": 1e-09,
+  "warnings": [
+    "skipped 1 object(s) with missing ancestors",
+    "split 3 LDB type name(s) because geometry and/or color initial varies",
+    "displayed 6733 zero-length object(s) with dz=0.1 m",
+    "represented 10408 zero optic length(s) with magnetic_length=1e-09 m"
+  ]
+}
