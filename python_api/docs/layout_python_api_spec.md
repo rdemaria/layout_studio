@@ -568,8 +568,9 @@ address does not end in `.gz`. Output is UTF-8 JSON; compressed HTTP PUTs set
 `plot2d(projection="xy")` returns a `LayoutViewer2D`. Projection values are
 case-insensitive and comprise all six ordered pairs of distinct world axes:
 `"xy"`, `"yx"`, `"xz"`, `"zx"`, `"yz"`, and `"zy"`. The first axis is
-horizontal and the second vertical; labels are world X/Y/Z in metres and the
-plot uses equal aspect ratio. An invalid projection raises `ValueError`.
+horizontal and the second vertical; labels are world X/Y/Z in metres and each
+axis scales independently to fill the available plotting area. An invalid
+projection raises `ValueError`.
 
 With `show=True`, the figure is shown using the active Matplotlib backend.
 With `show=False`, the complete figure and artists are built without opening a

@@ -1484,7 +1484,7 @@ class LayoutViewer2D:
             ypad = max(ypad, 0.5)
         self.ax.set_xlim(float(xmin - xpad), float(xmax + xpad))
         self.ax.set_ylim(float(ymin - ypad), float(ymax + ypad))
-        self.ax.set_aspect("equal", adjustable="box")
+        self.ax.set_aspect("auto")
         self.set_grid_visible(self.grid_visible)
         self._request_draw()
         return self

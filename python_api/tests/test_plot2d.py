@@ -218,7 +218,7 @@ def test_ordered_projection_selects_and_orients_the_requested_coordinates(
         assert viewer.projection == projection
         assert viewer.ax.get_xlabel().lower().startswith(projection[0])
         assert viewer.ax.get_ylabel().lower().startswith(projection[1])
-        assert float(viewer.ax.get_aspect()) == pytest.approx(1.0)
+        assert viewer.ax.get_aspect() == "auto"
         assert viewer.curve_scope == (main,)
     finally:
         viewer.close()
