@@ -36,6 +36,8 @@ _OBJECT_BATCH_THRESHOLD = 128
 _CURVE_SAMPLE_BUDGET = 8192
 _OBJECT_SECTION_BUDGET = 4096
 _OBJECT_RADIAL_BUDGET = 16384
+_NAMED_FRAME_ARROW_FRACTION = 0.05
+_ACTIVE_FRAME_ARROW_FRACTION = 0.075
 
 
 def _require_matplotlib() -> SimpleNamespace:
@@ -245,6 +247,14 @@ class _BatchedFrameVisual:
     depth: float
 
 
+@dataclass
+class _DisplayAxes:
+    artist: Any
+    origins: np.ndarray
+    directions: np.ndarray
+    active: bool = False
+
+
 class LayoutViewer2D:
     """Interactive orthographic projection of a layout or a scoped subset.
 
@@ -400,6 +410,8 @@ class LayoutViewer2D:
         self._named_frame_artists: list[Any] = []
         self._bounds_points: list[np.ndarray] = []
         self._callbacks: list[int] = []
+        self._axes_callbacks: list[int] = []
+        self._display_axes: list[_DisplayAxes] = []
         self._resolver_session: Any = None
         self._named_frames_built = False
         self._beam_frames_built = False
@@ -655,6 +667,76 @@ class LayoutViewer2D:
     def _project(self, points: Any) -> np.ndarray:
         values = _as_points(points)
         return values[:, self.axis_indices]
+
+    def _reference_arrow_pixels(self, *, active: bool = False) -> float:
+        """Return a bounded arrow length relative to the visible axes area."""
+
+        width, height = (float(value) for value in self.ax.bbox.size)
+        if not math.isfinite(width) or not math.isfinite(height):
+            width = height = 1.0
+        shortest = max(1.0, min(width, height))
+        dpi_scale = max(0.5, float(self.figure.dpi) / 100.0)
+        if active:
+            fraction, minimum, maximum = _ACTIVE_FRAME_ARROW_FRACTION, 24.0, 72.0
+        else:
+            fraction, minimum, maximum = _NAMED_FRAME_ARROW_FRACTION, 18.0, 56.0
+        return float(
+            np.clip(fraction * shortest, minimum * dpi_scale, maximum * dpi_scale)
+        )
+
+    def _register_display_axes(
+        self,
+        artist: Any,
+        origins: Any,
+        directions: Any,
+        *,
+        active: bool = False,
+    ) -> _DisplayAxes:
+        display_axes = _DisplayAxes(
+            artist,
+            np.asarray(origins, dtype=float).reshape(-1, 2),
+            np.asarray(directions, dtype=float).reshape(-1, 2),
+            active,
+        )
+        self._display_axes.append(display_axes)
+        self._update_display_axes(display_axes)
+        return display_axes
+
+    def _update_display_axes(self, display_axes: _DisplayAxes) -> None:
+        """Map projected directions to a stable, viewport-relative length."""
+
+        origins = display_axes.origins
+        directions = display_axes.directions
+        if len(origins) == 0:
+            display_axes.artist.set_segments([])
+            return
+        transform = self.ax.transData
+        start_pixels = transform.transform(origins)
+        direction_pixels = transform.transform(origins + directions) - start_pixels
+        norms = np.linalg.norm(direction_pixels, axis=1)
+        endpoints_pixels = start_pixels.copy()
+        visible = np.isfinite(norms) & (norms > 1e-9)
+        if np.any(visible):
+            length = self._reference_arrow_pixels(active=display_axes.active)
+            endpoints_pixels[visible] += (
+                direction_pixels[visible] / norms[visible, np.newaxis] * length
+            )
+        endpoints = transform.inverted().transform(endpoints_pixels)
+        display_axes.artist.set_segments(np.stack((origins, endpoints), axis=1))
+
+    def _refresh_reference_arrows(self) -> None:
+        for display_axes in self._display_axes:
+            self._update_display_axes(display_axes)
+        self._position_local_axis_labels()
+
+    def _position_local_axis_labels(self) -> None:
+        local_axes = getattr(self, "local_axes", None)
+        labels = getattr(self, "local_axis_labels", ())
+        if local_axes is None:
+            return
+        for label, segment in zip(labels, local_axes.get_segments()):
+            endpoint = segment[-1]
+            label.set_position((float(endpoint[0]), float(endpoint[1])))
 
     def _build_entity_geometry(self) -> None:
         # Keep one resolver session for the lifetime of this geometry snapshot.
@@ -1052,24 +1134,20 @@ class LayoutViewer2D:
         return Pose(_pose_matrix(visual.pose) @ local, space="world")
 
     def _build_batched_named_frames(self) -> None:
-        segments: list[np.ndarray] = []
+        origins: list[np.ndarray] = []
+        directions: list[np.ndarray] = []
         colors: list[str] = []
         points: list[np.ndarray] = []
         for object_name, visual in self._object_visuals.items():
             obj = visual.entity
             type_ = self._object_type(obj)
-            object_scale = float(np.linalg.norm(np.ptp(visual.vertices, axis=0)))
-            axis_scale = max(
-                0.035, min(self._scene_scale * 0.025, max(object_scale * 0.25, 0.035))
-            )
             for fallback_name, _frame in _mapping_items(getattr(type_, "frames", None)):
                 frame_name = str(fallback_name)
                 pose = self._frame_pose(visual, type_, frame_name)
                 origin = _pose_origin(pose)
                 for axis, color in zip(_pose_axes(pose), _AXIS_COLORS):
-                    segments.append(
-                        self._project(np.asarray([origin, origin + axis_scale * axis]))
-                    )
+                    origins.append(self._project(origin.reshape(1, 3))[0])
+                    directions.append(self._project(np.asarray(axis).reshape(1, 3))[0])
                     colors.append(color)
                 point = self._project(origin.reshape(1, 3))[0]
                 points.append(point)
@@ -1080,10 +1158,9 @@ class LayoutViewer2D:
                 self._bounds_points.append(origin.reshape(1, 3))
         if not points:
             return
-        axes = self._mpl.LineCollection(
-            segments, colors=colors, linewidths=0.7, zorder=7
-        )
+        axes = self._mpl.LineCollection([], colors=colors, linewidths=0.7, zorder=7)
         self.ax.add_collection(axes)
+        self._register_display_axes(axes, origins, directions)
         point_array = np.asarray(points, dtype=float)
         markers = self.ax.scatter(
             point_array[:, 0],
@@ -1174,19 +1251,20 @@ class LayoutViewer2D:
         self, object_name: str, obj: Any, frame_name: str, pose: Any
     ) -> None:
         origin = _pose_origin(pose)
-        scale = max(0.035, self._scene_scale * 0.025)
-        axes = _pose_axes(pose)
-        segments = [
-            self._project(np.asarray([origin, origin + scale * axis])) for axis in axes
-        ]
         axis_lines = self._mpl.LineCollection(
-            segments,
+            [],
             colors=_AXIS_COLORS,
             linewidths=1.2,
             zorder=7,
         )
         self.ax.add_collection(axis_lines)
-        point = self._project(origin.reshape(1, 3))[0]
+        projected_origin = self._project(origin.reshape(1, 3))[0]
+        self._register_display_axes(
+            axis_lines,
+            np.repeat(projected_origin.reshape(1, 2), 3, axis=0),
+            np.asarray(_pose_axes(pose), dtype=float)[:, self.axis_indices],
+        )
+        point = projected_origin
         (marker,) = self.ax.plot(
             [point[0]],
             [point[1]],
@@ -1360,6 +1438,12 @@ class LayoutViewer2D:
             [], colors=_AXIS_COLORS, linewidths=2.0, zorder=18
         )
         self.ax.add_collection(self.local_axes)
+        self._local_display_axes = self._register_display_axes(
+            self.local_axes,
+            np.empty((0, 2), dtype=float),
+            np.empty((0, 2), dtype=float),
+            active=True,
+        )
         (self.local_origin,) = self.ax.plot(
             [],
             [],
@@ -1392,8 +1476,15 @@ class LayoutViewer2D:
                 connect("axes_leave_event", self._on_leave),
                 connect("figure_leave_event", self._on_leave),
                 connect("key_press_event", self._on_key_press),
+                connect("resize_event", self._on_resize),
                 connect("close_event", self._on_close_event),
             ]
+        )
+        self._axes_callbacks.extend(
+            (
+                self.ax.callbacks.connect("xlim_changed", self._on_limits_changed),
+                self.ax.callbacks.connect("ylim_changed", self._on_limits_changed),
+            )
         )
 
     # --------------------------------------------------------------- layers
@@ -1453,6 +1544,7 @@ class LayoutViewer2D:
         if self.frames_visible:
             self._ensure_object_frames(named=True)
             self._finish_bounds()
+            self._refresh_reference_arrows()
         self._apply_layer_visibility()
         self._request_draw()
         return self
@@ -1485,6 +1577,7 @@ class LayoutViewer2D:
         self.ax.set_xlim(float(xmin - xpad), float(xmax + xpad))
         self.ax.set_ylim(float(ymin - ypad), float(ymax + ypad))
         self.ax.set_aspect("auto")
+        self._refresh_reference_arrows()
         self.set_grid_visible(self.grid_visible)
         self._request_draw()
         return self
@@ -1499,6 +1592,7 @@ class LayoutViewer2D:
 
         self._ensure_open()
         self._draw_started = True
+        self._refresh_reference_arrows()
         self.canvas.draw()
         return self
 
@@ -1509,6 +1603,7 @@ class LayoutViewer2D:
 
         self._ensure_open()
         self._draw_started = True
+        self._refresh_reference_arrows()
         self.canvas.draw_idle()
         self._plt.show(block=block)
         return self
@@ -1528,6 +1623,7 @@ class LayoutViewer2D:
         if not path.suffix:
             path = path.with_suffix(".png")
         self._draw_started = True
+        self._refresh_reference_arrows()
         self.figure.savefig(
             path,
             dpi=self.dpi if dpi is None else dpi,
@@ -1572,9 +1668,16 @@ class LayoutViewer2D:
         self._release_scene_references(clear_figure=False)
 
     def _disconnect_callbacks(self) -> None:
+        canvas = getattr(self, "canvas", None)
         for callback in self._callbacks:
-            self.canvas.mpl_disconnect(callback)
+            if canvas is not None:
+                canvas.mpl_disconnect(callback)
         self._callbacks.clear()
+        axes = getattr(self, "ax", None)
+        for callback in self._axes_callbacks:
+            if axes is not None:
+                axes.callbacks.disconnect(callback)
+        self._axes_callbacks.clear()
 
     def _close_resolver_session(self) -> None:
         session, self._resolver_session = self._resolver_session, None
@@ -1612,6 +1715,7 @@ class LayoutViewer2D:
             "_batch_entries",
             "_object_pick_visuals",
             "_batched_frame_visuals",
+            "_display_axes",
         ):
             value = getattr(self, name, None)
             if hasattr(value, "clear"):
@@ -1630,6 +1734,7 @@ class LayoutViewer2D:
         self.resolver = None
         for name in ("pose_text", "tooltip", "local_axes", "local_origin"):
             setattr(self, name, None)
+        self._local_display_axes = None
         labels = getattr(self, "local_axis_labels", None)
         if hasattr(labels, "clear"):
             labels.clear()
@@ -1873,17 +1978,15 @@ class LayoutViewer2D:
 
     def _show_local_axes(self, pose: Any) -> None:
         origin = _pose_origin(pose)
-        scale = max(0.05, self._scene_scale * 0.045)
-        endpoints = [origin + scale * axis for axis in _pose_axes(pose)]
-        segments = [
-            self._project(np.asarray([origin, endpoint])) for endpoint in endpoints
-        ]
-        self.local_axes.set_segments(segments)
         point = self._project(origin.reshape(1, 3))[0]
+        display_axes = self._local_display_axes
+        display_axes.origins = np.repeat(point.reshape(1, 2), 3, axis=0)
+        display_axes.directions = np.asarray(_pose_axes(pose), dtype=float)[
+            :, self.axis_indices
+        ]
+        self._update_display_axes(display_axes)
         self.local_origin.set_data([point[0]], [point[1]])
-        for label, endpoint in zip(self.local_axis_labels, endpoints):
-            projected = self._project(endpoint.reshape(1, 3))[0]
-            label.set_position((float(projected[0]), float(projected[1])))
+        self._position_local_axis_labels()
         self._set_local_axes_visible(True)
 
     def _set_local_axes_visible(self, visible: bool) -> None:
@@ -1910,6 +2013,14 @@ class LayoutViewer2D:
             self._show_local_axes(active.pose)
 
     # -------------------------------------------------------------- callbacks
+
+    def _on_limits_changed(self, _axes: Any) -> None:
+        self._refresh_reference_arrows()
+        self._request_draw()
+
+    def _on_resize(self, _event: Any) -> None:
+        self._refresh_reference_arrows()
+        self._request_draw()
 
     def _on_key_press(self, event: Any) -> None:
         key = str(getattr(event, "key", "") or "").lower()

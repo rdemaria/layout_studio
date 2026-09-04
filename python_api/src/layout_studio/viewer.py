@@ -37,6 +37,8 @@ _AUTO_RADIAL_RESOLUTION = 12
 _OBJECT_BATCH_THRESHOLD = 128
 _OBJECT_BATCH_SIZE = 256
 _OBJECT_TRIANGLE_BUDGET = 200_000
+_NAMED_FRAME_ARROW_FRACTION = 0.05
+_ACTIVE_FRAME_ARROW_FRACTION = 0.08
 
 
 def _require_vtk() -> Any:
@@ -255,6 +257,15 @@ class _Selection:
     segment_index: int | None = None
 
 
+@dataclass
+class _DisplayAxes:
+    actor: Any
+    pose: Any = None
+    active: bool = False
+    marker_source: Any = None
+    label: Any = None
+
+
 class LayoutViewer:
     """Interactive, raw-VTK view of a layout or an explicitly scoped subset.
 
@@ -398,6 +409,8 @@ class LayoutViewer:
         self._beam_frame_actors: list[Any] = []
         self._named_frame_actors: list[Any] = []
         self._decoration_actors: list[Any] = []
+        self._display_axes: list[_DisplayAxes] = []
+        self._hover_display_axes: _DisplayAxes | None = None
         self._bounds_points: list[np.ndarray] = []
         self._named_frames_built = False
         self._beam_frames_built = False
@@ -1222,10 +1235,9 @@ class LayoutViewer:
         self, object_name: str, obj: Any, frame_name: str, pose: Any
     ) -> None:
         vtk = self._vtk
-        scale = max(0.035, self._scene_scale * 0.018)
         axes = vtk.vtkAxesActor()
         axes.SetUserMatrix(self._vtk_matrix(_pose_matrix(pose)))
-        axes.SetTotalLength(scale * 2.2, scale * 2.2, scale * 2.2)
+        axes.SetTotalLength(1.0, 1.0, 1.0)
         axes.SetShaftTypeToLine()
         axes.SetCylinderRadius(0.025)
         axes.SetConeRadius(0.20)
@@ -1238,7 +1250,7 @@ class LayoutViewer:
 
         sphere_source = vtk.vtkSphereSource()
         sphere_source.SetCenter(*(float(value) for value in _pose_origin(pose)))
-        sphere_source.SetRadius(scale * 0.34)
+        sphere_source.SetRadius(1.0)
         sphere_source.SetThetaResolution(14)
         sphere_source.SetPhiResolution(10)
         mapper = vtk.vtkPolyDataMapper()
@@ -1257,11 +1269,19 @@ class LayoutViewer:
 
         label = self._billboard_label(
             frame_name,
-            _pose_origin(pose) + _pose_axes(pose)[1] * scale * 0.55,
+            _pose_origin(pose),
             "#ffca75",
             11,
         )
         self._named_frame_actors.extend((axes, marker, label))
+        display_axes = _DisplayAxes(
+            axes,
+            pose,
+            marker_source=sphere_source,
+            label=label,
+        )
+        self._display_axes.append(display_axes)
+        self._update_display_axes(display_axes)
 
     def _beam_plane_vertices(self, type_: Any, pose: Any) -> np.ndarray:
         shape = getattr(type_, "shape", None)
@@ -1377,6 +1397,73 @@ class LayoutViewer:
                 result.SetElement(row, column, float(matrix[row, column]))
         return result
 
+    def _reference_arrow_pixels(self, *, active: bool = False) -> float:
+        """Return a bounded arrow length relative to the renderer viewport."""
+
+        width, height = (float(value) for value in self.renderer.GetSize())
+        if width <= 0.0 or height <= 0.0:
+            width, height = (float(value) for value in self.render_window.GetSize())
+        shortest = max(1.0, min(width, height))
+        if active:
+            fraction, minimum, maximum = _ACTIVE_FRAME_ARROW_FRACTION, 36.0, 96.0
+        else:
+            fraction, minimum, maximum = _NAMED_FRAME_ARROW_FRACTION, 24.0, 64.0
+        return max(minimum, min(maximum, fraction * shortest))
+
+    def _world_units_per_pixel(self, origin: Any) -> float:
+        """Return the camera-plane world scale at *origin*'s depth."""
+
+        width, height = (float(value) for value in self.renderer.GetSize())
+        if width <= 0.0 or height <= 0.0:
+            width, height = (float(value) for value in self.render_window.GetSize())
+        width, height = max(width, 1.0), max(height, 1.0)
+        camera = self.camera
+        if bool(camera.GetParallelProjection()):
+            scale = 2.0 * abs(float(camera.GetParallelScale())) / height
+            return max(scale, np.finfo(float).eps)
+
+        position = np.asarray(camera.GetPosition(), dtype=float)
+        direction = _normalised(
+            np.asarray(camera.GetDirectionOfProjection(), dtype=float),
+            (0.0, 0.0, -1.0),
+        )
+        depth = float(np.dot(np.asarray(origin, dtype=float) - position, direction))
+        if not math.isfinite(depth) or depth <= np.finfo(float).eps:
+            depth = max(abs(float(camera.GetDistance())), 1.0)
+        angle = math.radians(float(camera.GetViewAngle()))
+        angle = min(max(angle, math.radians(0.1)), math.radians(179.0))
+        horizontal_angle = getattr(camera, "GetUseHorizontalViewAngle", None)
+        use_horizontal = (
+            bool(horizontal_angle()) if callable(horizontal_angle) else False
+        )
+        pixels = width if use_horizontal else height
+        scale = 2.0 * depth * math.tan(0.5 * angle) / pixels
+        return max(scale, np.finfo(float).eps)
+
+    def _update_display_axes(self, display_axes: _DisplayAxes) -> None:
+        if display_axes.pose is None:
+            return
+        origin = _pose_origin(display_axes.pose)
+        world_per_pixel = self._world_units_per_pixel(origin)
+        pixels = self._reference_arrow_pixels(active=display_axes.active)
+        length = pixels * world_per_pixel
+        display_axes.actor.SetTotalLength(length, length, length)
+        if display_axes.marker_source is not None:
+            display_axes.marker_source.SetRadius(
+                world_per_pixel * max(4.0, pixels * 0.1)
+            )
+        if display_axes.label is not None:
+            label_offset = world_per_pixel * max(10.0, pixels * 0.28)
+            position = origin + _pose_axes(display_axes.pose)[1] * label_offset
+            display_axes.label.SetPosition(*(float(value) for value in position))
+
+    def _update_reference_arrow_sizes(self) -> None:
+        for display_axes in self._display_axes:
+            self._update_display_axes(display_axes)
+
+    def _on_render_start(self, _caller: Any, _event: str) -> None:
+        self._update_reference_arrow_sizes()
+
     def _build_readouts(self) -> None:
         vtk = self._vtk
         self.pose_text = vtk.vtkTextActor()
@@ -1409,8 +1496,7 @@ class LayoutViewer:
         self.renderer.AddViewProp(self.tooltip)
 
         self.hover_axes = vtk.vtkAxesActor()
-        scale = max(0.08, self._scene_scale * 0.045)
-        self.hover_axes.SetTotalLength(scale, scale, scale)
+        self.hover_axes.SetTotalLength(1.0, 1.0, 1.0)
         self.hover_axes.SetShaftTypeToLine()
         self.hover_axes.SetXAxisLabelText("x")
         self.hover_axes.SetYAxisLabelText("y")
@@ -1418,6 +1504,8 @@ class LayoutViewer:
         self.hover_axes.PickableOff()
         self.hover_axes.SetVisibility(False)
         self.renderer.AddActor(self.hover_axes)
+        self._hover_display_axes = _DisplayAxes(self.hover_axes, active=True)
+        self._display_axes.append(self._hover_display_axes)
 
     @staticmethod
     def _empty_pose_message() -> str:
@@ -1459,6 +1547,7 @@ class LayoutViewer:
         self._observe(self.interactor, "LeaveEvent", self._on_mouse_leave)
         self._observe(self.interactor, "ExitEvent", self._on_exit)
         self._observe(self.render_window, "DeleteEvent", self._on_window_delete)
+        self._observe(self.renderer, "StartEvent", self._on_render_start)
         self._observe(self.style, "StartInteractionEvent", self._on_interaction_start)
         self._observe(self.style, "EndInteractionEvent", self._on_interaction_end)
 
@@ -1529,6 +1618,7 @@ class LayoutViewer:
         self.frames_visible = bool(visible)
         if self.frames_visible:
             self._ensure_named_frames()
+            self._update_reference_arrow_sizes()
         self._apply_layer_visibility()
         self._request_render()
         return self
@@ -1576,6 +1666,7 @@ class LayoutViewer:
             self.renderer.ResetCameraClippingRange(*bounds)
         except TypeError:
             self.renderer.ResetCameraClippingRange(bounds)
+        self._update_reference_arrow_sizes()
         self._request_render()
         return self
 
@@ -1778,6 +1869,8 @@ class LayoutViewer:
             self._beam_frame_actors.clear()
             self._named_frame_actors.clear()
             self._decoration_actors.clear()
+            self._display_axes.clear()
+            self._hover_display_axes = None
             self._bounds_points.clear()
             self.curve_actors.clear()
             self.object_actors.clear()
@@ -2065,6 +2158,9 @@ class LayoutViewer:
 
     def _show_local_axes(self, pose: Any) -> None:
         self.hover_axes.SetUserMatrix(self._vtk_matrix(_pose_matrix(pose)))
+        if self._hover_display_axes is not None:
+            self._hover_display_axes.pose = pose
+            self._update_display_axes(self._hover_display_axes)
         self.hover_axes.SetVisibility(True)
 
     # --------------------------------------------------------------- callbacks

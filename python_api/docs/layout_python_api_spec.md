@@ -594,6 +594,9 @@ selects and highlights an entity, shows its local axes and pose, and retains
 the snapped curve station; clicking the same selection again clears it. The
 keys `c`, `o`, and `b` toggle curve, object, and Beam-frame layers; `g` toggles
 the grid; `f` and `r` fit the scoped geometry; and Escape clears selection.
+Stored-frame arrows and the active local-axis triad use bounded,
+viewport-relative lengths which refresh on pan, zoom, and resize. Beam planes
+remain physical object geometry.
 
 The layout view can toggle curves, objects, stored frames, and Beam entry/exit
 frames. Frame layers are lazy; their adaptive default is on for small scopes
@@ -625,6 +628,9 @@ hover labels, click selection, selection highlighting, a local x/y/s triad,
 and a world-pose readout using MAD-X theta/phi/psi angles. `Curve.plot3d()` and
 `Object.plot3d()` use strict entity scope: upstream dependencies are resolved
 but unrelated geometry is not shown and does not affect camera fitting.
+Stored-frame arrows and the active triad are resized from camera depth and the
+renderer viewport before every frame, keeping them legible through dolly,
+parallel zoom, and window resizing. Beam planes remain physical geometry.
 
 The native `show()` loop handles VTK `ExitEvent` explicitly. Closing the window
 terminates the interactor, finalizes and detaches the render window, removes

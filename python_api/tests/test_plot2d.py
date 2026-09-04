@@ -224,6 +224,57 @@ def test_ordered_projection_selects_and_orients_the_requested_coordinates(
         viewer.close()
 
 
+def test_reference_axes_remain_viewport_relative_across_zoom_and_axis_scaling():
+    pytest.importorskip("matplotlib")
+    layout, _curve, object_ = populated_layout()
+    viewer = layout.plot2d("xz", show=False, frames=True)
+
+    def displayed_lengths(display_axes):
+        segments = np.asarray(display_axes.artist.get_segments(), dtype=float)
+        if not segments.size:
+            return np.empty(0, dtype=float)
+        pixels = viewer.ax.transData.transform(segments.reshape(-1, 2)).reshape(
+            segments.shape
+        )
+        lengths = np.linalg.norm(pixels[:, 1] - pixels[:, 0], axis=1)
+        return lengths[lengths > 1e-7]
+
+    try:
+        viewer.draw()
+        viewer.select(object_)
+        named = next(item for item in viewer._display_axes if not item.active)
+        active = viewer._local_display_axes
+
+        for display_axes in (named, active):
+            np.testing.assert_allclose(
+                displayed_lengths(display_axes),
+                viewer._reference_arrow_pixels(active=display_axes.active),
+            )
+
+        named_data_length = np.linalg.norm(
+            np.asarray(named.artist.get_segments()[0])[1]
+            - np.asarray(named.artist.get_segments()[0])[0]
+        )
+        viewer.ax.set_xlim(-10_000.0, 10_000.0)
+        viewer.ax.set_ylim(-0.01, 0.01)
+
+        for display_axes in (named, active):
+            np.testing.assert_allclose(
+                displayed_lengths(display_axes),
+                viewer._reference_arrow_pixels(active=display_axes.active),
+            )
+        zoomed_data_length = np.linalg.norm(
+            np.asarray(named.artist.get_segments()[0])[1]
+            - np.asarray(named.artist.get_segments()[0])[0]
+        )
+        assert zoomed_data_length != pytest.approx(named_data_length)
+    finally:
+        viewer.close()
+
+    assert viewer._display_axes == []
+    assert viewer._axes_callbacks == []
+
+
 @pytest.mark.parametrize(
     "projection",
     ["", "x", "xx", "xX", "xyz", "ab", "xq", None, 12],

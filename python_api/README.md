@@ -122,7 +122,7 @@ Bare names are still accepted in namespace-specific fields such as
 `plot2d(projection="xy")` accepts the case-insensitive ordered projections
 `"xy"`, `"yx"`, `"xz"`, `"zx"`, `"yz"`, and `"zy"`. The first axis is
 horizontal, the second is vertical, coordinates are world coordinates in
-metres, and the axes use equal scale.
+metres, and each plot axis scales independently to fill the available area.
 
 Use the Matplotlib toolbar for native pan and zoom. Hovering reports the entity
 and its pose; hovering a curve also snaps continuously along its nearest
@@ -130,6 +130,10 @@ projected chord and reports the interpolated station.
 Left-click selects and highlights an entity, shows its local axes and pose, and
 snaps curve selection to a station. Clicking the same selection again clears
 it. Keyboard shortcuts control the layers and view:
+
+Stored-frame arrows and the active local-axis triad remain a bounded fraction
+of the viewport as the plot is zoomed or resized. Beam entry/exit planes retain
+their physical dimensions.
 
 | Key | Action |
 | --- | --- |

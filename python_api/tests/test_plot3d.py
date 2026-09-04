@@ -176,6 +176,55 @@ def test_real_vtk_builds_full_and_entity_scoped_topologies_without_rendering():
             viewer.close()
 
 
+def test_vtk_reference_axes_follow_camera_scale_without_rendering():
+    pytest.importorskip("vtkmodules")
+
+    layout, _curve, object_ = populated_layout()
+    object_.type.new_frame("survey").tx(0.1)
+    viewer = layout.plot3d(
+        show=False,
+        off_screen=True,
+        frames=True,
+        window_size=(800, 600),
+    )
+    try:
+        viewer.select(object_)
+        named = next(item for item in viewer._display_axes if not item.active)
+        active = viewer._hover_display_axes
+        assert active is not None
+        assert active.pose is not None
+
+        for display_axes in (named, active):
+            length = float(display_axes.actor.GetTotalLength()[0])
+            world_per_pixel = viewer._world_units_per_pixel(display_axes.pose.origin)
+            assert length / world_per_pixel == pytest.approx(
+                viewer._reference_arrow_pixels(active=display_axes.active)
+            )
+
+        perspective_length = float(active.actor.GetTotalLength()[0])
+        viewer.camera.Dolly(4.0)
+        viewer.renderer.InvokeEvent("StartEvent")
+        dolly_length = float(active.actor.GetTotalLength()[0])
+        assert dolly_length < perspective_length * 0.5
+        assert dolly_length / viewer._world_units_per_pixel(
+            active.pose.origin
+        ) == pytest.approx(viewer._reference_arrow_pixels(active=True))
+
+        viewer.camera.ParallelProjectionOn()
+        viewer.camera.SetParallelScale(10.0)
+        viewer.renderer.InvokeEvent("StartEvent")
+        large_scale_length = float(active.actor.GetTotalLength()[0])
+        viewer.camera.SetParallelScale(2.0)
+        viewer.renderer.InvokeEvent("StartEvent")
+        small_scale_length = float(active.actor.GetTotalLength()[0])
+        assert small_scale_length / large_scale_length == pytest.approx(0.2)
+    finally:
+        viewer.close()
+
+    assert viewer._display_axes == []
+    assert viewer._hover_display_axes is None
+
+
 def test_real_vtk_off_screen_smoke_only_with_a_known_render_backend():
     pytest.importorskip("vtkmodules")
 
