@@ -2,7 +2,8 @@
 
 `layout-studio` is the Python counterpart of Layout Studio: it describes
 piecewise circular reference curves, reusable curved component types, and
-objects positioned by aligning named frames.
+objects positioned by aligning named frames. Matplotlib and VTK viewers provide
+interactive 2D projections and 3D views of the same evaluated geometry.
 
 Distances are in metres, rotations are in radians, and curvature is in
 metres⁻¹.  The homogeneous pose convention is `[x y tangent origin]`.
@@ -10,11 +11,11 @@ metres⁻¹.  The homogeneous pose convention is `[x y tangent origin]`.
 ## Install for development
 
 ```bash
-python -m pip install -e '.[viewer,test]'
+python -m pip install -e '.[plot2d,viewer,test]'
 ```
 
-VTK is optional until a 3D view is requested.  The geometric model and JSON
-round trips need only NumPy.
+Matplotlib and VTK are optional until a 2D or 3D view is requested. The
+geometric model and JSON round trips need only NumPy.
 
 ## Quick start
 
@@ -59,13 +60,22 @@ layout.validate()
 print(q2.get_frame("magnetic_exit"))
 layout.save("layout.json")
 
+# plot2d() returns a Matplotlib-backed LayoutViewer2D.  Projection names are
+# ordered: the first letter is the horizontal axis and the second is vertical.
+view2d = layout.plot2d("xz", beam_frames=True, show=False)
+view2d.show()
+
+# Curve and object plots deliberately keep the visible scene local to the
+# entity; dependencies are resolved but not drawn.
+main.plot2d("xy")
+q1.plot2d("yz", beam_frames=True)
+
 # Both spellings are available because they were used in the original API
 # discussion.  They return a LayoutViewer; show=False builds without starting
 # the blocking native interactor.
 viewer = layout.plot3D(beam_frames=True, show=False)
 viewer.show()
 
-# Entity methods deliberately keep the visible scene local to that entity.
 main.plot3d()
 q1.plot3D(beam_frames=True)
 ```
@@ -84,7 +94,40 @@ Bare names are still accepted in namespace-specific fields such as
 `type="quadrupole"`, `target="magnetic_entry"`, and
 `reference_curve="main"`.  JSON always uses the canonical structured form.
 
-## Viewer controls
+## 2D viewer controls
+
+`plot2d(projection="xy")` accepts the case-insensitive ordered projections
+`"xy"`, `"yx"`, `"xz"`, `"zx"`, `"yz"`, and `"zy"`. The first axis is
+horizontal, the second is vertical, coordinates are world coordinates in
+metres, and the axes use equal scale.
+
+Use the Matplotlib toolbar for native pan and zoom. Hovering reports the entity
+and its pose; hovering a curve also snaps continuously along its nearest
+projected chord and reports the interpolated station.
+Left-click selects and highlights an entity, shows its local axes and pose, and
+snaps curve selection to a station. Clicking the same selection again clears
+it. Keyboard shortcuts control the layers and view:
+
+| Key | Action |
+| --- | --- |
+| `c` | Reference curves |
+| `o` | Objects |
+| `b` | Beam entry/exit frames |
+| `g` | Grid |
+| `f` or `r` | Fit the scoped geometry |
+| `Escape` | Clear selection |
+
+`LayoutViewer2D` exposes its Matplotlib `figure`, `axes`/`ax`, and `canvas`,
+together with `set_curves_visible()`, `set_objects_visible()`,
+`set_beam_frames_visible()`, `set_frames_visible()`, `set_grid_visible()`,
+`fit()`, `reset_view()`/`reset_camera()`,
+`select()`, `clear_selection()`, `draw()`/`render()`, `show()`, `savefig()`,
+`screenshot()`, and `close()`. Passing `show=False` creates the complete figure
+without opening a GUI window, so it is suitable for notebooks, headless tests,
+and programmatic export. Pass an existing Matplotlib axes as `ax=...` to draw
+the projection inside a larger figure.
+
+## 3D viewer controls
 
 The VTK viewer uses trackball-camera navigation.  Left drag orbits, middle
 drag pans, and the wheel zooms.  Click an object or curve to highlight it and

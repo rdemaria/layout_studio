@@ -1,7 +1,7 @@
 # Layout Python API — 0.3
 
 Status: implemented public-interface contract. Geometry is evaluated
-analytically; interactive views use VTK.
+analytically; interactive 2D and 3D views use Matplotlib and VTK, respectively.
 
 ## Conventions
 
@@ -23,6 +23,7 @@ The declarations below are signatures, not executable code.
 
 ```python
 OperationName = Literal["tx", "ty", "ts", "tt", "rx", "ry", "rs"]
+Projection2D = Literal["xy", "yx", "xz", "zx", "yz", "zy"]
 RootKind = Literal["curve", "type", "object"]
 SearchKind = Literal["curve", "type", "object", "frame"]
 RootEntity = Curve | Type | Object
@@ -111,6 +112,32 @@ class LayoutViewer:                         # VTK-backed, returned by plot3D
     close(self) -> None
 
 
+class LayoutViewer2D:                       # Matplotlib-backed, returned by plot2d
+    figure: matplotlib.figure.Figure
+    ax: matplotlib.axes.Axes
+    axes: matplotlib.axes.Axes
+    canvas: matplotlib.backend_bases.FigureCanvasBase
+    projection: Projection2D
+    selection: SearchEntity | None
+    selected: SearchEntity | None
+    show(self, *, block: bool | None = None) -> Self
+    draw(self) -> Self
+    render(self) -> Self                    # alias of draw
+    fit(self) -> Self
+    reset_view(self) -> Self
+    reset_camera(self) -> Self               # alias of reset_view
+    select(self, entity=None, *, station=None) -> Self
+    clear_selection(self) -> Self
+    set_curves_visible(self, visible=True) -> Self
+    set_objects_visible(self, visible=True) -> Self
+    set_frames_visible(self, visible=True) -> Self
+    set_beam_frames_visible(self, visible=True) -> Self
+    set_grid_visible(self, visible=True) -> Self
+    savefig(self, filename, **kwargs) -> Path
+    screenshot(self, filename=None, **kwargs) -> Path | NDArray[np.uint8]
+    close(self) -> None
+
+
 class Layout(JsonValue):
     curves: EntityMap[Curve]                # JSON key: reference_curves
     types: EntityMap[Type]
@@ -144,6 +171,18 @@ class Layout(JsonValue):
     reference(self, value: str | Curve | Object | Reference) -> Reference
         # resolve a shorthand/reference in this Layout without transforming it
     validate(self) -> None
+    plot2d(
+        self,
+        projection: Projection2D | str = "xy",
+        *,
+        curves: bool = True,
+        objects: bool = True,
+        beam_frames: bool = False,
+        selection: SearchEntity | None = None,
+        show: bool = True,
+        figsize: tuple[float, float] = (10.0, 7.2),
+        **viewer_kwargs,
+    ) -> LayoutViewer2D
     plot3D(
         self,
         *,
@@ -188,6 +227,9 @@ class Curve(OwnedValue):
     get_frame(self, s: float, *, extrapolate: bool = True) -> Pose
     infer_station(self, point: ArrayLike | Pose) -> float
     ref(self) -> CurveReference
+    plot2d(self, projection: Projection2D | str = "xy", *, selection=None,
+           show=True, figsize=(10.0, 7.2), **viewer_kwargs) -> LayoutViewer2D
+        # displays this curve only; dependencies are resolved but not drawn
     plot3D(self, *, selection=None, show=True, off_screen=False,
            window_size=(1000, 720), **viewer_kwargs) -> LayoutViewer
         # displays this curve only; dependencies are resolved but not drawn
@@ -239,6 +281,10 @@ class Object(OwnedValue):
     set_position(self, position: Position) -> Self
     ref(self, frame: str | Frame = "center") -> ObjectReference
     get_frame(self, frame: str | Frame = "center") -> Pose
+    plot2d(self, projection: Projection2D | str = "xy", *, beam_frames=True,
+           frames=True, selection=None, show=True, figsize=(10.0, 7.2),
+           **viewer_kwargs) -> LayoutViewer2D
+        # displays this object and its requested frames only
     plot3D(self, *, beam_frames=True, frames=True, selection=None,
            show=True, off_screen=False, window_size=(1000, 720),
            **viewer_kwargs) -> LayoutViewer
@@ -462,9 +508,37 @@ q2 = layout.new_object(
 
 layout.search(r"^Q", kind="object")
 layout["Q1"].get_frame("magnetic_exit")
+layout.plot2d("xy")
 layout.plot3D()
 layout.save("layout.json")
 ```
+
+## Matplotlib 2D viewer
+
+`plot2d(projection="xy")` returns a `LayoutViewer2D`. Projection values are
+case-insensitive and comprise all six ordered pairs of distinct world axes:
+`"xy"`, `"yx"`, `"xz"`, `"zx"`, `"yz"`, and `"zy"`. The first axis is
+horizontal and the second vertical; labels are world X/Y/Z in metres and the
+plot uses equal aspect ratio. An invalid projection raises `ValueError`.
+
+With `show=True`, the figure is shown using the active Matplotlib backend.
+With `show=False`, the complete figure and artists are built without opening a
+GUI window, permitting headless inspection and export with `savefig()` or
+`screenshot()`. Native Matplotlib toolbar pan and zoom remain available. An
+existing Matplotlib axes can be supplied with `ax=...` for composed figures.
+
+Hovering shows the entity name and world pose. For curves, the nearest sampled
+chord in the projection supplies a continuously interpolated station and its
+pose. Left-click
+selects and highlights an entity, shows its local axes and pose, and retains
+the snapped curve station; clicking the same selection again clears it. The
+keys `c`, `o`, and `b` toggle curve, object, and Beam-frame layers; `g` toggles
+the grid; `f` and `r` fit the scoped geometry; and Escape clears selection.
+
+The layout view can toggle curves, objects, stored frames, and Beam entry/exit
+frames. `Curve.plot2d()` and `Object.plot2d()` use the same strict entity scope
+as their 3D counterparts: upstream dependencies are resolved, but unrelated
+geometry is neither drawn nor included in fitting.
 
 ## VTK viewer
 

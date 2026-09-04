@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "layout-studio"
 version = "0.1.0"
-description = "Curve-referenced 3D layout modelling for interactive Python workflows"
+description = "Curve-referenced layout modelling for interactive Python workflows"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -15,7 +15,8 @@ dependencies = [
 
 [project.optional-dependencies]
 viewer = ["vtk>=9.4,<10"]
-test = ["pytest>=8"]
+plot2d = ["matplotlib>=3.7"]
+test = ["pytest>=8", "matplotlib>=3.7"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/layout_studio"]

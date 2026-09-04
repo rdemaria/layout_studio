@@ -1540,6 +1540,29 @@ class Curve(OwnedValue):
 
     plot3D = plot3d
 
+    def plot2d(
+        self,
+        projection: str = "xy",
+        *,
+        selection: object | None = None,
+        show: bool = True,
+        figsize: tuple[float, float] = (10.0, 7.2),
+        **viewer_kwargs: object,
+    ) -> Any:
+        layout = _require_bound(self)
+        from .viewer2d import LayoutViewer2D
+
+        return LayoutViewer2D(
+            layout,
+            projection=projection,
+            curves=[self],
+            objects=[],
+            selection=selection,
+            show=show,
+            figsize=figsize,
+            **viewer_kwargs,
+        )
+
     def _clone_detached(self) -> Curve:
         return Curve(
             starting_frame=self.starting_frame.clone(),
@@ -1967,6 +1990,33 @@ class Object(OwnedValue):
         )
 
     plot3D = plot3d
+
+    def plot2d(
+        self,
+        projection: str = "xy",
+        *,
+        beam_frames: bool = True,
+        frames: bool = True,
+        selection: object | None = None,
+        show: bool = True,
+        figsize: tuple[float, float] = (10.0, 7.2),
+        **viewer_kwargs: object,
+    ) -> Any:
+        layout = _require_bound(self)
+        from .viewer2d import LayoutViewer2D
+
+        return LayoutViewer2D(
+            layout,
+            projection=projection,
+            curves=[],
+            objects=[self],
+            beam_frames=beam_frames,
+            frames=frames,
+            selection=selection,
+            show=show,
+            figsize=figsize,
+            **viewer_kwargs,
+        )
 
     def _clone_detached(self) -> Object:
         return Object(
@@ -2745,6 +2795,33 @@ class Layout(JsonValue):
         )
 
     plot3D = plot3d
+
+    def plot2d(
+        self,
+        projection: str = "xy",
+        *,
+        curves: bool = True,
+        objects: bool = True,
+        beam_frames: bool = False,
+        selection: SearchEntity | None = None,
+        show: bool = True,
+        figsize: tuple[float, float] = (10.0, 7.2),
+        **viewer_kwargs: object,
+    ) -> Any:
+        self.validate()
+        from .viewer2d import LayoutViewer2D
+
+        return LayoutViewer2D(
+            self,
+            projection=projection,
+            curves=curves,
+            objects=objects,
+            beam_frames=beam_frames,
+            selection=selection,
+            show=show,
+            figsize=figsize,
+            **viewer_kwargs,
+        )
 
     def __repr__(self) -> str:
         return (

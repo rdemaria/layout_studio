@@ -1,4 +1,8 @@
-"""Curve-referenced 3D layout modelling for interactive Python workflows."""
+"""Curve-referenced layout modelling for interactive Python workflows."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from .errors import (
     AmbiguousNameError,
@@ -47,6 +51,18 @@ from .model import (
 )
 from .viewer import LayoutViewer
 
+if TYPE_CHECKING:
+    from .viewer2d import LayoutViewer2D
+
+
+def __getattr__(name: str) -> Any:
+    if name == "LayoutViewer2D":
+        from .viewer2d import LayoutViewer2D
+
+        return LayoutViewer2D
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "UNSET",
     "AmbiguousNameError",
@@ -66,6 +82,7 @@ __all__ = [
     "Layout",
     "LayoutError",
     "LayoutViewer",
+    "LayoutViewer2D",
     "ManagedSequence",
     "NameConflictError",
     "NoStationSolutionError",
