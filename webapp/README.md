@@ -1,25 +1,44 @@
 # Layout Studio web application
 
 This directory contains the browser editor and interactive 3D viewer for the Layout
-Studio JSON model. It has no runtime dependencies. The editable modules live under `src/`, while the
-checked-in `index.html` is the generated entry page and can be opened directly or hosted
-as a static site.
+Studio JSON model. It has no runtime dependencies. The editable modules live under
+`src/`, while the checked-in `index.html` is the generated entry page and can be opened
+directly or hosted as a static site.
 
-## Use the standalone app
+## Use the application
 
-Open `index.html` in a current browser. No installation or server is required.
+Open `index.html` in a current browser. Local JSON import and export work without a web
+server.
 
-A layout can also be loaded at startup by URL when the page is served over HTTP(S):
+When the application is served over HTTP(S), it also looks for `/list.json` at the root
+of the same web server. If that file exists, the top bar contains a dropdown for loading
+the listed same-origin JSON layouts. A minimal catalogue is:
 
-```text
-https://example.org/layout-studio/?layout=https://example.org/machine.layout.json
+```json
+[
+  "M2--LS3.json",
+  "SPS--LS3.json"
+]
 ```
 
-The remote JSON server must allow browser cross-origin requests.
+Entries can have separate display labels:
+
+```json
+{
+  "files": [
+    { "path": "M2--LS3.json", "label": "M2 — LS3" },
+    { "path": "SPS--LS3.json", "label": "SPS — LS3" }
+  ]
+}
+```
+
+Paths are resolved from the web-server root and must remain on the same origin. A
+missing `/list.json` is not an error; the dropdown is disabled and local file import
+remains available.
 
 ## Develop locally
 
-After changing a file in `src/`, rebuild the standalone page and run the checks:
+After changing a file in `src/`, rebuild the generated page and run the checks:
 
 ```bash
 cd webapp
@@ -34,20 +53,30 @@ To serve the generated application locally:
 python3 -m http.server 8000
 ```
 
-Then open `http://localhost:8000/`. The generated `index.html` loads the dependency-free
-assets directly from `src/`; `build.py` keeps the checked-in page synchronized with its
-template.
+Then open `http://localhost:8000/`. When `webapp/` itself is the server root, put
+`list.json` and its JSON layouts in `webapp/`. When the repository root is served, put
+them in the repository root instead.
+
+## Viewer interaction
+
+- **Orbit**, **Pan**, and **Select** retain the normal pointer interactions.
+- **Zoom box** fits a rectangle drawn in the canvas while retaining the current
+  orientation.
+- **View** selects the canonical views from `+X`, `-X`, `+Y`, or `-Y`.
+- **Axes** shrinks, expands, or hides the world axes without changing the geometry.
+- The mouse wheel zooms about the pointer and does not scroll the editor pane.
 
 ## Files
 
-- `index.html` — generated standalone application; do not edit directly.
-- `build.py` — deterministic standard-library-only standalone builder.
+- `index.html` — generated application; do not edit directly.
+- `build.py` — deterministic standard-library-only entry-page builder.
 - `src/index.template.html` — document shell and model-help dialogs.
 - `src/app.js` — editor state, cards, import/export, dependency tree, and interactions.
 - `src/model.js` — canonical JSON validation, curved-frame mathematics, dependency
   resolution, and world-pose calculation.
-- `src/viewer.js` — dependency-free interactive canvas renderer with orbit, pan,
-  selection, fitting, and beam-frame overlays.
+- `src/viewer.js` — dependency-free interactive canvas renderer.
+- `src/viewer-controls.js` — rectangle zoom, canonical views, and axis-size controls.
+- `src/server-layouts.js` — optional `/list.json` catalogue and server-layout dropdown.
 - `src/styles.css` — responsive application styling.
 - `tests/model.test.mjs` — dependency-free model and geometry regression tests.
 - `package.json` — lightweight `build`, `serve`, `test`, and `check` scripts.
@@ -69,14 +98,14 @@ rotation values are radians. The supported operations are `tx`, `ty`, `ts`, `tt`
 `ry`, and `rs`. Angle and roll fields are stored in radians in JSON and displayed in
 degrees by the editor.
 
-The app imports local JSON files, loads JSON over HTTP(S), validates references, resolves
-curve/object dependency chains, and exports the current canonical document. The
-reference graph is rooted at World and starts collapsed; it can be expanded branch by
-branch or with the Expand all control.
+The app imports local JSON files, validates references, resolves curve/object dependency
+chains, and exports the current canonical document. The reference graph is rooted at
+World and starts collapsed; it can be expanded branch by branch or with the Expand all
+control.
 
-For large machines, the viewer switches distant/small objects to compact glyphs while
-keeping detailed wireframes for selected or nearby geometry. This keeps the SPS-sized
-conversion practical without changing the JSON model.
+For large machines, the viewer switches distant or small objects to compact glyphs while
+keeping detailed wireframes for selected or nearby geometry. This keeps SPS-sized
+conversions practical without changing the JSON model.
 
 ## Browser support
 
