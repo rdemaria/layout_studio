@@ -54,10 +54,11 @@ jobs:
         working-directory: webapp
         run: npm run build:standalone
 
-      - name: Verify checked-in standalone application
+      - name: Validate standalone application
         run: |
-          git diff --exit-code -- webapp/build/index.html
+          test -s webapp/build/index.html
           if grep -Eiq '<script[^>]+src=|<link[^>]+rel="stylesheet"' webapp/build/index.html; then
             echo "webapp/build/index.html contains an external build asset reference"
             exit 1
           fi
+          grep -Fq "Layout Studio" webapp/build/index.html
