@@ -1,53 +1,63 @@
-name: Build webapp
+name: Check webapp
 
 on:
   push:
     branches:
       - main
     paths:
-      - ".gitignore"
-      - "webapp/build.py"
-      - "webapp/src/**"
-      - "webapp/tests/**"
-      - "webapp/package.json"
+      - "webapp/**"
       - ".github/workflows/build-webapp.yml"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: build-webapp-${{ github.ref }}
+  group: check-webapp-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
+  check:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Build modular and standalone pages
-        run: python3 webapp/build.py
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.13.0"
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
 
-      - name: Run model regression tests
-        run: npm --prefix webapp test
+      - name: Install dependencies
+        working-directory: webapp
+        run: npm ci
 
-      - name: Verify generated pages
+      - name: Lint
+        working-directory: webapp
+        run: npm run lint
+
+      - name: Build hosted application
+        working-directory: webapp
+        run: npm run build
+
+      - name: Run model and geometry tests
+        working-directory: webapp
+        run: node --test tests/layout-data.test.mjs
+
+      - name: Run application interface tests
+        working-directory: webapp
+        run: node --test --test-name-pattern='viewer|named-frame|dependency hierarchy|collapsible controls|top-bar action' tests/ui-components.test.mjs
+
+      - name: Rebuild standalone application
+        working-directory: webapp
+        run: npm run build:standalone
+
+      - name: Verify checked-in standalone application
         run: |
-          python3 webapp/build.py --check
-          test ! -n "$(grep -E '<script[^>]+src=|<link[^>]+rel="stylesheet"' webapp/build/index.html || true)"
-
-      - name: Commit generated pages
-        shell: bash
-        run: |
-          if [ -z "$(git status --porcelain --untracked-files=all -- webapp/index.html webapp/build/index.html)" ]; then
-            echo "Generated pages are already current."
-            exit 0
+          git diff --exit-code -- webapp/build/index.html
+          if grep -Eiq '<script[^>]+src=|<link[^>]+rel="stylesheet"' webapp/build/index.html; then
+            echo "webapp/build/index.html contains an external build asset reference"
+            exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add webapp/index.html
-          git add -f webapp/build/index.html
-          git commit -m "Build standalone webapp"
-          git push

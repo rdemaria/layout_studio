@@ -1,0 +1,1938 @@
+"use client";
+
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import { Focus, MousePointer2, Move, RotateCcw } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import type {
+  Frame,
+  LayoutData,
+  MagneticBoundaryFrameName,
+  SelectedEntity,
+  Vec3,
+} from "./layout-data";
+import {
+  add,
+  buildScene,
+  closestTransverseCurvePathForPoint,
+  curveObjectSurfaceIntersectionPaths,
+  cross,
+  curvePlaneIntersectionPaths,
+  curveSegmentIndexAtPath,
+  dot,
+  frameAtCurvePath,
+  length,
+  normalize,
+  scale,
+  sub,
+  transverseCurvePathsForPoint,
+  type CurveGeometry,
+  type CurveSample,
+  type MagneticFrameGeometry,
+  type SceneGeometry,
+} from "./layout-geometry";
+
+type NavigationMode = "orbit" | "pan" | "select";
+type Camera = { azimuth: number; elevation: number; distance: number; target: Vec3 };
+type Projection = { x: number; y: number; depth: number; scale: number };
+type Projector = (point: Vec3) => Projection | null;
+
+export type ViewportFitRequest = {
+  id: number;
+  kind: "curve" | "object";
+  name: string;
+};
+
+type HoverTarget =
+  | {
+      kind: "curve";
+      name: string;
+      sample: CurveSample;
+      segmentIndex: number;
+      x: number;
+      y: number;
+      snappedTo?: string;
+    }
+  | {
+      kind: "object";
+      name: string;
+      x: number;
+      y: number;
+      ax: number;
+      ay: number;
+      bx: number;
+      by: number;
+      radius: number;
+    }
+  | { kind: "frame"; object: string; name: string; x: number; y: number }
+  | {
+      kind: "magnetic_frame";
+      object: string;
+      name: MagneticBoundaryFrameName;
+      frame: Frame;
+      x: number;
+      y: number;
+      polygon: { x: number; y: number }[];
+    }
+  | null;
+type CurveHitTarget = {
+  kind: "curve_hit";
+  name: string;
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+  startDepth: number;
+  endDepth: number;
+  startPath: number;
+  endPath: number;
+  segmentIndex: number;
+};
+type HitTarget = Exclude<
+  Exclude<HoverTarget, null>,
+  { kind: "curve" }
+> | CurveHitTarget;
+type FrameHitTarget = Extract<HitTarget, { kind: "frame" }>;
+type MagneticHitTarget = Extract<HitTarget, { kind: "magnetic_frame" }>;
+
+type PoseReadout = { label: string; frame: Frame };
+type CurveStationSource =
+  | { kind: "frame"; object: string; name: string; label: string }
+  | {
+      kind: "plane";
+      object: string;
+      name: MagneticBoundaryFrameName;
+      label: string;
+    }
+  | { kind: "surface"; object: string; name: "shape"; label: string }
+  | {
+      kind: "segment";
+      segmentIndex: number;
+      boundary: "start" | "end";
+      label: string;
+    };
+type CurveStation = {
+  path: number;
+  frame: Frame;
+  sources: CurveStationSource[];
+};
+type CurveProbe = {
+  curve: string;
+  sample: CurveSample;
+  sources: CurveStationSource[];
+};
+
+export function toggleViewerSelection(
+  current: SelectedEntity,
+  candidate: SelectedEntity,
+): SelectedEntity {
+  if (!candidate) return null;
+  if (!current || current.kind !== candidate.kind) return candidate;
+  if (candidate.kind === "frame" && current.kind === "frame") {
+    return current.object === candidate.object && current.name === candidate.name
+      ? null
+      : candidate;
+  }
+  if (candidate.kind === "curve" && current.kind === "curve") {
+    return current.name === candidate.name &&
+        current.segmentIndex === candidate.segmentIndex
+      ? null
+      : candidate;
+  }
+  if (candidate.kind === "object" && current.kind === "object") {
+    return current.name === candidate.name ? null : candidate;
+  }
+  return candidate;
+}
+
+const EMPTY_SCENE: SceneGeometry = {
+  curves: [],
+  objects: [],
+  frames: [],
+  magneticFrames: [],
+  bounds: { min: [-1, -1, -1], max: [1, 1, 1] },
+};
+
+function sameHoverTarget(a: HoverTarget, b: HoverTarget): boolean {
+  if (!a || !b) return a === b;
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "frame" && b.kind === "frame") {
+    return a.object === b.object && a.name === b.name;
+  }
+  if (a.kind === "curve" && b.kind === "curve") {
+    return a.name === b.name &&
+      a.segmentIndex === b.segmentIndex &&
+      a.sample.path === b.sample.path &&
+      a.snappedTo === b.snappedTo;
+  }
+  if (a.kind === "magnetic_frame" && b.kind === "magnetic_frame") {
+    return a.object === b.object && a.name === b.name;
+  }
+  return a.kind === "object" && b.kind === "object" && a.name === b.name;
+}
+
+function distanceToSegment(
+  x: number,
+  y: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): number {
+  return closestPointOnSegment(x, y, ax, ay, bx, by).distance;
+}
+
+function closestPointOnSegment(
+  x: number,
+  y: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const denominator = dx * dx + dy * dy;
+  const fraction = denominator > 1e-12
+    ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / denominator))
+    : 0;
+  const closestX = ax + fraction * dx;
+  const closestY = ay + fraction * dy;
+  return {
+    distance: Math.hypot(x - closestX, y - closestY),
+    fraction,
+    x: closestX,
+    y: closestY,
+  };
+}
+
+function perspectiveCorrectFraction(
+  screenFraction: number,
+  startDepth: number,
+  endDepth: number,
+): number {
+  const denominator =
+    (1 - screenFraction) * endDepth + screenFraction * startDepth;
+  return denominator > 1e-12
+    ? screenFraction * startDepth / denominator
+    : screenFraction;
+}
+
+function pointInPolygon(
+  x: number,
+  y: number,
+  polygon: { x: number; y: number }[],
+): boolean {
+  let inside = false;
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+    const a = polygon[index];
+    const b = polygon[previous];
+    const crosses = (a.y > y) !== (b.y > y) &&
+      x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+function distanceToPolygon(
+  x: number,
+  y: number,
+  polygon: { x: number; y: number }[],
+): number {
+  if (pointInPolygon(x, y, polygon)) return 0;
+  let closest = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < polygon.length; index += 1) {
+    const a = polygon[index];
+    const b = polygon[(index + 1) % polygon.length];
+    closest = Math.min(closest, distanceToSegment(x, y, a.x, a.y, b.x, b.y));
+  }
+  return closest;
+}
+
+function pointInsideMagneticPlane(
+  point: Vec3,
+  magneticFrame: MagneticFrameGeometry,
+): boolean {
+  const localPoint = sub(point, magneticFrame.frame.o);
+  const x = dot(localPoint, magneticFrame.frame.x);
+  const y = dot(localPoint, magneticFrame.frame.y);
+  const polygon = magneticFrame.vertices.map((vertex) => {
+    const local = sub(vertex, magneticFrame.frame.o);
+    return {
+      x: dot(local, magneticFrame.frame.x),
+      y: dot(local, magneticFrame.frame.y),
+    };
+  });
+  const extent = Math.max(
+    1,
+    ...polygon.map((vertex) => Math.hypot(vertex.x, vertex.y)),
+  );
+  return pointInPolygon(x, y, polygon) ||
+    distanceToPolygon(x, y, polygon) <= extent * 1e-8;
+}
+
+function objectCurveAffiliation(
+  layout: LayoutData,
+  objectName: string,
+  cache: Map<string, string | null>,
+  stack: Set<string> = new Set(),
+): string | null {
+  if (cache.has(objectName)) return cache.get(objectName) ?? null;
+  if (stack.has(objectName)) return null;
+  const object = layout.objects[objectName];
+  if (!object) return null;
+  const nextStack = new Set(stack).add(objectName);
+  let curve: string | null = null;
+  if (object.position.reference.kind === "curve") {
+    curve = object.position.reference.curve;
+  } else if (object.position.reference_curve) {
+    curve = object.position.reference_curve;
+  } else if (object.position.reference.kind === "object_frame") {
+    curve = objectCurveAffiliation(
+      layout,
+      object.position.reference.object,
+      cache,
+      nextStack,
+    );
+  }
+  cache.set(objectName, curve);
+  return curve;
+}
+
+function stationSourceLabel(sources: CurveStationSource[]): string {
+  if (!sources.length) return "";
+  if (sources.length === 1) return sources[0].label;
+  return `${sources[0].label} +${sources.length - 1}`;
+}
+
+function stationSourceKey(source: CurveStationSource): string {
+  return source.kind === "segment"
+    ? `${source.kind}:${source.segmentIndex}:${source.boundary}`
+    : `${source.kind}:${source.object}:${source.name}`;
+}
+
+function lowerBoundStation(stations: CurveStation[], path: number): number {
+  let low = 0;
+  let high = stations.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (stations[middle].path < path) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function frameToMadxAngles(frame: Frame) {
+  // MAD-X SURVEY convention: theta is horizontal azimuth, phi is vertical
+  // elevation, and psi is roll around the local s axis.
+  const s = normalize(frame.s);
+  const x = normalize(sub(frame.x, scale(s, dot(frame.x, s))));
+  const y = normalize(cross(s, x));
+  const horizontal = Math.hypot(s[0], s[2]);
+  const phi = Math.atan2(s[1], horizontal);
+  const theta = horizontal > 1e-10 ? Math.atan2(s[0], s[2]) : 0;
+  const psi =
+    horizontal > 1e-10
+      ? Math.atan2(x[1], y[1])
+      : Math.atan2(-y[0], x[0]);
+  return { theta, phi, psi };
+}
+
+function cleanFixed(value: number, digits: number) {
+  const threshold = 0.5 * 10 ** -digits;
+  return (Math.abs(value) < threshold ? 0 : value).toFixed(digits);
+}
+
+function cameraOrientation(
+  camera: Pick<Camera, "azimuth" | "elevation">,
+) {
+  const cosElevation = Math.cos(camera.elevation);
+  const eyeDirection: Vec3 = [
+    Math.sin(camera.azimuth) * cosElevation,
+    Math.sin(camera.elevation),
+    Math.cos(camera.azimuth) * cosElevation,
+  ];
+  const forward = normalize(scale(eyeDirection, -1));
+  let right = normalize(cross(forward, [0, 1, 0]));
+  if (length(right) < 0.01) right = [1, 0, 0];
+  const up = normalize(cross(right, forward));
+  return { eyeDirection, forward, right, up };
+}
+
+function minimumCameraDistance(target: Vec3): number {
+  const absoluteScale = Math.max(1, ...target.map(Math.abs));
+  return Math.max(1e-9, absoluteScale * Number.EPSILON * 64);
+}
+
+export function zoomedCameraDistance(
+  distance: number,
+  deltaY: number,
+  target: Vec3,
+): number {
+  const exponent = Math.max(-5, Math.min(5, deltaY * 0.0012));
+  const next = distance * Math.exp(exponent);
+  return Number.isFinite(next)
+    ? Math.max(minimumCameraDistance(target), next)
+    : distance;
+}
+
+function boundsCorners(bounds: { min: Vec3; max: Vec3 }): Vec3[] {
+  const corners: Vec3[] = [];
+  for (const x of [bounds.min[0], bounds.max[0]]) {
+    for (const y of [bounds.min[1], bounds.max[1]]) {
+      for (const z of [bounds.min[2], bounds.max[2]]) {
+        corners.push([x, y, z]);
+      }
+    }
+  }
+  return corners;
+}
+
+export function fitCameraToPoints(
+  camera: Camera,
+  points: Vec3[],
+  width: number,
+  height: number,
+): Camera {
+  const finitePoints = points.filter((point) => point.every(Number.isFinite));
+  if (!finitePoints.length) return camera;
+
+  const min: Vec3 = [...finitePoints[0]];
+  const max: Vec3 = [...finitePoints[0]];
+  for (const point of finitePoints.slice(1)) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      min[axis] = Math.min(min[axis], point[axis]);
+      max[axis] = Math.max(max[axis], point[axis]);
+    }
+  }
+
+  const target = add(min, scale(sub(max, min), 0.5));
+  const { forward, right, up } = cameraOrientation(camera);
+  const safeWidth = Math.max(1, width);
+  const safeHeight = Math.max(1, height);
+  const focal = Math.min(safeWidth, safeHeight) * 0.92;
+  const halfWidth = safeWidth * 0.42;
+  const halfHeight = safeHeight * 0.42;
+  const span = length(sub(max, min));
+  const precisionFloor = minimumCameraDistance(target);
+  const depthMargin = Math.max(precisionFloor, span * 1e-6);
+  let distance = precisionFloor;
+
+  for (const point of finitePoints) {
+    const offset = sub(point, target);
+    const alongView = dot(offset, forward);
+    distance = Math.max(
+      distance,
+      Math.abs(dot(offset, right)) * focal / halfWidth - alongView,
+      Math.abs(dot(offset, up)) * focal / halfHeight - alongView,
+      depthMargin - alongView,
+    );
+  }
+
+  return {
+    ...camera,
+    target,
+    distance: Math.max(precisionFloor, distance),
+  };
+}
+
+export function worldAxisMarkerProjection(
+  camera: Pick<Camera, "azimuth" | "elevation">,
+) {
+  const { forward, right, up } = cameraOrientation(camera);
+  const origin = { x: 38, y: 38 };
+  const axisLength = 23;
+  const axes: { label: "X" | "Y" | "Z"; color: string; vector: Vec3 }[] = [
+    { label: "X", color: "#ff7185", vector: [1, 0, 0] },
+    { label: "Y", color: "#83e28d", vector: [0, 1, 0] },
+    { label: "Z", color: "#66c7ff", vector: [0, 0, 1] },
+  ];
+  return {
+    origin,
+    axes: axes
+      .map((axis) => ({
+        ...axis,
+        x: origin.x + axisLength * dot(axis.vector, right),
+        y: origin.y - axisLength * dot(axis.vector, up),
+        depth: dot(axis.vector, forward),
+      }))
+      .sort((a, b) => b.depth - a.depth),
+  };
+}
+
+function cameraProjector(camera: Camera, width: number, height: number): Projector {
+  const { forward, right, up } = cameraOrientation(camera);
+  const focal = Math.min(width, height) * 0.92;
+  const nearDepth = Math.max(
+    minimumCameraDistance(camera.target) * 0.25,
+    camera.distance * 1e-6,
+  );
+  return (point: Vec3) => {
+    // Work relative to the camera target so a millimetre-scale detail remains
+    // resolvable even when the layout uses large world coordinates.
+    const offset = sub(point, camera.target);
+    const depth = camera.distance + dot(offset, forward);
+    if (depth <= nearDepth) return null;
+    return {
+      x: width / 2 + (dot(offset, right) * focal) / depth,
+      y: height / 2 - (dot(offset, up) * focal) / depth,
+      depth,
+      scale: focal / depth,
+    };
+  };
+}
+
+function rgba(hex: string, alpha: number): string {
+  const normalized = /^#[0-9a-f]{6}$/i.test(hex) ? hex.slice(1) : "f0a84b";
+  const value = Number.parseInt(normalized, 16);
+  return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
+}
+
+function ToolButton({
+  active = false,
+  label,
+  onClick,
+  children,
+}: {
+  active?: boolean;
+  label: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant={active ? "default" : "ghost"}
+          size="icon-sm"
+          aria-label={label}
+          onClick={onClick}
+        >
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+export function LayoutViewport({
+  layout,
+  selection,
+  onSelect,
+  fitRequest = null,
+}: {
+  layout: LayoutData;
+  selection: SelectedEntity;
+  onSelect: (selection: SelectedEntity) => void;
+  fitRequest?: ViewportFitRequest | null;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const hitTargetsRef = useRef<HitTarget[]>([]);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    x: number;
+    y: number;
+    button: number;
+    moved: boolean;
+  } | null>(null);
+  const fittedOnceRef = useRef(false);
+  const handledFitRequestRef = useRef(0);
+  const sceneResult = useMemo(() => {
+    try {
+      return { scene: buildScene(layout), error: "" };
+    } catch (error) {
+      return {
+        scene: EMPTY_SCENE,
+        error: error instanceof Error ? error.message : "Unknown geometry error",
+      };
+    }
+  }, [layout]);
+  const { scene } = sceneResult;
+  const geometryError = sceneResult.error;
+  const [mode, setMode] = useState<NavigationMode>("orbit");
+  const [hovered, setHovered] = useState<HoverTarget>(null);
+  const [showCurves, setShowCurves] = useState(true);
+  const [showObjects, setShowObjects] = useState(true);
+  const [showBeamFrames, setShowBeamFrames] = useState(true);
+  const [curveProbe, setCurveProbe] = useState<CurveProbe | null>(null);
+  const [camera, setCamera] = useState<Camera>({
+    azimuth: -0.68,
+    elevation: 0.42,
+    distance: 20,
+    target: [0, 0, 4],
+  });
+  const [size, setSize] = useState({ width: 900, height: 650 });
+  const worldAxes = useMemo(
+    () => worldAxisMarkerProjection({
+      azimuth: camera.azimuth,
+      elevation: camera.elevation,
+    }),
+    [camera.azimuth, camera.elevation],
+  );
+  const hoverStyleKey = !hovered
+    ? ""
+    : hovered.kind === "curve" || hovered.kind === "object"
+      ? `${hovered.kind}:${hovered.name}`
+      : `${hovered.kind}:${hovered.object}:${hovered.name}`;
+
+  const selectedCurve = useMemo<CurveGeometry | null>(() => {
+    if (selection?.kind !== "curve") return null;
+    return scene.curves.find((curve) => curve.name === selection.name) ?? null;
+  }, [scene.curves, selection]);
+
+  const selectedCurveStations = useMemo<CurveStation[]>(() => {
+    if (!selectedCurve || geometryError) return [];
+    const pathTolerance = 1e-9 * Math.max(1, selectedCurve.totalLength);
+    const worldScale = Math.max(
+      1,
+      selectedCurve.totalLength,
+      ...scene.bounds.min.map(Math.abs),
+      ...scene.bounds.max.map(Math.abs),
+    );
+    const onCurveTolerance = Math.max(1e-6, 1e-10 * worldScale);
+    const stations: CurveStation[] = [];
+    const affiliationCache = new Map<string, string | null>();
+
+    const addStation = (path: number, source: CurveStationSource) => {
+      stations.push({
+        path,
+        frame: frameAtCurvePath(selectedCurve, path),
+        sources: [source],
+      });
+    };
+
+    const addFrameStation = (
+      frameOrigin: Vec3,
+      object: string,
+      name: string,
+      label: string,
+    ) => {
+      const affiliation = objectCurveAffiliation(
+        layout,
+        object,
+        affiliationCache,
+      );
+      if (affiliation && affiliation !== selectedCurve.name) return;
+      const solutions = transverseCurvePathsForPoint(selectedCurve, frameOrigin);
+      const paths = affiliation === selectedCurve.name
+        ? (() => {
+            const closest = closestTransverseCurvePathForPoint(
+              selectedCurve,
+              frameOrigin,
+            );
+            return closest.kind === "unique" && closest.path !== undefined
+              ? [closest.path]
+              : [];
+          })()
+        : solutions.paths.filter((path) =>
+            length(sub(frameOrigin, frameAtCurvePath(selectedCurve, path).o)) <=
+              onCurveTolerance
+          );
+      for (const path of paths) {
+        addStation(path, { kind: "frame", object, name, label });
+      }
+    };
+
+    for (const [segmentIndex, segment] of selectedCurve.segments.entries()) {
+      addStation(segment.path, {
+        kind: "segment",
+        segmentIndex,
+        boundary: "start",
+        label: `Segment ${segmentIndex + 1} start`,
+      });
+      addStation(segment.path + segment.length, {
+        kind: "segment",
+        segmentIndex,
+        boundary: "end",
+        label: `Segment ${segmentIndex + 1} end`,
+      });
+    }
+
+    if (showObjects) {
+      for (const object of scene.objects) {
+        addFrameStation(
+          object.frame.o,
+          object.name,
+          "center",
+          `${object.name}.center`,
+        );
+      }
+      for (const namedFrame of scene.frames) {
+        addFrameStation(
+          namedFrame.frame.o,
+          namedFrame.object,
+          namedFrame.name,
+          `${namedFrame.object}.${namedFrame.name}`,
+        );
+      }
+      const surfacePaths = curveObjectSurfaceIntersectionPaths(
+        selectedCurve,
+        scene.objects,
+      );
+      for (const [object, paths] of surfacePaths) {
+        for (const path of paths) {
+          addStation(path, {
+            kind: "surface",
+            object,
+            name: "shape",
+            label: `${object} shape surface`,
+          });
+        }
+      }
+      if (showBeamFrames) for (const magneticFrame of scene.magneticFrames) {
+        if (
+          objectCurveAffiliation(
+            layout,
+            magneticFrame.object,
+            affiliationCache,
+          ) !== selectedCurve.name
+        ) {
+          continue;
+        }
+        const intersections = curvePlaneIntersectionPaths(
+          selectedCurve,
+          magneticFrame.frame,
+        );
+        if (intersections.kind === "none" || intersections.kind === "infinite") {
+          continue;
+        }
+        const paths = intersections.paths.filter((path) => {
+          const curveFrame = frameAtCurvePath(selectedCurve, path);
+          return pointInsideMagneticPlane(curveFrame.o, magneticFrame) &&
+            length(cross(
+              normalize(magneticFrame.frame.s),
+              normalize(curveFrame.s),
+            )) <= 1e-6;
+        });
+        if (paths.length === 1) {
+          const boundary = magneticFrame.name === "magnetic_entry"
+            ? "entry"
+            : "exit";
+          addStation(paths[0], {
+            kind: "plane",
+            object: magneticFrame.object,
+            name: magneticFrame.name,
+            label: `${magneticFrame.object} Beam ${boundary} plane`,
+          });
+        }
+      }
+    }
+
+    stations.sort((a, b) => a.path - b.path);
+    const grouped: CurveStation[] = [];
+    for (const station of stations) {
+      const previous = grouped[grouped.length - 1];
+      if (!previous || Math.abs(previous.path - station.path) > pathTolerance) {
+        grouped.push(station);
+        continue;
+      }
+      for (const source of station.sources) {
+        if (
+          !previous.sources.some((candidate) =>
+            stationSourceKey(candidate) === stationSourceKey(source)
+          )
+        ) {
+          previous.sources.push(source);
+        }
+      }
+    }
+    return grouped;
+  }, [geometryError, layout, scene, selectedCurve, showBeamFrames, showObjects]);
+
+  const activeCurveProbe = useMemo<CurveProbe | null>(() => {
+    if (!selectedCurve || geometryError) return null;
+    const retainsProbe = curveProbe?.curve === selectedCurve.name;
+    const path = retainsProbe
+      ? Math.max(0, Math.min(selectedCurve.totalLength, curveProbe.sample.path))
+      : 0;
+    const station = selectedCurveStations.find(
+      (candidate) =>
+        Math.abs(candidate.path - path) <=
+        1e-9 * Math.max(1, selectedCurve.totalLength),
+    );
+    const frame = frameAtCurvePath(selectedCurve, path);
+    return {
+      curve: selectedCurve.name,
+      sample: { p: frame.o, frame, path },
+      sources: station?.sources ?? [],
+    };
+  }, [curveProbe, geometryError, selectedCurve, selectedCurveStations]);
+
+  const fitPoints = useCallback((points: Vec3[]) => {
+    const rect = wrapperRef.current?.getBoundingClientRect();
+    const width = rect?.width || size.width;
+    const height = rect?.height || size.height;
+    setCamera((current) =>
+      fitCameraToPoints(current, points, width, height)
+    );
+  }, [size.height, size.width]);
+
+  const fit = useCallback(() => {
+    fitPoints(boundsCorners(scene.bounds));
+  }, [fitPoints, scene.bounds]);
+
+  useEffect(() => {
+    if (!fittedOnceRef.current) {
+      fittedOnceRef.current = true;
+      fit();
+    }
+  }, [fit]);
+
+  useEffect(() => {
+    if (
+      !fitRequest ||
+      fitRequest.id === handledFitRequestRef.current ||
+      geometryError
+    ) return;
+    handledFitRequestRef.current = fitRequest.id;
+    if (fitRequest.kind === "curve") {
+      const curve = scene.curves.find(
+        (candidate) => candidate.name === fitRequest.name,
+      );
+      if (!curve) return;
+      fitPoints(curve.samples.map((sample) => sample.p));
+      return;
+    }
+    const object = scene.objects.find(
+      (candidate) => candidate.name === fitRequest.name,
+    );
+    if (!object) return;
+    fitPoints(object.vertices);
+  }, [fitPoints, fitRequest, geometryError, scene.curves, scene.objects]);
+
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setSize({
+        width: Math.max(320, entry.contentRect.width),
+        height: Math.max(280, entry.contentRect.height),
+      });
+    });
+    observer.observe(wrapper);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const deltaY = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? event.deltaY * 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? event.deltaY * Math.max(1, wrapper.clientHeight)
+          : event.deltaY;
+      setCamera((current) => ({
+        ...current,
+        distance: zoomedCameraDistance(
+          current.distance,
+          deltaY,
+          current.target,
+        ),
+      }));
+    };
+    wrapper.addEventListener("wheel", handleWheel, { passive: false });
+    return () => wrapper.removeEventListener("wheel", handleWheel);
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ratio = Math.min(2, window.devicePixelRatio || 1);
+    canvas.width = Math.floor(size.width * ratio);
+    canvas.height = Math.floor(size.height * ratio);
+    canvas.style.width = `${size.width}px`;
+    canvas.style.height = `${size.height}px`;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    const { width, height } = size;
+    const project = cameraProjector(camera, width, height);
+    context.clearRect(0, 0, width, height);
+
+    const gradient = context.createRadialGradient(
+      width * 0.55,
+      height * 0.45,
+      10,
+      width * 0.5,
+      height * 0.5,
+      Math.max(width, height),
+    );
+    gradient.addColorStop(0, "#172235");
+    gradient.addColorStop(1, "#070b12");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, width, height);
+
+    const requestedGridStep = Math.max(camera.distance / 35, 1e-12);
+    const gridPower = 10 ** Math.floor(Math.log10(requestedGridStep));
+    const gridRatio = requestedGridStep / gridPower;
+    const gridStep = gridPower * (gridRatio <= 1 ? 1 : gridRatio <= 2 ? 2 : gridRatio <= 5 ? 5 : 10);
+    const gridExtent = Math.max(gridStep * 5, camera.distance * 0.9);
+    const gridMinX = Math.floor((camera.target[0] - gridExtent) / gridStep) * gridStep;
+    const gridMaxX = Math.ceil((camera.target[0] + gridExtent) / gridStep) * gridStep;
+    const gridMinZ = Math.floor((camera.target[2] - gridExtent) / gridStep) * gridStep;
+    const gridMaxZ = Math.ceil((camera.target[2] + gridExtent) / gridStep) * gridStep;
+    context.lineWidth = 1;
+    const drawGridLine = (value: number, axis: "x" | "z") => {
+      const lines = axis === "x"
+        ? [[project([value, 0, gridMinZ]), project([value, 0, gridMaxZ])]]
+        : [[project([gridMinX, 0, value]), project([gridMaxX, 0, value])]];
+      const gridIndex = Math.round(value / gridStep);
+      context.strokeStyle =
+        Math.abs(value) <= gridStep * 1e-8
+          ? "rgba(127, 166, 191, .26)"
+          : Math.abs(gridIndex) % 5 === 0
+            ? "rgba(127, 166, 191, .13)"
+            : "rgba(127, 166, 191, .055)";
+      for (const [a, b] of lines) {
+        if (!a || !b) continue;
+        context.beginPath();
+        context.moveTo(a.x, a.y);
+        context.lineTo(b.x, b.y);
+        context.stroke();
+      }
+    };
+    for (let value = gridMinX; value <= gridMaxX + gridStep * 0.5; value += gridStep) {
+      drawGridLine(value, "x");
+    }
+    for (let value = gridMinZ; value <= gridMaxZ + gridStep * 0.5; value += gridStep) {
+      drawGridLine(value, "z");
+    }
+
+    type FaceDraw = {
+      polygon: Projection[];
+      depth: number;
+      color: string;
+      selected: boolean;
+    };
+    const faces: FaceDraw[] = [];
+    if (showObjects) {
+      for (const object of scene.objects) {
+        const projected = object.vertices.map(project);
+        for (const face of object.faces) {
+          const polygon = face
+            .map((index) => projected[index])
+            .filter(Boolean) as Projection[];
+          if (polygon.length !== face.length) continue;
+          faces.push({
+            polygon,
+            depth:
+              polygon.reduce((sum, point) => sum + point.depth, 0) /
+              polygon.length,
+            color: object.type.color,
+            selected:
+              (selection?.kind === "object" && selection.name === object.name) ||
+              (selection?.kind === "frame" && selection.object === object.name),
+          });
+        }
+      }
+    }
+    faces.sort((a, b) => b.depth - a.depth);
+    for (const face of faces) {
+      context.beginPath();
+      context.moveTo(face.polygon[0].x, face.polygon[0].y);
+      for (const point of face.polygon.slice(1)) {
+        context.lineTo(point.x, point.y);
+      }
+      context.closePath();
+      context.fillStyle = rgba(face.color, face.selected ? 0.12 : 0.065);
+      context.fill();
+    }
+
+    const hits: HitTarget[] = [];
+    if (showObjects && showBeamFrames) for (const magneticFrame of scene.magneticFrames) {
+      const polygon = magneticFrame.vertices.map(project).filter(Boolean) as Projection[];
+      if (polygon.length !== magneticFrame.vertices.length) continue;
+      const active =
+        selection?.kind === "object" && selection.name === magneticFrame.object;
+      const hovering = hoverStyleKey ===
+        `magnetic_frame:${magneticFrame.object}:${magneticFrame.name}`;
+      const color = magneticFrame.name === "magnetic_entry" ? "#66c7ff" : "#ff9b78";
+      context.beginPath();
+      context.moveTo(polygon[0].x, polygon[0].y);
+      for (const point of polygon.slice(1)) context.lineTo(point.x, point.y);
+      context.closePath();
+      context.fillStyle = rgba(color, hovering ? 0.28 : active ? 0.2 : 0.14);
+      context.fill();
+      context.save();
+      context.setLineDash([5, 4]);
+      context.lineWidth = hovering ? 2.2 : 1.25;
+      context.strokeStyle = rgba(color, hovering ? 1 : 0.82);
+      context.stroke();
+      context.restore();
+      const x = polygon.reduce((sum, point) => sum + point.x, 0) / polygon.length;
+      const y = polygon.reduce((sum, point) => sum + point.y, 0) / polygon.length;
+      context.font = "650 9px ui-monospace, SFMono-Regular, monospace";
+      context.fillStyle = rgba(color, 0.95);
+      context.fillText(
+        magneticFrame.name === "magnetic_entry" ? "IN" : "OUT",
+        x + 5,
+        y - 5,
+      );
+      hits.push({
+        kind: "magnetic_frame",
+        object: magneticFrame.object,
+        name: magneticFrame.name,
+        frame: magneticFrame.frame,
+        x,
+        y,
+        polygon,
+      });
+    }
+
+    if (showCurves) for (const curve of scene.curves) {
+      const projected = curve.samples.map((sample) => project(sample.p));
+      const active = selection?.kind === "curve" && selection.name === curve.name;
+      const hovering = hoverStyleKey === `curve:${curve.name}`;
+      const curveColor = layout.reference_curves[curve.name].color;
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      context.beginPath();
+      let started = false;
+      for (const point of projected) {
+        if (!point) continue;
+        if (!started) {
+          context.moveTo(point.x, point.y);
+          started = true;
+        } else {
+          context.lineTo(point.x, point.y);
+        }
+      }
+      context.strokeStyle = active
+        ? "rgba(255, 190, 93, .32)"
+        : rgba(curveColor, hovering ? 0.3 : 0.14);
+      context.lineWidth = active ? 11 : hovering ? 10 : 8;
+      context.stroke();
+      context.strokeStyle = rgba(curveColor, 1);
+      context.lineWidth = active ? 3.2 : hovering ? 2.8 : 2.2;
+      context.stroke();
+      const focusedSegment = active ? selection.segmentIndex : undefined;
+      if (focusedSegment !== undefined) {
+        context.beginPath();
+        let focusedStarted = false;
+        for (let index = 1; index < projected.length; index += 1) {
+          const a = projected[index - 1];
+          const b = projected[index];
+          if (!a || !b) {
+            focusedStarted = false;
+            continue;
+          }
+          const segmentIndex = curveSegmentIndexAtPath(
+            curve,
+            (curve.samples[index - 1].path + curve.samples[index].path) / 2,
+          );
+          if (segmentIndex !== focusedSegment) {
+            focusedStarted = false;
+            continue;
+          }
+          if (!focusedStarted) context.moveTo(a.x, a.y);
+          context.lineTo(b.x, b.y);
+          focusedStarted = true;
+        }
+        context.strokeStyle = "rgba(255, 244, 213, .95)";
+        context.lineWidth = 5.2;
+        context.stroke();
+        context.strokeStyle = rgba(curveColor, 1);
+        context.lineWidth = 2.4;
+        context.stroke();
+      }
+      for (let index = 1; index < projected.length; index += 1) {
+        const a = projected[index - 1];
+        const b = projected[index];
+        if (!a || !b) continue;
+        hits.push({
+          kind: "curve_hit",
+          name: curve.name,
+          ax: a.x,
+          ay: a.y,
+          bx: b.x,
+          by: b.y,
+          startDepth: a.depth,
+          endDepth: b.depth,
+          startPath: curve.samples[index - 1].path,
+          endPath: curve.samples[index].path,
+          segmentIndex: curveSegmentIndexAtPath(
+            curve,
+            (curve.samples[index - 1].path + curve.samples[index].path) / 2,
+          ),
+        });
+      }
+    }
+
+    if (showObjects) for (const object of scene.objects) {
+      const projected = object.vertices.map(project);
+      const active =
+        (selection?.kind === "object" && selection.name === object.name) ||
+        (selection?.kind === "frame" && selection.object === object.name);
+      const hovering = hoverStyleKey === `object:${object.name}` ||
+        hoverStyleKey.startsWith(`magnetic_frame:${object.name}:`);
+      context.lineWidth = active ? 2.5 : hovering ? 2.1 : 1.25;
+      context.strokeStyle =
+        active || hovering
+          ? rgba(object.type.color, 1)
+          : rgba(object.type.color, 0.76);
+      for (const [aIndex, bIndex] of object.edges) {
+        const a = projected[aIndex];
+        const b = projected[bIndex];
+        if (!a || !b) continue;
+        context.beginPath();
+        context.moveTo(a.x, a.y);
+        context.lineTo(b.x, b.y);
+        context.stroke();
+      }
+      const ringSize = object.type.shape[0] === "box" ? 4 : 18;
+      const rings: ({ x: number; y: number; radius: number } | null)[] = [];
+      for (let offset = 0; offset < projected.length; offset += ringSize) {
+        const visible = projected.slice(offset, offset + ringSize).filter(Boolean) as Projection[];
+        if (!visible.length) {
+          rings.push(null);
+          continue;
+        }
+        const x = visible.reduce((sum, point) => sum + point.x, 0) / visible.length;
+        const y = visible.reduce((sum, point) => sum + point.y, 0) / visible.length;
+        const radius = Math.max(
+          5,
+          Math.min(
+            90,
+            Math.max(...visible.map((point) => Math.hypot(point.x - x, point.y - y))),
+          ),
+        );
+        rings.push({ x, y, radius });
+      }
+      for (let index = 1; index < rings.length; index += 1) {
+        const a = rings[index - 1];
+        const b = rings[index];
+        if (!a || !b) continue;
+        hits.push({
+          kind: "object",
+          name: object.name,
+          x: (a.x + b.x) / 2,
+          y: (a.y + b.y) / 2,
+          ax: a.x,
+          ay: a.y,
+          bx: b.x,
+          by: b.y,
+          radius: Math.max(a.radius, b.radius),
+        });
+      }
+    }
+
+    if (showObjects) for (const namedFrame of scene.frames) {
+      const projected = project(namedFrame.frame.o);
+      if (!projected) continue;
+      const active =
+        hoverStyleKey === `frame:${namedFrame.object}:${namedFrame.name}` ||
+        (selection?.kind === "frame" &&
+          selection.object === namedFrame.object &&
+          selection.name === namedFrame.name);
+      context.beginPath();
+      context.arc(projected.x, projected.y, active ? 5.5 : 4, 0, Math.PI * 2);
+      context.fillStyle = active ? "#ffffff" : "#ffca75";
+      context.fill();
+      context.lineWidth = 1.5;
+      context.strokeStyle = "#1a2130";
+      context.stroke();
+      hits.push({
+        kind: "frame",
+        object: namedFrame.object,
+        name: namedFrame.name,
+        x: projected.x,
+        y: projected.y,
+      });
+    }
+
+    if (showCurves && selectedCurve) {
+      for (const station of selectedCurveStations) {
+        const marker = project(station.frame.o);
+        if (!marker) continue;
+        const isBoundary = station.sources.some((source) => source.kind === "segment");
+        const isSurface = station.sources.some((source) => source.kind === "surface");
+        context.beginPath();
+        if (isBoundary) {
+          context.moveTo(marker.x, marker.y - 4.2);
+          context.lineTo(marker.x + 4.2, marker.y);
+          context.lineTo(marker.x, marker.y + 4.2);
+          context.lineTo(marker.x - 4.2, marker.y);
+          context.closePath();
+        } else if (isSurface) {
+          context.rect(marker.x - 3.2, marker.y - 3.2, 6.4, 6.4);
+        } else {
+          context.arc(marker.x, marker.y, 2.8, 0, Math.PI * 2);
+        }
+        context.fillStyle = isBoundary
+          ? "rgba(224, 250, 255, .96)"
+          : isSurface
+            ? "rgba(255, 159, 112, .92)"
+            : "rgba(255, 204, 124, .86)";
+        context.fill();
+        context.lineWidth = isBoundary ? 1.5 : 1;
+        context.strokeStyle = isBoundary
+          ? "rgba(42, 139, 160, .96)"
+          : "rgba(22, 28, 39, .92)";
+        context.stroke();
+      }
+    }
+
+    hitTargetsRef.current = hits;
+  }, [
+    camera,
+    hoverStyleKey,
+    layout.reference_curves,
+    scene,
+    selectedCurve,
+    selectedCurveStations,
+    selection,
+    showBeamFrames,
+    showCurves,
+    showObjects,
+    size,
+  ]);
+
+  useEffect(() => {
+    const canvas = overlayRef.current;
+    if (!canvas) return;
+    const ratio = Math.min(2, window.devicePixelRatio || 1);
+    const pixelWidth = Math.floor(size.width * ratio);
+    const pixelHeight = Math.floor(size.height * ratio);
+    if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+    if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
+    if (canvas.style.width !== `${size.width}px`) {
+      canvas.style.width = `${size.width}px`;
+    }
+    if (canvas.style.height !== `${size.height}px`) {
+      canvas.style.height = `${size.height}px`;
+    }
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.clearRect(0, 0, size.width, size.height);
+    const project = cameraProjector(camera, size.width, size.height);
+
+    const hoveredFrame =
+      hovered?.kind === "curve" && showCurves
+        ? hovered.sample.frame
+        : hovered?.kind === "magnetic_frame" && showObjects && showBeamFrames
+          ? hovered.frame
+        : hovered?.kind === "frame" && showObjects
+          ? scene.frames.find(
+              (namedFrame) =>
+                namedFrame.object === hovered.object &&
+                namedFrame.name === hovered.name,
+            )?.frame
+          : undefined;
+    if (hoveredFrame) {
+      const origin = project(hoveredFrame.o);
+      if (origin) {
+        const axisSize = Math.max(
+          minimumCameraDistance(camera.target) * 16,
+          camera.distance * 0.035,
+        );
+        const axes = [
+          { vector: hoveredFrame.x, color: "#ff7185", label: "x" },
+          { vector: hoveredFrame.y, color: "#83e28d", label: "y" },
+          { vector: hoveredFrame.s, color: "#66c7ff", label: "s" },
+        ];
+        for (const axis of axes) {
+          const endpoint = project(
+            add(hoveredFrame.o, scale(axis.vector, axisSize)),
+          );
+          if (!endpoint) continue;
+          context.beginPath();
+          context.moveTo(origin.x, origin.y);
+          context.lineTo(endpoint.x, endpoint.y);
+          context.lineWidth = 2.2;
+          context.strokeStyle = axis.color;
+          context.stroke();
+          context.font = "600 12px ui-monospace, SFMono-Regular, monospace";
+          context.fillStyle = axis.color;
+          context.fillText(axis.label, endpoint.x + 4, endpoint.y - 3);
+        }
+      }
+    }
+
+    if (
+      activeCurveProbe &&
+      selection?.kind === "curve" &&
+      selection.name === activeCurveProbe.curve
+    ) {
+      const marker = project(activeCurveProbe.sample.p);
+      if (marker) {
+        const snapped = activeCurveProbe.sources.length > 0;
+        context.beginPath();
+        context.arc(marker.x, marker.y, snapped ? 6 : 4.5, 0, Math.PI * 2);
+        context.fillStyle = snapped ? "#ffcc7c" : "#f7fbfc";
+        context.fill();
+        context.lineWidth = 2;
+        context.strokeStyle = snapped ? "#8b5723" : "#317c82";
+        context.stroke();
+      }
+    }
+  }, [
+    activeCurveProbe,
+    camera,
+    hovered,
+    scene.frames,
+    selection,
+    showBeamFrames,
+    showCurves,
+    showObjects,
+    size,
+  ]);
+
+  const pick = useCallback((x: number, y: number): HoverTarget => {
+    let closestFrame: { distance: number; target: FrameHitTarget } | null = null;
+    for (const target of hitTargetsRef.current) {
+      if (target.kind !== "frame") continue;
+      if (!showObjects) continue;
+      const distance = Math.hypot(x - target.x, y - target.y);
+      if (distance <= 11 && (!closestFrame || distance < closestFrame.distance)) {
+        closestFrame = { distance, target };
+      }
+    }
+    if (closestFrame) return closestFrame.target;
+
+    let closestMagnetic: {
+      distance: number;
+      target: MagneticHitTarget;
+    } | null = null;
+    for (const target of hitTargetsRef.current) {
+      if (target.kind !== "magnetic_frame") continue;
+      if (!showObjects || !showBeamFrames) continue;
+      const distance = distanceToPolygon(x, y, target.polygon);
+      if (distance <= 7 && (!closestMagnetic || distance < closestMagnetic.distance)) {
+        closestMagnetic = { distance, target };
+      }
+    }
+    if (closestMagnetic) return closestMagnetic.target;
+
+    let best: { distance: number; target: HitTarget } | null = null;
+    for (const target of hitTargetsRef.current) {
+      if (target.kind === "frame" || target.kind === "magnetic_frame") continue;
+      if (target.kind === "curve_hit" && !showCurves) continue;
+      if (target.kind === "object" && !showObjects) continue;
+      const distance = distanceToSegment(
+        x,
+        y,
+        target.ax,
+        target.ay,
+        target.bx,
+        target.by,
+      );
+      const threshold = target.kind === "curve_hit" ? 12 : target.radius + 5;
+      if (distance <= threshold && (!best || distance < best.distance)) {
+        best = { distance, target };
+      }
+    }
+    if (!best) return null;
+    if (best.target.kind !== "curve_hit") return best.target;
+    const curve = scene.curves.find(
+      (candidate) => candidate.name === best.target.name,
+    );
+    if (!curve) return null;
+    const closest = closestPointOnSegment(
+      x,
+      y,
+      best.target.ax,
+      best.target.ay,
+      best.target.bx,
+      best.target.by,
+    );
+    const fraction = perspectiveCorrectFraction(
+      closest.fraction,
+      best.target.startDepth,
+      best.target.endDepth,
+    );
+    const path = best.target.startPath +
+      (best.target.endPath - best.target.startPath) * fraction;
+    const frame = frameAtCurvePath(curve, path);
+    return {
+      kind: "curve",
+      name: curve.name,
+      segmentIndex: best.target.segmentIndex,
+      sample: { p: frame.o, frame, path },
+      x: closest.x,
+      y: closest.y,
+    };
+  }, [scene.curves, showBeamFrames, showCurves, showObjects]);
+
+  const curveProbeAtPointer = useCallback((
+    x: number,
+    y: number,
+    hover: HoverTarget,
+  ): CurveProbe | null => {
+    if (!showCurves || !selectedCurve) return null;
+
+    const hoveredStation = hover && hover.kind !== "curve"
+      ? selectedCurveStations.find((station) =>
+          station.sources.some((source) => {
+            if (hover.kind === "object") {
+              return source.kind === "frame" &&
+                source.object === hover.name &&
+                source.name === "center";
+            }
+            if (hover.kind === "frame") {
+              return source.kind === "frame" &&
+                source.object === hover.object &&
+                source.name === hover.name;
+            }
+            if (hover.kind === "magnetic_frame") {
+              return source.kind === "plane" &&
+                source.object === hover.object &&
+                source.name === hover.name;
+            }
+            return false;
+          })
+        )
+      : undefined;
+    if (hoveredStation) {
+      return {
+        curve: selectedCurve.name,
+        sample: {
+          p: hoveredStation.frame.o,
+          frame: hoveredStation.frame,
+          path: hoveredStation.path,
+        },
+        sources: hoveredStation.sources,
+      };
+    }
+
+    let closestHit: {
+      target: CurveHitTarget;
+      distance: number;
+      fraction: number;
+      screenLength: number;
+    } | null = null;
+    for (const target of hitTargetsRef.current) {
+      if (target.kind !== "curve_hit" || target.name !== selectedCurve.name) {
+        continue;
+      }
+      const closest = closestPointOnSegment(
+        x,
+        y,
+        target.ax,
+        target.ay,
+        target.bx,
+        target.by,
+      );
+      if (
+        closest.distance <= 12 &&
+        (!closestHit || closest.distance < closestHit.distance)
+      ) {
+        closestHit = {
+          target,
+          distance: closest.distance,
+          fraction: closest.fraction,
+          screenLength: Math.hypot(
+            target.bx - target.ax,
+            target.by - target.ay,
+          ),
+        };
+      }
+    }
+    if (!closestHit) return null;
+
+    const fraction = perspectiveCorrectFraction(
+      closestHit.fraction,
+      closestHit.target.startDepth,
+      closestHit.target.endDepth,
+    );
+    const rawPath = closestHit.target.startPath +
+      (closestHit.target.endPath - closestHit.target.startPath) * fraction;
+    const segmentPath = Math.abs(
+      closestHit.target.endPath - closestHit.target.startPath,
+    );
+    const pathWindow = segmentPath *
+      (1.5 + 12 / Math.max(1, closestHit.screenLength));
+    const project = cameraProjector(camera, size.width, size.height);
+    let snapped: { station: CurveStation; distance: number } | null = null;
+    const firstStation = lowerBoundStation(
+      selectedCurveStations,
+      rawPath - pathWindow,
+    );
+    for (let index = firstStation; index < selectedCurveStations.length; index += 1) {
+      const station = selectedCurveStations[index];
+      if (station.path > rawPath + pathWindow) break;
+      const projected = project(station.frame.o);
+      if (!projected) continue;
+      const distance = Math.hypot(x - projected.x, y - projected.y);
+      if (distance <= 12 && (!snapped || distance < snapped.distance)) {
+        snapped = { station, distance };
+      }
+    }
+    if (snapped) {
+      return {
+        curve: selectedCurve.name,
+        sample: {
+          p: snapped.station.frame.o,
+          frame: snapped.station.frame,
+          path: snapped.station.path,
+        },
+        sources: snapped.station.sources,
+      };
+    }
+    const frame = frameAtCurvePath(selectedCurve, rawPath);
+    return {
+      curve: selectedCurve.name,
+      sample: { p: frame.o, frame, path: rawPath },
+      sources: [],
+    };
+  }, [camera, selectedCurve, selectedCurveStations, showCurves, size]);
+
+  const pointerCoordinates = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  };
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      x: event.clientX,
+      y: event.clientY,
+      button: event.button,
+      moved: false,
+    };
+  };
+
+  const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const drag = dragRef.current;
+    if (drag && event.buttons) {
+      const dx = event.clientX - drag.x;
+      const dy = event.clientY - drag.y;
+      dragRef.current = {
+        startX: drag.startX,
+        startY: drag.startY,
+        x: event.clientX,
+        y: event.clientY,
+        button: drag.button,
+        moved:
+          drag.moved ||
+          Math.hypot(
+            event.clientX - drag.startX,
+            event.clientY - drag.startY,
+          ) > 2,
+      };
+      const activeMode = drag.button === 2 || event.shiftKey ? "pan" : mode;
+      if (activeMode === "orbit") {
+        setCamera((current) => ({
+          ...current,
+          azimuth: current.azimuth - dx * 0.008,
+          elevation: Math.max(
+            -1.45,
+            Math.min(1.45, current.elevation + dy * 0.008),
+          ),
+        }));
+      } else if (activeMode === "pan") {
+        const panScale =
+          (camera.distance / Math.max(size.width, size.height)) * 1.45;
+        const cos = Math.cos(camera.azimuth);
+        const sin = Math.sin(camera.azimuth);
+        setCamera((current) => ({
+          ...current,
+          target: add(current.target, [
+            (-dx * cos - dy * sin * Math.sin(camera.elevation)) * panScale,
+            dy * Math.cos(camera.elevation) * panScale,
+            (dx * sin - dy * cos * Math.sin(camera.elevation)) * panScale,
+          ]),
+        }));
+      }
+      return;
+    }
+    const point = pointerCoordinates(event);
+    let next = pick(point.x, point.y);
+    const nextProbe = curveProbeAtPointer(point.x, point.y, next);
+    if (nextProbe) {
+      setCurveProbe(nextProbe);
+      if (next?.kind === "curve" && next.name === nextProbe.curve) {
+        next = {
+          ...next,
+          sample: nextProbe.sample,
+          snappedTo: stationSourceLabel(nextProbe.sources) || undefined,
+        };
+      }
+    }
+    setHovered((current) => sameHoverTarget(current, next) ? current : next);
+  };
+
+  const onPointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const drag = dragRef.current;
+    const point = pointerCoordinates(event);
+    if (drag && !drag.moved && drag.button === 0) {
+      const target = pick(point.x, point.y);
+      if (target?.kind === "curve") {
+        const snappedProbe = curveProbeAtPointer(point.x, point.y, target);
+        setCurveProbe(
+          snappedProbe?.curve === target.name
+            ? snappedProbe
+            : { curve: target.name, sample: target.sample, sources: [] },
+        );
+        onSelect({
+          kind: "curve",
+          name: target.name,
+          segmentIndex: target.segmentIndex,
+        });
+      } else if (target?.kind === "object") {
+        onSelect({ kind: "object", name: target.name });
+      } else if (target?.kind === "frame") {
+        onSelect({ kind: "frame", object: target.object, name: target.name });
+      } else if (target?.kind === "magnetic_frame") {
+        onSelect({ kind: "object", name: target.object });
+      } else {
+        onSelect(null);
+      }
+    }
+    dragRef.current = null;
+  };
+
+  const hoverLabel =
+    hovered?.kind === "frame" || hovered?.kind === "magnetic_frame"
+      ? `${hovered.object}.${hovered.name}`
+      : hovered?.name;
+
+  const poseReadout = useMemo<PoseReadout | null>(() => {
+    if (geometryError) return null;
+    if (selection?.kind === "curve" && activeCurveProbe) {
+      return {
+        label: `Curve ${selection.name} · s = ${activeCurveProbe.sample.path.toFixed(3)} m`,
+        frame: activeCurveProbe.sample.frame,
+      };
+    }
+    if (hovered?.kind === "frame" && showObjects) {
+      const namedFrame = scene.frames.find(
+        (candidate) =>
+          candidate.object === hovered.object && candidate.name === hovered.name,
+      );
+      return namedFrame
+        ? {
+            label: `Frame ${namedFrame.object}.${namedFrame.name} · ${namedFrame.typeName}`,
+            frame: namedFrame.frame,
+          }
+        : null;
+    }
+    if (hovered?.kind === "object" && showObjects) {
+      const object = scene.objects.find((candidate) => candidate.name === hovered.name);
+      return object
+        ? {
+            label: `Object ${object.name} · ${object.typeName} · center`,
+            frame: object.frame,
+          }
+        : null;
+    }
+    if (hovered?.kind === "magnetic_frame" && showObjects && showBeamFrames) {
+      return {
+        label: `Beam ${hovered.name === "magnetic_entry" ? "entry" : "exit"} frame · ${hovered.object}`,
+        frame: hovered.frame,
+      };
+    }
+    if (hovered?.kind === "curve" && showCurves) {
+      return {
+        label: `Curve ${hovered.name} · s = ${hovered.sample.path.toFixed(3)} m`,
+        frame: hovered.sample.frame,
+      };
+    }
+    if (selection?.kind === "object" && showObjects) {
+      const object = scene.objects.find((candidate) => candidate.name === selection.name);
+      return object
+        ? {
+            label: `Object ${object.name} · ${object.typeName} · center`,
+            frame: object.frame,
+          }
+        : null;
+    }
+    if (selection?.kind === "frame" && showObjects) {
+      const namedFrame = scene.frames.find(
+        (candidate) =>
+          candidate.object === selection.object &&
+          candidate.name === selection.name,
+      );
+      return namedFrame
+        ? {
+            label: `Frame ${namedFrame.object}.${namedFrame.name} · ${namedFrame.typeName}`,
+            frame: namedFrame.frame,
+          }
+        : null;
+    }
+    return null;
+  }, [
+    activeCurveProbe,
+    geometryError,
+    hovered,
+    scene,
+    selection,
+    showBeamFrames,
+    showCurves,
+    showObjects,
+  ]);
+
+  const poseText = useMemo(() => {
+    if (geometryError) return geometryError;
+    if (!poseReadout) return "Hover a named frame, Beam frame, object, or curve to inspect its world pose.";
+    const { frame } = poseReadout;
+    const angles = frameToMadxAngles(frame);
+    const degrees = 180 / Math.PI;
+    const lines = [
+      `X = ${cleanFixed(frame.o[0], 6)} m    Y = ${cleanFixed(frame.o[1], 6)} m    Z = ${cleanFixed(frame.o[2], 6)} m`,
+      `theta = ${cleanFixed(angles.theta * degrees, 5)} deg    phi = ${cleanFixed(angles.phi * degrees, 5)} deg    psi = ${cleanFixed(angles.psi * degrees, 5)} deg`,
+    ];
+    if (selection?.kind === "curve") {
+      lines.unshift(
+        activeCurveProbe
+          ? `Curve = ${activeCurveProbe.curve}    s = ${cleanFixed(activeCurveProbe.sample.path, 6)} m`
+          : `Curve = ${selection.name}    s = unavailable`,
+      );
+    }
+    return lines.join("\n");
+  }, [activeCurveProbe, geometryError, poseReadout, selection]);
+
+  const stationHeading = geometryError
+    ? "Geometry unresolved"
+    : !selectedCurve
+      ? "No reference curve selected"
+      : !showCurves
+        ? "Reference curves are hidden"
+        : activeCurveProbe?.sources.length
+          ? `Snapped to ${stationSourceLabel(activeCurveProbe.sources)}`
+          : "Free curve position";
+  const setCurveLayerVisible = (checked: boolean) => {
+    setShowCurves(checked);
+    if (!checked) {
+      hitTargetsRef.current = hitTargetsRef.current.filter(
+        (target) => target.kind !== "curve_hit",
+      );
+      setHovered((current) => current?.kind === "curve" ? null : current);
+    }
+  };
+
+  const setObjectLayerVisible = (checked: boolean) => {
+    setShowObjects(checked);
+    if (!checked) {
+      hitTargetsRef.current = hitTargetsRef.current.filter(
+        (target) => target.kind === "curve_hit",
+      );
+      setHovered((current) =>
+        current && current.kind !== "curve" ? null : current
+      );
+    }
+  };
+
+  const setBeamFramesVisible = (checked: boolean) => {
+    setShowBeamFrames(checked);
+    if (!checked) {
+      hitTargetsRef.current = hitTargetsRef.current.filter(
+        (target) => target.kind !== "magnetic_frame",
+      );
+      setHovered((current) =>
+        current?.kind === "magnetic_frame" ? null : current
+      );
+    }
+  };
+
+  return (
+    <div className="viewport-shell">
+      <div ref={wrapperRef} className="viewport-stage">
+        <canvas
+          ref={canvasRef}
+          aria-label="Interactive three-dimensional layout view"
+          className={`viewport-canvas mode-${mode}`}
+          onContextMenu={(event) => event.preventDefault()}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerLeave={() => {
+            setHovered(null);
+            dragRef.current = null;
+          }}
+          onPointerUp={onPointerUp}
+        />
+        <canvas
+          ref={overlayRef}
+          aria-hidden="true"
+          className="viewport-overlay"
+        />
+        <div className="viewport-toolbar" aria-label="3D navigation controls">
+          <ToolButton
+            active={mode === "orbit"}
+            label="Orbit"
+            onClick={() => setMode("orbit")}
+          >
+            <RotateCcw />
+          </ToolButton>
+          <ToolButton
+            active={mode === "pan"}
+            label="Pan"
+            onClick={() => setMode("pan")}
+          >
+            <Move />
+          </ToolButton>
+          <ToolButton
+            active={mode === "select"}
+            label="Select"
+            onClick={() => setMode("select")}
+          >
+            <MousePointer2 />
+          </ToolButton>
+          <span className="toolbar-separator" />
+          <ToolButton label="Fit layout" onClick={fit}>
+            <Focus />
+          </ToolButton>
+        </div>
+        <div className="viewport-layers" aria-label="Viewer layers">
+          <div className="viewport-layer-toggle">
+            <Switch
+              aria-label="Show reference curves"
+              checked={showCurves}
+              id="viewer-curves-visible"
+              onCheckedChange={setCurveLayerVisible}
+              size="sm"
+            />
+            <label htmlFor="viewer-curves-visible">Curves</label>
+          </div>
+          <div className="viewport-layer-toggle">
+            <Switch
+              aria-label="Show objects"
+              checked={showObjects}
+              id="viewer-objects-visible"
+              onCheckedChange={setObjectLayerVisible}
+              size="sm"
+            />
+            <label htmlFor="viewer-objects-visible">Objects</label>
+          </div>
+          <div className="viewport-layer-toggle">
+            <Switch
+              aria-label="Show Beam entry and exit frames"
+              checked={showBeamFrames}
+              id="viewer-beam-frames-visible"
+              onCheckedChange={setBeamFramesVisible}
+              size="sm"
+            />
+            <label htmlFor="viewer-beam-frames-visible">Beam entry/exit</label>
+          </div>
+        </div>
+        <svg
+          aria-label="World axis orientation"
+          className="viewport-axis-marker"
+          role="img"
+          viewBox="0 0 76 76"
+        >
+          <circle className="axis-marker-backdrop" cx="38" cy="38" r="34" />
+          {worldAxes.axes.map((axis) => {
+            const projectedLength = Math.hypot(
+              axis.x - worldAxes.origin.x,
+              axis.y - worldAxes.origin.y,
+            );
+            return (
+              <g
+                data-axis={axis.label.toLowerCase()}
+                key={axis.label}
+                opacity={axis.depth > 0.15 ? 0.72 : 1}
+                style={{ color: axis.color }}
+              >
+                <line
+                  x1={worldAxes.origin.x}
+                  y1={worldAxes.origin.y}
+                  x2={axis.x}
+                  y2={axis.y}
+                />
+                {projectedLength < 4 ? (
+                  <circle className="axis-marker-end-on" cx={axis.x} cy={axis.y} r="4" />
+                ) : (
+                  <circle cx={axis.x} cy={axis.y} r="2.4" />
+                )}
+                <text
+                  x={axis.x + (axis.x >= worldAxes.origin.x ? 5 : -5)}
+                  y={axis.y + (axis.y >= worldAxes.origin.y ? 10 : -5)}
+                  textAnchor={axis.x >= worldAxes.origin.x ? "start" : "end"}
+                >
+                  {axis.label}
+                </text>
+              </g>
+            );
+          })}
+          <circle className="axis-marker-origin" cx="38" cy="38" r="2.7" />
+        </svg>
+        <div className="viewport-hint">
+          Drag to {mode} · wheel to zoom · click again or empty space to clear
+        </div>
+        {geometryError && (
+          <div className="viewport-error" role="alert">
+            <strong>Cannot resolve layout geometry</strong>
+            <span>{geometryError}</span>
+          </div>
+        )}
+        {!geometryError && hovered && (
+          <div
+            className="viewport-label"
+            style={{
+              left: Math.min(size.width - 170, hovered.x + 14),
+              top: Math.max(12, hovered.y - 16),
+            }}
+          >
+            <span>{hovered.kind.replace("_", " ")}</span>
+            <strong>{hoverLabel}</strong>
+            {hovered.kind === "curve" && (
+              <small>
+                segment {hovered.segmentIndex + 1} · s = {hovered.sample.path.toFixed(3)}
+              </small>
+            )}
+            {hovered.kind === "curve" && hovered.snappedTo && (
+              <small>snap · {hovered.snappedTo}</small>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="viewport-readouts">
+        <div
+          aria-atomic="true"
+          aria-live="polite"
+          className="coordinate-readout"
+        >
+          <div className="coordinate-readout-heading">
+            <span>
+              {selection?.kind === "curve"
+                ? "World pose · Curve station"
+                : "World pose"}
+            </span>
+            <strong
+              title={selection?.kind === "curve" ? stationHeading : poseReadout?.label}
+            >
+              {geometryError
+                ? "Geometry unresolved"
+                : selection?.kind === "curve"
+                  ? stationHeading
+                  : poseReadout?.label ?? "Nothing highlighted"}
+            </strong>
+          </div>
+          <textarea
+            aria-label={selection?.kind === "curve"
+              ? "Selected reference curve station, world coordinates, and MAD-X Euler angles"
+              : "World coordinates and MAD-X Euler angles"}
+            className="coordinate-readout-text"
+            readOnly
+            rows={selection?.kind === "curve" ? 3 : 2}
+            value={poseText}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
