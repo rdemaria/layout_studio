@@ -2,8 +2,8 @@
 
 The classes in this module deliberately separate editable symbolic data from
 evaluated geometry.  Importing :mod:`layout_studio` therefore has no VTK (or
-other viewer) dependency; evaluation and plotting are loaded lazily by the
-small delegation methods near the end of the entity classes.
+other GUI) dependency; plotting backends are loaded by the small delegation
+methods near the end of the entity classes.
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ from .errors import (
     UnknownEntityError,
     ValidationError,
 )
+from .resolver import Resolver
 
 OperationName = Literal["tx", "ty", "ts", "tt", "rx", "ry", "rs"]
 RootKind = Literal["curve", "type", "object"]
@@ -1320,9 +1321,7 @@ class Position(OwnedValue):
             "target": target_name,
             "reference": self.reference.reference.to_dict(),
         }
-        if self.reference_curve_name is not None and any(
-            op.name == "ts" for op in self.operations
-        ):
+        if self.reference_curve_name is not None:
             result["reference_curve"] = self.reference_curve_name
         result["transformation"] = [
             operation.to_dict() for operation in self.operations
@@ -1661,6 +1660,34 @@ class Curve(OwnedValue):
             selection=selection,
             show=show,
             figsize=figsize,
+            **viewer_kwargs,
+        )
+
+    def plot_web(
+        self,
+        *,
+        selection: object | None = None,
+        fit: object | None = None,
+        show: bool = False,
+        width: str | int = "100%",
+        height: int = 720,
+        visibility: Mapping[str, bool] | None = None,
+        **viewer_kwargs: object,
+    ) -> Any:
+        """Open this curve in the browser viewer with strict curve scope."""
+
+        layout = _require_bound(self)
+        from .webviewer import WebViewer
+
+        return WebViewer(
+            layout,
+            scope=self,
+            selection=selection,
+            fit=fit,
+            visibility=visibility,
+            show=show,
+            width=width,
+            height=height,
             **viewer_kwargs,
         )
 
@@ -2117,6 +2144,45 @@ class Object(OwnedValue):
             **viewer_kwargs,
         )
 
+    def plot_web(
+        self,
+        *,
+        beam_frames: bool = True,
+        frames: bool = True,
+        selection: object | None = None,
+        fit: object | None = None,
+        show: bool = False,
+        width: str | int = "100%",
+        height: int = 720,
+        visibility: Mapping[str, bool] | None = None,
+        **viewer_kwargs: object,
+    ) -> Any:
+        """Open this object in the browser viewer with strict object scope."""
+
+        layout = _require_bound(self)
+        from .webviewer import WebViewer
+
+        layers = {
+            "curves": False,
+            "objects": True,
+            "beam_frames": bool(beam_frames),
+            "frames": bool(frames),
+        }
+        if visibility is not None:
+            layers.update(visibility)
+
+        return WebViewer(
+            layout,
+            scope=self,
+            selection=selection,
+            fit=fit,
+            visibility=layers,
+            show=show,
+            width=width,
+            height=height,
+            **viewer_kwargs,
+        )
+
     def _clone_detached(self) -> Object:
         return Object(
             type=_clone_link(self._type),  # type: ignore[arg-type]
@@ -2185,6 +2251,18 @@ class Layout(JsonValue):
     @property
     def objects(self) -> EntityMap[Object]:
         return self._objects
+
+    def resolver(self) -> Resolver:
+        """Create an analytic evaluator for this layout.
+
+        Use the returned object as a context manager when resolving many
+        entities.  Validation and dependency caches are then shared for the
+        duration of the context instead of being rebuilt by every call.
+        """
+
+        from .resolver import Resolver
+
+        return Resolver(self)
 
     @classmethod
     def from_dict(cls, dct: object) -> Layout:
@@ -2869,8 +2947,8 @@ class Layout(JsonValue):
     def plot3d(
         self,
         *,
-        curves: bool = True,
-        objects: bool = True,
+        curves: bool | Curve | str | Iterable[Curve | str] = True,
+        objects: bool | Object | str | Iterable[Object | str] = True,
         beam_frames: bool = False,
         selection: SearchEntity | None = None,
         show: bool = True,
@@ -2878,7 +2956,6 @@ class Layout(JsonValue):
         window_size: tuple[int, int] = (1000, 720),
         **viewer_kwargs: object,
     ) -> Any:
-        self.validate()
         from .viewer import LayoutViewer
 
         return LayoutViewer(
@@ -2897,15 +2974,14 @@ class Layout(JsonValue):
         self,
         projection: str = "xy",
         *,
-        curves: bool = True,
-        objects: bool = True,
+        curves: bool | Curve | str | Iterable[Curve | str] = True,
+        objects: bool | Object | str | Iterable[Object | str] = True,
         beam_frames: bool = False,
         selection: SearchEntity | None = None,
         show: bool = True,
         figsize: tuple[float, float] = (10.0, 7.2),
         **viewer_kwargs: object,
     ) -> Any:
-        self.validate()
         from .viewer2d import LayoutViewer2D
 
         return LayoutViewer2D(
@@ -2917,6 +2993,46 @@ class Layout(JsonValue):
             selection=selection,
             show=show,
             figsize=figsize,
+            **viewer_kwargs,
+        )
+
+    def plot_web(
+        self,
+        *,
+        curves: bool = True,
+        objects: bool = True,
+        beam_frames: bool = False,
+        frames: bool = False,
+        selection: object | None = None,
+        fit: object | None = None,
+        show: bool = False,
+        width: str | int = "100%",
+        height: int = 720,
+        visibility: Mapping[str, bool] | None = None,
+        **viewer_kwargs: object,
+    ) -> Any:
+        """Open the interactive web viewer under Python control."""
+
+        from .webviewer import WebViewer
+
+        layers = {
+            "curves": bool(curves),
+            "objects": bool(objects),
+            "beam_frames": bool(beam_frames),
+            "frames": bool(frames),
+        }
+        if visibility is not None:
+            layers.update(visibility)
+
+        return WebViewer(
+            self,
+            scope=self,
+            selection=selection,
+            fit=fit,
+            visibility=layers,
+            show=show,
+            width=width,
+            height=height,
             **viewer_kwargs,
         )
 

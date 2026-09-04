@@ -5,6 +5,7 @@ import math
 import numpy as np
 import pytest
 from conftest import assert_pose
+
 from layout_studio import (
     AmbiguousStationError,
     Box,
@@ -15,7 +16,7 @@ from layout_studio import (
     Segment,
     StationOutOfRangeError,
 )
-from layout_studio.resolver import Resolver
+from layout_studio.resolver import Resolver, swept_type_mesh
 
 
 def add_curve(layout, name, segments, *, starting_frame=None):
@@ -43,6 +44,60 @@ def add_type(
         magnetic_center=magnetic_center or Frame(),
         magnetic_length=magnetic_length,
     )
+
+
+def test_explicit_resolver_context_reuses_validation_and_geometry_caches():
+    layout = Layout()
+    curve = add_curve(layout, "line", [Segment(10.0)])
+    type_ = add_type(layout)
+    object_ = layout.new_object("Q1", type=type_, position=Position(curve).ts(2.0))
+    resolver = layout.resolver()
+    calls = 0
+    validate = layout.validate
+
+    def counted_validate():
+        nonlocal calls
+        calls += 1
+        return validate()
+
+    layout.validate = counted_validate  # type: ignore[method-assign]
+    with resolver:
+        first = resolver.object_frame(object_)
+        with resolver:
+            second = resolver.object_frame(object_)
+
+    assert calls == 1
+    np.testing.assert_allclose(first.matrix, second.matrix)
+    assert resolver._object_centers == {}
+    assert resolver._curve_data_cache == {}
+
+    resolver.object_frame(object_)
+    assert calls == 2
+
+
+def test_viewers_can_request_a_lightweight_mesh_without_public_metadata():
+    type_ = add_type(Layout())
+
+    full = swept_type_mesh(type_, resolution=2)
+    lean = swept_type_mesh(type_, resolution=2, include_metadata=False)
+    lean_again = swept_type_mesh(type_, resolution=2, include_metadata=False)
+
+    metadata = {
+        "normals",
+        "stations",
+        "section_indices",
+        "centerline_frames",
+    }
+    assert metadata <= full.keys()
+    assert not metadata & lean.keys()
+    assert lean["faces"] is lean_again["faces"]
+    assert not lean["faces"].flags.writeable
+    assert full["faces"].flags.writeable
+    with pytest.raises(ValueError):
+        lean["faces"].setflags(write=True)
+
+    unpoisoned = swept_type_mesh(type_, resolution=2, include_metadata=False)
+    np.testing.assert_array_equal(unpoisoned["faces"], lean["faces"])
 
 
 def test_straight_curve_frame_and_pose_matrix():

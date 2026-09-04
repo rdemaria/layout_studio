@@ -19,8 +19,14 @@ from bisect import bisect_right
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import lru_cache
 from math import atan2, ceil, cos, floor, hypot, isfinite, pi, sin
 from typing import TYPE_CHECKING, Any
+
+try:  # Python 3.10 compatibility
+    from typing import Self
+except ImportError:  # pragma: no cover - exercised only on Python 3.10
+    from typing_extensions import Self
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
@@ -694,8 +700,10 @@ class Resolver:
             int, tuple[list[Any], list[float], list[FloatMatrix]]
         ] = {}
         self._curve_station_geometry_cache: dict[int, _CurveStationGeometry] = {}
+        self._station_inference_cache: dict[tuple[int, bytes], float] = {}
         self._object_centers: dict[int, FloatMatrix] = {}
         self._active: list[tuple[str, str]] = []
+        self._explicit_sessions: list[Any] = []
 
     @property
     def _curves(self) -> Any:
@@ -723,15 +731,53 @@ class Resolver:
             self._curve_starts = {}
             self._curve_data_cache = {}
             self._curve_station_geometry_cache = {}
+            self._station_inference_cache = {}
             self._object_centers = {}
             self._active = []
             if self.layout is not None:
-                self.validate()
+                layout_validate = getattr(self.layout, "validate", None)
+                if callable(layout_validate):
+                    # Honour the model's public validation contract (including
+                    # subclass overrides) without validating twice in plots.
+                    layout_validate()
+                else:
+                    self.validate()
         self._depth += 1
         try:
             yield
         finally:
             self._depth -= 1
+            if outermost:
+                # An explicit Resolver may outlive a very large snapshot.
+                # Its session caches are useful only while the context is
+                # active, so release model and geometry references promptly.
+                self._curve_starts.clear()
+                self._curve_data_cache.clear()
+                self._curve_station_geometry_cache.clear()
+                self._station_inference_cache.clear()
+                self._object_centers.clear()
+                self._active.clear()
+
+    def __enter__(self) -> Self:
+        """Keep validation and memoized geometry alive across public calls.
+
+        A resolver normally starts a fresh evaluation session for each method,
+        ensuring model edits are observed immediately.  An explicit context is
+        the efficient option for evaluating many frames from one snapshot::
+
+            with layout.resolver() as resolver:
+                poses = [resolver.object_frame(obj) for obj in layout.objects.values()]
+        """
+
+        session = self._session()
+        session.__enter__()
+        self._explicit_sessions.append(session)
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        if not self._explicit_sessions:
+            raise RuntimeError("resolver context exit without a matching enter")
+        self._explicit_sessions.pop().__exit__(*exc_info)
 
     @contextmanager
     def _resolving(
@@ -1442,6 +1488,10 @@ class Resolver:
 
     def _infer_station(self, curve: Any, point: Any) -> float:
         point = _point3(point)
+        cache_key = (id(curve), np.ascontiguousarray(point).tobytes())
+        cached = self._station_inference_cache.get(cache_key)
+        if cached is not None:
+            return cached
         geometry = self._curve_station_geometry(curve)
         boundaries = geometry.boundaries
         total = float(boundaries[-1])
@@ -1568,9 +1618,10 @@ class Resolver:
             )
         station = closest[0]
         if abs(station) <= path_tolerance:
-            return 0.0
-        if abs(station - total) <= path_tolerance:
-            return total
+            station = 0.0
+        elif abs(station - total) <= path_tolerance:
+            station = total
+        self._station_inference_cache[cache_key] = station
         return station
 
     def infer_station(self, curve: Curve | str, point: ArrayLike | Pose) -> float:
@@ -1639,8 +1690,16 @@ class Resolver:
         object_: Object | str,
         resolution: int = 32,
         radial_resolution: int = 24,
+        *,
+        include_metadata: bool = True,
     ) -> dict[str, Any]:
-        """Return a triangulated world-space skin for an object's swept shape."""
+        """Return a triangulated world-space skin for an object's swept shape.
+
+        Set ``include_metadata=False`` when only vertices and faces are needed.
+        This avoids calculating vertex normals and retaining sampling arrays,
+        which is useful for large viewer scenes.  The default preserves the
+        complete historical result.
+        """
 
         with self._session():
             resolved = self._resolve_object(object_)
@@ -1652,6 +1711,7 @@ class Resolver:
                 self._object_center_matrix(resolved),
                 resolution=resolution,
                 radial_resolution=radial_resolution,
+                include_metadata=include_metadata,
             )
             mesh.update(
                 {
@@ -1688,6 +1748,7 @@ def _swept_mesh(
     *,
     resolution: int,
     radial_resolution: int,
+    include_metadata: bool = True,
 ) -> dict[str, Any]:
     try:
         resolution = int(resolution)
@@ -1702,81 +1763,118 @@ def _swept_mesh(
     center = _matrix4(center_matrix)
     dz, curvature, roll = shape["dz"], shape["curvature"], shape["roll"]
     stations = np.linspace(-0.5 * dz, 0.5 * dz, resolution + 1)
-    frames = [advance(center, float(station), curvature, roll) for station in stations]
-    vertices: list[FloatVector] = []
-    vertex_stations: list[float] = []
-    section_indices: list[int] = []
-    faces: list[tuple[int, int, int]] = []
+    frames = np.stack(
+        [advance(center, float(station), curvature, roll) for station in stations]
+    )
 
     if kind == "box":
         half_x, half_y = 0.5 * shape["dx"], 0.5 * shape["dy"]
-        cross_section = (
-            (-half_x, -half_y),
-            (half_x, -half_y),
-            (half_x, half_y),
-            (-half_x, half_y),
+        cross_section = np.asarray(
+            (
+                (-half_x, -half_y),
+                (half_x, -half_y),
+                (half_x, half_y),
+                (-half_x, half_y),
+            ),
+            dtype=float,
         )
         ring_size = 4
-        for section, (station, frame) in enumerate(zip(stations, frames)):
-            for x, y in cross_section:
-                vertices.append(frame[:3, 3] + x * frame[:3, 0] + y * frame[:3, 1])
-                vertex_stations.append(float(station))
-                section_indices.append(section)
-        for section in range(resolution):
-            first, second = section * ring_size, (section + 1) * ring_size
-            for side in range(ring_size):
-                nxt = (side + 1) % ring_size
-                faces.append((first + side, first + nxt, second + nxt))
-                faces.append((first + side, second + nxt, second + side))
-        # The winding points out of the start and end planes respectively.
-        faces.extend(((0, 2, 1), (0, 3, 2)))
-        end = resolution * ring_size
-        faces.extend(((end, end + 1, end + 2), (end, end + 2, end + 3)))
+        vertex_array = (
+            frames[:, None, :3, 3]
+            + cross_section[None, :, 0, None] * frames[:, None, :3, 0]
+            + cross_section[None, :, 1, None] * frames[:, None, :3, 1]
+        ).reshape((-1, 3))
     else:
         radius = shape["r"]
         ring_size = radial_resolution
         angles = np.linspace(0.0, 2.0 * pi, ring_size, endpoint=False)
-        for section, (station, frame) in enumerate(zip(stations, frames)):
-            for angle in angles:
-                vertices.append(
-                    frame[:3, 3]
-                    + radius * cos(float(angle)) * frame[:3, 0]
-                    + radius * sin(float(angle)) * frame[:3, 1]
-                )
-                vertex_stations.append(float(station))
-                section_indices.append(section)
-        for section in range(resolution):
-            first, second = section * ring_size, (section + 1) * ring_size
-            for side in range(ring_size):
-                nxt = (side + 1) % ring_size
-                faces.append((first + side, first + nxt, second + nxt))
-                faces.append((first + side, second + nxt, second + side))
-        start_center = len(vertices)
-        vertices.append(frames[0][:3, 3].copy())
-        vertex_stations.append(float(stations[0]))
-        section_indices.append(0)
-        end_center = len(vertices)
-        vertices.append(frames[-1][:3, 3].copy())
-        vertex_stations.append(float(stations[-1]))
-        section_indices.append(resolution)
+        cosines = radius * np.cos(angles)
+        sines = radius * np.sin(angles)
+        rings = (
+            frames[:, None, :3, 3]
+            + cosines[None, :, None] * frames[:, None, :3, 0]
+            + sines[None, :, None] * frames[:, None, :3, 1]
+        ).reshape((-1, 3))
+        vertex_array = np.concatenate(
+            (rings, frames[[0, -1], :3, 3]),
+            axis=0,
+        )
+
+    cached_faces = _swept_mesh_faces(kind, resolution, ring_size)
+    # Public mesh results historically expose mutable arrays. Viewers opt out
+    # of metadata and can safely share the immutable topology cache.
+    face_array = cached_faces.copy() if include_metadata else cached_faces
+    result: dict[str, Any] = {
+        "vertices": vertex_array,
+        "faces": face_array,
+        "kind": kind,
+    }
+    if include_metadata:
+        vertex_stations = np.repeat(stations, ring_size)
+        section_indices = np.repeat(
+            np.arange(resolution + 1, dtype=np.int64), ring_size
+        )
+        if kind == "cylinder":
+            vertex_stations = np.concatenate((vertex_stations, stations[[0, -1]]))
+            section_indices = np.concatenate(
+                (section_indices, np.asarray([0, resolution], dtype=np.int64))
+            )
+        result.update(
+            {
+                "normals": _mesh_normals(vertex_array, face_array),
+                "stations": vertex_stations,
+                "section_indices": section_indices,
+                "centerline_stations": stations,
+                "centerline_frames": frames,
+            }
+        )
+    return result
+
+
+def _swept_mesh_faces(kind: str, resolution: int, ring_size: int) -> NDArray[np.int64]:
+    """Return immutable topology, caching only bounded viewer-sized meshes."""
+
+    triangle_count = 2 * resolution * ring_size + 2 * ring_size
+    if triangle_count > 100_000:
+        return _build_swept_mesh_faces(kind, resolution, ring_size)
+    return _cached_swept_mesh_faces(kind, resolution, ring_size)
+
+
+@lru_cache(maxsize=64)
+def _cached_swept_mesh_faces(
+    kind: str, resolution: int, ring_size: int
+) -> NDArray[np.int64]:
+    return _build_swept_mesh_faces(kind, resolution, ring_size)
+
+
+def _build_swept_mesh_faces(
+    kind: str, resolution: int, ring_size: int
+) -> NDArray[np.int64]:
+    """Build topology whose ultimate buffer is immutable Python bytes."""
+
+    faces: list[tuple[int, int, int]] = []
+    for section in range(resolution):
+        first, second = section * ring_size, (section + 1) * ring_size
+        for side in range(ring_size):
+            nxt = (side + 1) % ring_size
+            faces.append((first + side, first + nxt, second + nxt))
+            faces.append((first + side, second + nxt, second + side))
+    if kind == "box":
+        faces.extend(((0, 2, 1), (0, 3, 2)))
+        end = resolution * ring_size
+        faces.extend(((end, end + 1, end + 2), (end, end + 2, end + 3)))
+    else:
+        start_center = (resolution + 1) * ring_size
+        end_center = start_center + 1
         end_ring = resolution * ring_size
         for side in range(ring_size):
             nxt = (side + 1) % ring_size
             faces.append((start_center, nxt, side))
             faces.append((end_center, end_ring + side, end_ring + nxt))
-
-    vertex_array = np.asarray(vertices, dtype=float)
-    face_array = np.asarray(faces, dtype=np.int64).reshape((-1, 3))
-    return {
-        "vertices": vertex_array,
-        "faces": face_array,
-        "normals": _mesh_normals(vertex_array, face_array),
-        "stations": np.asarray(vertex_stations, dtype=float),
-        "section_indices": np.asarray(section_indices, dtype=np.int64),
-        "kind": kind,
-        "centerline_stations": stations,
-        "centerline_frames": np.stack(frames),
-    }
+    result = np.asarray(faces, dtype=np.int64).reshape((-1, 3))
+    # A readonly ndarray that owns its buffer can be made writable again.
+    # A bytes-backed array keeps shared cache entries immutable to callers.
+    return np.frombuffer(result.tobytes(), dtype=np.int64).reshape((-1, 3))
 
 
 def _resolver_for(entity: Any, resolver: Resolver | None) -> Resolver:
@@ -1806,6 +1904,7 @@ def swept_type_mesh(
     radial_resolution: int = 24,
     *,
     matrix: ArrayLike | None = None,
+    include_metadata: bool = True,
 ) -> dict[str, Any]:
     """Triangulate a type's swept shape in type-local or supplied coordinates."""
 
@@ -1814,6 +1913,7 @@ def swept_type_mesh(
         identity_matrix() if matrix is None else matrix,
         resolution=resolution,
         radial_resolution=radial_resolution,
+        include_metadata=include_metadata,
     )
     mesh.update(
         {
@@ -1831,9 +1931,13 @@ def swept_object_mesh(
     radial_resolution: int = 24,
     *,
     resolver: Resolver | None = None,
+    include_metadata: bool = True,
 ) -> dict[str, Any]:
     """Standalone wrapper for :meth:`Resolver.swept_object_mesh`."""
 
     return _resolver_for(object_, resolver).swept_object_mesh(
-        object_, resolution=resolution, radial_resolution=radial_resolution
+        object_,
+        resolution=resolution,
+        radial_resolution=radial_resolution,
+        include_metadata=include_metadata,
     )

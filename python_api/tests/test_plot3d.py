@@ -4,7 +4,9 @@ import os
 import sys
 import types
 
+import numpy as np
 import pytest
+
 from layout_studio import AttachmentError, Box, Frame, Layout, Position, Segment
 
 
@@ -225,6 +227,81 @@ def test_vtk_reference_axes_follow_camera_scale_without_rendering():
     assert viewer._hover_display_axes is None
 
 
+def test_vtk_fit_entity_preserves_direction_and_home_restores_it():
+    pytest.importorskip("vtkmodules")
+
+    layout, _curve, object_ = populated_layout()
+    viewer = layout.plot3d(show=False, off_screen=True)
+    try:
+        viewer.camera.Azimuth(31.0)
+        viewer.camera.Elevation(-17.0)
+        viewer.camera.Roll(23.0)
+
+        def direction():
+            position = np.asarray(viewer.camera.GetPosition())
+            focal = np.asarray(viewer.camera.GetFocalPoint())
+            value = position - focal
+            return value / np.linalg.norm(value)
+
+        before = direction()
+        view_up_before = np.asarray(viewer.camera.GetViewUp())
+        viewer.fit(object_)
+        np.testing.assert_allclose(direction(), before, atol=1e-12, rtol=0.0)
+        np.testing.assert_allclose(
+            viewer.camera.GetViewUp(), view_up_before, atol=1e-12, rtol=0.0
+        )
+
+        viewer.home(object_)
+        assert not np.allclose(direction(), before, atol=1e-6, rtol=0.0)
+    finally:
+        viewer.close()
+
+
+def test_vtk_camera_interaction_temporarily_disables_depth_peeling():
+    from layout_studio.viewer import LayoutViewer
+
+    calls = []
+
+    class Renderer:
+        enabled = True
+
+        def GetUseDepthPeeling(self):
+            return self.enabled
+
+        def SetUseDepthPeeling(self, enabled):
+            self.enabled = bool(enabled)
+            calls.append(self.enabled)
+
+    viewer = LayoutViewer.__new__(LayoutViewer)
+    viewer.renderer = Renderer()
+    viewer._camera_interacting = False
+    viewer._restore_depth_peeling = False
+    viewer._last_hover_position = (1, 2)
+    viewer._request_render = lambda: calls.append("render")
+
+    viewer._on_interaction_start(None, "StartInteractionEvent")
+    assert viewer._camera_interacting
+    assert calls == [False]
+
+    viewer._on_interaction_end(None, "EndInteractionEvent")
+    assert not viewer._camera_interacting
+    assert viewer._last_hover_position is None
+    assert calls == [False, True, "render"]
+
+
+def test_vtk_escape_uses_full_selection_cleanup():
+    from layout_studio.viewer import LayoutViewer
+
+    calls = []
+    viewer = LayoutViewer.__new__(LayoutViewer)
+    viewer.clear_selection = lambda: calls.append("clear")
+    caller = types.SimpleNamespace(GetKeySym=lambda: "Escape")
+
+    viewer._on_key_press(caller, "KeyPressEvent")
+
+    assert calls == ["clear"]
+
+
 def test_real_vtk_off_screen_smoke_only_with_a_known_render_backend():
     pytest.importorskip("vtkmodules")
 
@@ -379,3 +456,46 @@ def test_real_vtk_close_releases_scene_and_model_without_rendering():
     # The test itself keeps these alive; the viewer no longer does.
     assert curve.layout is layout
     assert object_.layout is layout
+
+
+def test_vtk_partial_constructor_failure_runs_best_effort_cleanup(monkeypatch):
+    pytest.importorskip("vtkmodules")
+    from layout_studio.viewer import LayoutViewer
+
+    layout, _curve, _object = populated_layout()
+    captured = {}
+
+    def fail_after_window(self):
+        captured["viewer"] = self
+        raise RuntimeError("synthetic geometry failure")
+
+    monkeypatch.setattr(LayoutViewer, "_build_entity_geometry", fail_after_window)
+    with pytest.raises(RuntimeError, match="synthetic geometry failure"):
+        LayoutViewer(layout, show=False, off_screen=True)
+
+    viewer = captured["viewer"]
+    assert viewer._closed
+    assert viewer._resolver_context is None
+    assert viewer.resolver is None
+    assert viewer.interactor.GetRenderWindow() is None
+
+
+def test_vtk_object_batches_obey_a_memory_budget(monkeypatch):
+    import layout_studio.viewer as viewer_module
+    from layout_studio.viewer import LayoutViewer
+
+    monkeypatch.setattr(viewer_module, "_OBJECT_BATCH_BYTE_BUDGET", 100)
+    visual = types.SimpleNamespace(
+        vertices=np.empty((1, 3), dtype=np.float64),
+        faces=np.empty((1, 3), dtype=np.int64),
+    )
+    viewer = LayoutViewer.__new__(LayoutViewer)
+    viewer.object_batch_size = 4096
+    viewer._pending_object_visuals = [visual, visual, visual]
+    batches = []
+    viewer._add_object_batch = lambda batch: batches.append(len(batch))
+
+    viewer._finish_object_batches()
+
+    assert batches == [1, 1, 1]
+    assert viewer._pending_object_visuals == []

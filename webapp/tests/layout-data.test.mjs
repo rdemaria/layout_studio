@@ -1168,6 +1168,20 @@ test("sweeps box and cylinder cross-sections along their curved centrelines", ()
   }
 });
 
+test("shares immutable topology between compatible object meshes", () => {
+  const scene = buildScene(parseLayout(canonicalLayout()));
+  const q1 = scene.objects.find((object) => object.name === "Q1");
+  const q2 = scene.objects.find((object) => object.name === "Q2");
+  assert.ok(q1);
+  assert.ok(q2);
+  assert.strictEqual(q1.faces, q2.faces);
+  assert.strictEqual(q1.edges, q2.edges);
+  assert.ok(Object.isFrozen(q1.faces));
+  assert.ok(Object.isFrozen(q1.edges));
+  assert.ok(q1.faces.every(Object.isFrozen));
+  assert.ok(q1.edges.every(Object.isFrozen));
+});
+
 test("aligns a curved target frame by inverting its local path", () => {
   const input = {
     reference_curves: {

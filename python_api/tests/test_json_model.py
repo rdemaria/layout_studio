@@ -5,6 +5,7 @@ import json
 import math
 
 import pytest
+
 from layout_studio import (
     AttachmentError,
     Box,
@@ -31,6 +32,19 @@ def test_canonical_dict_and_json_round_trip(canonical_layout_dict):
         Layout.from_json(text=layout.to_json(str).encode()).to_dict()
         == canonical_layout_dict
     )
+
+
+def test_inert_reference_curve_is_preserved_in_json(canonical_layout_dict):
+    position = canonical_layout_dict["objects"]["Q1"]["position"]
+    position["reference"] = {"kind": "world"}
+    position["reference_curve"] = "main"
+    position["transformation"] = []
+
+    layout = Layout.from_dict(canonical_layout_dict)
+    layout.validate()
+
+    serialized = layout.to_dict()
+    assert serialized["objects"]["Q1"]["position"]["reference_curve"] == "main"
 
 
 def test_json_local_paths_and_gzip(tmp_path, canonical_layout_dict):

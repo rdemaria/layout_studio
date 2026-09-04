@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box as BoxIcon,
   ChevronDown,
@@ -82,8 +82,16 @@ import { DependencyTree } from "./dependency-tree";
 import {
   LayoutViewport,
   toggleViewerSelection,
+  type ViewportCommand,
   type ViewportFitRequest,
 } from "./layout-viewport";
+import type { SceneScope } from "./layout-geometry";
+import {
+  installPythonBridge,
+  type PythonBridgeCommand,
+  type PythonBridgeController,
+  type PythonBridgeHandlers,
+} from "./python-bridge";
 import {
   parseLayoutUrlList,
   resolveLayoutUrl,
@@ -97,6 +105,95 @@ type Status = {
 
 const LARGE_SEGMENT_COUNT = 200;
 const LARGE_FRAME_COUNT = 200;
+
+type ViewportCommandBody = ViewportCommand extends infer Command
+  ? Command extends ViewportCommand
+    ? Omit<Command, "id">
+    : never
+  : never;
+
+type PendingViewportCommand = {
+  command: ViewportCommand;
+  resolve: () => void;
+  reject: (error: Error) => void;
+};
+
+type LoadValueOptions = {
+  preserveViewport?: boolean;
+  scope?: SceneScope;
+};
+
+function sameSelection(a: SelectedEntity, b: SelectedEntity): boolean {
+  if (!a || !b) return a === b;
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "frame" && b.kind === "frame") {
+    return a.object === b.object && a.name === b.name;
+  }
+  if (a.kind === "curve" && b.kind === "curve") {
+    return a.name === b.name && a.segmentIndex === b.segmentIndex;
+  }
+  return a.kind === "object" && b.kind === "object" && a.name === b.name;
+}
+
+function sameScope(a: SceneScope, b: SceneScope): boolean {
+  return a.kind === b.kind &&
+    (a.kind === "layout" || (b.kind !== "layout" && a.name === b.name));
+}
+
+function selectionIsInScope(
+  selection: SelectedEntity,
+  scope: SceneScope,
+): boolean {
+  if (!selection || scope.kind === "layout") return true;
+  if (scope.kind === "curve") {
+    return selection.kind === "curve" && selection.name === scope.name;
+  }
+  return selection.kind === "object"
+    ? selection.name === scope.name
+    : selection.kind === "frame" && selection.object === scope.name;
+}
+
+function validateScope(layout: LayoutData, scope: SceneScope): void {
+  if (
+    scope.kind === "curve" &&
+    !Object.hasOwn(layout.reference_curves, scope.name)
+  ) {
+    throw new Error(`Unknown reference curve: ${scope.name}`);
+  }
+  if (scope.kind === "object" && !Object.hasOwn(layout.objects, scope.name)) {
+    throw new Error(`Unknown object: ${scope.name}`);
+  }
+}
+
+function selectionExistsInLayout(
+  selection: SelectedEntity,
+  layout: LayoutData,
+): boolean {
+  if (!selection) return true;
+  if (selection.kind === "curve") {
+    const curve = layout.reference_curves[selection.name];
+    return Boolean(
+      curve &&
+      (selection.segmentIndex === undefined ||
+        selection.segmentIndex < curve.segments.length),
+    );
+  }
+  const objectName =
+    selection.kind === "object" ? selection.name : selection.object;
+  const object = layout.objects[objectName];
+  if (!object) return false;
+  if (selection.kind === "object") return true;
+  const type = layout.types[object.type];
+  return Boolean(type && typeFrameNames(type).includes(selection.name));
+}
+
+function fitTargetIsInScope(
+  target: Extract<PythonBridgeCommand, { command: "fit" }>["target"],
+  scope: SceneScope,
+): boolean {
+  if (target.kind === "layout" || scope.kind === "layout") return true;
+  return target.kind === scope.kind && target.name === scope.name;
+}
 
 export default function Home() {
   const [layout, setLayout] = useState<LayoutData>(() =>
@@ -116,6 +213,10 @@ export default function Home() {
   const [viewerRevision, setViewerRevision] = useState(0);
   const [viewportFitRequest, setViewportFitRequest] =
     useState<ViewportFitRequest | null>(null);
+  const [viewportCommand, setViewportCommand] =
+    useState<ViewportCommand | null>(null);
+  const [viewportScope, setViewportScope] =
+    useState<SceneScope>({ kind: "layout" });
   const [selection, setSelection] = useState<SelectedEntity>({
     kind: "object",
     name: "QF1",
@@ -130,6 +231,12 @@ export default function Home() {
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const viewportFitIdRef = useRef(0);
+  const viewportCommandIdRef = useRef(0);
+  const viewportCommandQueueRef = useRef<PendingViewportCommand[]>([]);
+  const viewportScopeRef = useRef<SceneScope>(viewportScope);
+  const layoutRef = useRef(layout);
+  const pythonBridgeRef = useRef<PythonBridgeController | null>(null);
+  const pythonBridgeHandlersRef = useRef<PythonBridgeHandlers | null>(null);
 
   useEffect(() => {
     if (window.location.protocol !== "http:" && window.location.protocol !== "https:") {
@@ -159,19 +266,20 @@ export default function Home() {
   }, []);
 
   const update = (mutate: (draft: LayoutData) => void) => {
-    setLayout((current) => {
-      const draft = structuredClone(current);
-      mutate(draft);
-      return draft;
-    });
+    const draft = structuredClone(layoutRef.current);
+    mutate(draft);
+    layoutRef.current = draft;
+    setLayout(draft);
     setStatus({ kind: "idle", message: "Edited locally" });
   };
 
   const updateValidated = (mutate: (draft: LayoutData) => void) => {
-    const draft = structuredClone(layout);
+    const draft = structuredClone(layoutRef.current);
     mutate(draft);
     try {
-      setLayout(parseLayout(draft));
+      const parsed = parseLayout(draft);
+      layoutRef.current = parsed;
+      setLayout(parsed);
       setStatus({ kind: "idle", message: "Edited locally" });
     } catch (error) {
       setStatus({
@@ -181,8 +289,22 @@ export default function Home() {
     }
   };
 
-  const loadValue = (value: unknown, source: string) => {
+  const loadValue = (
+    value: unknown,
+    source: string,
+    options: LoadValueOptions = {},
+  ) => {
     const parsed = parseLayout(value);
+    const preserveViewport = options.preserveViewport ?? false;
+    const nextScope =
+      options.scope ??
+      (preserveViewport
+        ? viewportScopeRef.current
+        : { kind: "layout" as const });
+    validateScope(parsed, nextScope);
+
+    layoutRef.current = parsed;
+    viewportScopeRef.current = nextScope;
     const firstCurve = Object.keys(parsed.reference_curves)[0] ?? "";
     const firstType = Object.keys(parsed.types)[0] ?? "";
     const firstObject = Object.keys(parsed.objects)[0] ?? "";
@@ -202,8 +324,20 @@ export default function Home() {
         LARGE_FRAME_COUNT,
     );
     setViewportFitRequest(null);
-    setViewerRevision((current) => current + 1);
-    setSelection(null);
+    setViewportScope((current) =>
+      sameScope(current, nextScope) ? current : nextScope,
+    );
+    if (preserveViewport) {
+      setSelection((current) =>
+        selectionExistsInLayout(current, parsed) &&
+        selectionIsInScope(current, nextScope)
+          ? current
+          : null,
+      );
+    } else {
+      setViewerRevision((current) => current + 1);
+      setSelection(null);
+    }
     setStatus({ kind: "success", message: `Loaded ${source}` });
   };
 
@@ -255,6 +389,10 @@ export default function Home() {
   };
 
   const clearLayout = () => {
+    const fullLayoutScope: SceneScope = { kind: "layout" };
+    viewportScopeRef.current = fullLayoutScope;
+    setViewportScope(fullLayoutScope);
+    layoutRef.current = createEmptyLayout();
     setLayout(createEmptyLayout());
     setSelectedCurve("");
     setSelectedType("");
@@ -307,9 +445,17 @@ export default function Home() {
     kind: ViewportFitRequest["kind"],
     name: string,
   ) => {
+    const target = { kind, name } as const;
+    if (!fitTargetIsInScope(target, viewportScopeRef.current)) {
+      setStatus({
+        kind: "error",
+        message: `${kind === "curve" ? "Curve" : "Object"} ${name} is outside the current viewport scope`,
+      });
+      return;
+    }
     viewportFitIdRef.current += 1;
     setViewerCardOpen(true);
-    setSelection({ kind, name });
+    setSelection(target);
     setViewportFitRequest({ id: viewportFitIdRef.current, kind, name });
   };
 
@@ -373,6 +519,219 @@ export default function Home() {
       setSelection(null);
     }
   };
+
+  const issueViewportCommand = useCallback(
+    (body: ViewportCommandBody): Promise<void> => {
+      viewportCommandIdRef.current += 1;
+      const command = {
+        id: viewportCommandIdRef.current,
+        ...body,
+      } as ViewportCommand;
+      setViewerCardOpen(true);
+      return new Promise<void>((resolve, reject) => {
+        const queue = viewportCommandQueueRef.current;
+        queue.push({ command, resolve, reject });
+        if (queue.length === 1) setViewportCommand(command);
+      });
+    },
+    [],
+  );
+
+  const handleViewportCommandApplied = useCallback(
+    (id: number, error?: string) => {
+      const queue = viewportCommandQueueRef.current;
+      const completed = queue[0];
+      if (!completed || completed.command.id !== id) return;
+      queue.shift();
+      setViewportCommand(queue[0]?.command ?? null);
+      if (error) completed.reject(new Error(error));
+      else completed.resolve();
+    },
+    [],
+  );
+
+  const applyExternalSelection = (next: SelectedEntity) => {
+    if (!next) {
+      setSelection((current) =>
+        sameSelection(current, null) ? current : null,
+      );
+      return;
+    }
+    const currentLayout = layoutRef.current;
+    if (next.kind === "curve") {
+      if (!Object.hasOwn(currentLayout.reference_curves, next.name)) {
+        throw new Error(`Unknown reference curve: ${next.name}`);
+      }
+      const nextCurve = currentLayout.reference_curves[next.name];
+      if (
+        next.segmentIndex !== undefined &&
+        next.segmentIndex >= nextCurve.segments.length
+      ) {
+        throw new Error(
+          `Curve ${next.name} has no segment ${next.segmentIndex}`,
+        );
+      }
+    } else {
+      const objectName = next.kind === "object" ? next.name : next.object;
+      if (!Object.hasOwn(currentLayout.objects, objectName)) {
+        throw new Error(`Unknown object: ${objectName}`);
+      }
+      const nextObject = currentLayout.objects[objectName];
+      const nextType = currentLayout.types[nextObject.type];
+      if (!nextType) {
+        throw new Error(
+          `Object ${objectName} has unknown type ${nextObject.type}`,
+        );
+      }
+      if (
+        next.kind === "frame" &&
+        !typeFrameNames(nextType).includes(next.name)
+      ) {
+        throw new Error(`Object ${objectName} has no frame ${next.name}`);
+      }
+    }
+    if (!selectionIsInScope(next, viewportScopeRef.current)) {
+      throw new Error("Selection is outside the current viewport scope");
+    }
+    if (next.kind === "curve") {
+      setCurvesCardOpen(true);
+      setSegmentsOpen(true);
+      setSelectedCurve(next.name);
+    } else {
+      const objectName = next.kind === "object" ? next.name : next.object;
+      const nextObject = currentLayout.objects[objectName];
+      setObjectsCardOpen(true);
+      setSelectedObject(objectName);
+      setSelectedType(nextObject.type);
+      if (next.kind === "frame") {
+        setTypesCardOpen(true);
+        setTypeFramesOpen(true);
+        if (!isImplicitTypeFrameName(next.name)) {
+          setSelectedTypeFrame(next.name);
+        }
+      }
+    }
+    setSelection((current) => (sameSelection(current, next) ? current : next));
+  };
+
+  const executePythonBridgeCommand = (command: PythonBridgeCommand) => {
+    switch (command.command) {
+      case "set_layout": {
+        loadValue(command.layout, "Python", {
+          preserveViewport: true,
+          ...(command.scope ? { scope: command.scope } : {}),
+        });
+        if (Object.hasOwn(command, "selection")) {
+          applyExternalSelection(command.selection ?? null);
+        }
+        if (
+          command.fit &&
+          !fitTargetIsInScope(command.fit, viewportScopeRef.current)
+        ) {
+          throw new Error("Fit target is outside the current viewport scope");
+        }
+        // Even an empty visibility update acts as the render barrier for the
+        // new layout/scope, so Python is acknowledged only after the viewport
+        // has observed this transaction.
+        return (async () => {
+          await issueViewportCommand({
+            command: "set_visibility",
+            visibility: command.visibility ?? {},
+          });
+          if (command.mode) {
+            await issueViewportCommand({ command: "set_mode", mode: command.mode });
+          }
+          if (command.view) {
+            await issueViewportCommand({ command: "set_view", view: command.view });
+          }
+          if (command.fit) {
+            await issueViewportCommand({ command: "fit", target: command.fit });
+          }
+        })();
+      }
+      case "get_layout":
+        return { layout: layoutRef.current };
+      case "set_selection":
+        applyExternalSelection(command.selection);
+        return issueViewportCommand({
+          command: "set_visibility",
+          visibility: {},
+        });
+      case "fit":
+        if (
+          command.target.kind === "curve" &&
+          !Object.hasOwn(
+            layoutRef.current.reference_curves,
+            command.target.name,
+          )
+        ) {
+          throw new Error(`Unknown reference curve: ${command.target.name}`);
+        }
+        if (
+          command.target.kind === "object" &&
+          !Object.hasOwn(layoutRef.current.objects, command.target.name)
+        ) {
+          throw new Error(`Unknown object: ${command.target.name}`);
+        }
+        if (!fitTargetIsInScope(command.target, viewportScopeRef.current)) {
+          throw new Error("Fit target is outside the current viewport scope");
+        }
+        return issueViewportCommand({ command: "fit", target: command.target });
+      case "set_mode":
+        return issueViewportCommand({
+          command: "set_mode",
+          mode: command.mode,
+        });
+      case "set_view":
+        return issueViewportCommand({
+          command: "set_view",
+          view: command.view,
+        });
+      case "set_scope":
+        validateScope(layoutRef.current, command.scope);
+        viewportScopeRef.current = command.scope;
+        setViewerCardOpen(true);
+        setViewportScope((current) =>
+          sameScope(current, command.scope) ? current : command.scope,
+        );
+        setSelection((current) =>
+          selectionIsInScope(current, command.scope) ? current : null,
+        );
+        return issueViewportCommand({
+          command: "set_visibility",
+          visibility: {},
+        });
+      case "set_visibility":
+        return issueViewportCommand({
+          command: "set_visibility",
+          visibility: command.visibility,
+        });
+    }
+  };
+
+  useEffect(() => {
+    pythonBridgeHandlersRef.current = {
+      execute: executePythonBridgeCommand,
+      getSelection: () => selection,
+    };
+  });
+
+  useEffect(() => {
+    const controller = installPythonBridge(window, () => {
+      const handlers = pythonBridgeHandlersRef.current;
+      if (!handlers) throw new Error("Python bridge is not ready");
+      return handlers;
+    });
+    pythonBridgeRef.current = controller;
+    return () => {
+      controller?.close();
+      if (pythonBridgeRef.current === controller) pythonBridgeRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    pythonBridgeRef.current?.emitSelection(selection);
+  }, [selection]);
 
   const curveNames = Object.keys(layout.reference_curves);
   const typeNames = Object.keys(layout.types);
@@ -1807,6 +2166,9 @@ export default function Home() {
                   selection={selection}
                   onSelect={selectFromViewport}
                   fitRequest={viewportFitRequest}
+                  command={viewportCommand}
+                  onCommandApplied={handleViewportCommandApplied}
+                  scope={viewportScope}
                 />
               </CardContent>
             </CollapsibleContent>

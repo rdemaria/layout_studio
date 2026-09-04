@@ -198,7 +198,7 @@ class _ObjectVisual:
     vertices: np.ndarray
     projected: np.ndarray
     faces: np.ndarray
-    feature_edges: list[tuple[int, int]]
+    feature_edges: np.ndarray
     fill: Any
     edges: Any
     color: tuple[float, float, float]
@@ -403,12 +403,14 @@ class LayoutViewer2D:
         self._hover: _Selection | None = None
         self._curve_visuals: dict[str, _CurveVisual] = {}
         self._object_visuals: dict[str, _ObjectVisual] = {}
+        self._feature_edge_cache: dict[tuple[int, int, int], np.ndarray] = {}
         self._pick_targets: dict[Any, _PickTarget] = {}
         self._curve_artists: list[Any] = []
         self._object_artists: list[Any] = []
         self._beam_frame_artists: list[Any] = []
         self._named_frame_artists: list[Any] = []
-        self._bounds_points: list[np.ndarray] = []
+        self._bounds_low = np.full(3, np.inf, dtype=float)
+        self._bounds_high = np.full(3, -np.inf, dtype=float)
         self._callbacks: list[int] = []
         self._axes_callbacks: list[int] = []
         self._display_axes: list[_DisplayAxes] = []
@@ -429,9 +431,23 @@ class LayoutViewer2D:
         self._batched_frame_bounds = np.empty((0, 4), dtype=float)
         self._last_hover_time = -math.inf
         self._last_hover_pixel: tuple[float, float] | None = None
-
-        self._build_figure(ax)
+        self._blit_enabled = False
+        self._blit_suspended = False
+        self._blit_background: Any = None
+        self._hover_overlay_artists: tuple[Any, ...] = ()
+        self._owns_figure = False
+        self.figure = None
+        self.ax = None
+        self.axes = None
+        self.canvas = None
         try:
+            # Validate before styling caller-owned axes. Keep this resolver
+            # session for the complete viewer snapshot after validation.
+            session = self.resolver._session()
+            session.__enter__()
+            self._resolver_session = session
+            self._build_figure(ax)
+            self._blit_enabled = bool(getattr(self.canvas, "supports_blit", False))
             self._build_entity_geometry()
             self._finish_bounds()
             self._ensure_object_frames(
@@ -458,9 +474,10 @@ class LayoutViewer2D:
             if show:
                 self.show()
         except BaseException:
+            self._disable_blit()
             self._disconnect_callbacks()
             self._close_resolver_session()
-            if self._owns_figure:
+            if self._owns_figure and self.figure is not None:
                 self._plt.close(self.figure)
             self._closed = True
             self._release_scene_references(clear_figure=self._owns_figure)
@@ -819,48 +836,62 @@ class LayoutViewer2D:
         self._curve_visuals[name] = visual
         self._curve_artists.extend((halo, line))
         self._pick_targets[line] = _PickTarget("curve", name, curve)
-        self._bounds_points.append(points)
+        self._accumulate_bounds(points)
 
     def _add_object(self, name: str, obj: Any) -> None:
+        mesh_resolution = self._object_mesh_resolution(obj)
         data = self.resolver.swept_object_mesh(
             obj,
-            resolution=self._object_mesh_resolution(obj),
+            resolution=mesh_resolution,
             radial_resolution=self.radial_resolution_effective,
+            include_metadata=False,
         )
         vertices = _as_points(_data_field(data, "vertices", ()))
-        faces = np.asarray(_data_field(data, "faces", ()), dtype=int).reshape((-1, 3))
+        faces = np.asarray(_data_field(data, "faces", ()), dtype=np.int64).reshape(
+            (-1, 3)
+        )
         if not len(vertices):
             return
         if len(faces) and (np.min(faces) < 0 or np.max(faces) >= len(vertices)):
             raise ValueError("object mesh face contains an invalid vertex index")
         projected = self._project(vertices)
-        triangles = vertices[faces]
-        normals = np.cross(
-            triangles[:, 1] - triangles[:, 0],
-            triangles[:, 2] - triangles[:, 0],
-        )
-        # Draw only the front-facing skin.  Painting every translucent triangle
-        # (including the back surface) makes a projected solid spuriously
-        # opaque because Matplotlib composites each triangle independently.
-        front_faces = faces[normals[:, self.depth_axis] > 1e-14]
-        if len(front_faces):
-            order = np.argsort(
-                np.mean(vertices[front_faces, self.depth_axis], axis=1),
-                kind="stable",
+        bend_angle = self._shape_bend_angle(obj) if self.batch_objects else 0.0
+        straight_batch = self.batch_objects and bend_angle <= 1.0e-12
+        if straight_batch:
+            front_faces = np.empty((0, 3), dtype=int)
+        else:
+            triangles = vertices[faces]
+            normals = np.cross(
+                triangles[:, 1] - triangles[:, 0],
+                triangles[:, 2] - triangles[:, 0],
             )
-            front_faces = front_faces[order]
+            # Draw only the front-facing skin. Painting both translucent sides
+            # makes a projected solid spuriously opaque.
+            front_faces = faces[normals[:, self.depth_axis] > 1e-14]
+            if len(front_faces):
+                order = np.argsort(
+                    np.mean(vertices[front_faces, self.depth_axis], axis=1),
+                    kind="stable",
+                )
+                front_faces = front_faces[order]
         type_ = self._object_type(obj)
         color_value = _data_field(data, "color", getattr(type_, "color", None))
         color = self._color(color_value, _OBJECT_FALLBACK)
-        edge_pairs = self._feature_edges(vertices, faces)
+        edge_key = (id(type_), mesh_resolution, self.radial_resolution_effective)
+        edge_pairs = self._feature_edge_cache.get(edge_key)
+        if edge_pairs is None:
+            edge_pairs = np.asarray(
+                self._feature_edges(vertices, faces), dtype=np.int64
+            ).reshape((-1, 2))
+            edge_pairs.setflags(write=False)
+            self._feature_edge_cache[edge_key] = edge_pairs
         edge_color = self._lighten(color, 0.24)
         low, high = np.min(projected, axis=0), np.max(projected, axis=0)
         bounds = np.asarray([low[0], high[0], low[1], high[1]], dtype=float)
 
         fill = edges = None
         if self.batch_objects:
-            bend_angle = self._shape_bend_angle(obj)
-            if bend_angle <= 1.0e-12:
+            if straight_batch:
                 # A straight convex extrusion has one exact projected hull.
                 render_faces = [self._convex_hull(projected)]
                 render_depths = [float(np.mean(vertices[:, self.depth_axis]))]
@@ -926,7 +957,7 @@ class LayoutViewer2D:
         self._object_visuals[name] = visual
         if not self.batch_objects:
             self._object_artists.extend((fill, edges))
-        self._bounds_points.append(vertices)
+        self._accumulate_bounds(vertices)
 
     def _object_mesh_resolution(self, obj: Any) -> int:
         """Return exact requested detail or a bend-aware automatic LOD."""
@@ -1016,6 +1047,7 @@ class LayoutViewer2D:
             visual.edges = collection
             visual.batch_index = indices[0]
             visual.batch_indices = np.asarray(indices, dtype=np.int64)
+        self._batch_entries.clear()
 
     @staticmethod
     def _feature_edges(
@@ -1065,17 +1097,17 @@ class LayoutViewer2D:
         return type_
 
     def _finish_bounds(self) -> None:
-        if self._bounds_points:
-            points = np.concatenate(self._bounds_points, axis=0)
+        if np.all(np.isfinite(self._bounds_low)):
+            low = self._bounds_low
+            high = self._bounds_high
         else:
-            points = np.asarray([[-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]])
-        low, high = np.min(points, axis=0), np.max(points, axis=0)
+            low = np.asarray([-1.0, -1.0, -1.0])
+            high = np.asarray([1.0, 1.0, 1.0])
         self._world_bounds = np.asarray(
             [low[0], high[0], low[1], high[1], low[2], high[2]], dtype=float
         )
-        projected = points[:, self.axis_indices]
-        projected_low = np.min(projected, axis=0)
-        projected_high = np.max(projected, axis=0)
+        projected_low = low[list(self.axis_indices)]
+        projected_high = high[list(self.axis_indices)]
         self._bounds = np.asarray(
             [projected_low[0], projected_high[0], projected_low[1], projected_high[1]],
             dtype=float,
@@ -1086,6 +1118,13 @@ class LayoutViewer2D:
         )
         self.world_bounds = tuple(float(item) for item in self._world_bounds)
         self.bounds = tuple(float(item) for item in self._bounds)
+
+    def _accumulate_bounds(self, points: Any) -> None:
+        values = _as_points(points)
+        if not len(values):
+            return
+        self._bounds_low = np.minimum(self._bounds_low, np.min(values, axis=0))
+        self._bounds_high = np.maximum(self._bounds_high, np.max(values, axis=0))
 
     def _ensure_object_frames(self, *, named: bool = False, beam: bool = False) -> None:
         build_named = bool(named and not self._named_frames_built)
@@ -1116,14 +1155,14 @@ class LayoutViewer2D:
                     local = self.resolver._type_frame_matrix(type_, frame_name)
                     pose = Pose(center @ local, space="world")
                     self._add_named_frame(object_name, obj, frame_name, pose)
-                    self._bounds_points.append(_pose_origin(pose).reshape(1, 3))
+                    self._accumulate_bounds(_pose_origin(pose).reshape(1, 3))
             if build_beam:
                 for frame_name in ("magnetic_entry", "magnetic_exit"):
                     local = self.resolver._type_frame_matrix(type_, frame_name)
                     pose = Pose(center @ local, space="world")
                     vertices = self._beam_plane_vertices(type_, pose)
                     self._add_beam_frame(object_name, obj, frame_name, pose, vertices)
-                    self._bounds_points.append(vertices)
+                    self._accumulate_bounds(vertices)
         self._named_frames_built = self._named_frames_built or build_named
         self._beam_frames_built = self._beam_frames_built or build_beam
 
@@ -1155,7 +1194,7 @@ class LayoutViewer2D:
                     "frame", f"{object_name}.{frame_name}", obj, pose, obj, frame_name
                 )
                 self._append_batched_frame_visual(target, point.reshape(1, 2))
-                self._bounds_points.append(origin.reshape(1, 3))
+                self._accumulate_bounds(origin.reshape(1, 3))
         if not points:
             return
         axes = self._mpl.LineCollection([], colors=colors, linewidths=0.7, zorder=7)
@@ -1203,7 +1242,7 @@ class LayoutViewer2D:
                     frame_name,
                 )
                 self._append_batched_frame_visual(target, projected)
-                self._bounds_points.append(vertices)
+                self._accumulate_bounds(vertices)
         if not points:
             return
         planes = self._mpl.PolyCollection(
@@ -1459,6 +1498,16 @@ class LayoutViewer2D:
             for name, color in zip(_AXIS_NAMES, _AXIS_COLORS)
         ]
         self._set_local_axes_visible(False)
+        self._hover_overlay_artists = (
+            self.local_axes,
+            self.local_origin,
+            *self.local_axis_labels,
+            self.pose_text,
+            self.tooltip,
+        )
+        if self._blit_enabled:
+            for artist in self._hover_overlay_artists:
+                artist.set_animated(True)
 
     @staticmethod
     def _empty_pose_message() -> str:
@@ -1477,6 +1526,7 @@ class LayoutViewer2D:
                 connect("figure_leave_event", self._on_leave),
                 connect("key_press_event", self._on_key_press),
                 connect("resize_event", self._on_resize),
+                connect("draw_event", self._on_draw),
                 connect("close_event", self._on_close_event),
             ]
         )
@@ -1592,6 +1642,7 @@ class LayoutViewer2D:
 
         self._ensure_open()
         self._draw_started = True
+        self._invalidate_blit()
         self._refresh_reference_arrows()
         self.canvas.draw()
         return self
@@ -1603,6 +1654,7 @@ class LayoutViewer2D:
 
         self._ensure_open()
         self._draw_started = True
+        self._invalidate_blit()
         self._refresh_reference_arrows()
         self.canvas.draw_idle()
         self._plt.show(block=block)
@@ -1624,12 +1676,26 @@ class LayoutViewer2D:
             path = path.with_suffix(".png")
         self._draw_started = True
         self._refresh_reference_arrows()
-        self.figure.savefig(
-            path,
-            dpi=self.dpi if dpi is None else dpi,
-            transparent=transparent,
-            **kwargs,
-        )
+        animated = [
+            bool(artist.get_animated()) for artist in self._hover_overlay_artists
+        ]
+        self._blit_suspended = True
+        try:
+            # Animated artists are deliberately absent from a full canvas draw,
+            # so include them explicitly in exported figures.
+            for artist in self._hover_overlay_artists:
+                artist.set_animated(False)
+            self.figure.savefig(
+                path,
+                dpi=self.dpi if dpi is None else dpi,
+                transparent=transparent,
+                **kwargs,
+            )
+        finally:
+            for artist, value in zip(self._hover_overlay_artists, animated):
+                artist.set_animated(value)
+            self._blit_suspended = False
+            self._invalidate_blit()
         return path
 
     def screenshot(
@@ -1654,6 +1720,10 @@ class LayoutViewer2D:
             self._disconnect_callbacks()
             self._close_resolver_session()
             return
+        # A viewer can share caller-owned axes. Restore ordinary Matplotlib
+        # drawing before disconnecting our draw callback so visible overlays
+        # remain part of later canvas draws and exports.
+        self._disable_blit()
         self._disconnect_callbacks()
         self._close_resolver_session()
         if self._owns_figure:
@@ -1662,6 +1732,7 @@ class LayoutViewer2D:
         self._release_scene_references(clear_figure=self._owns_figure)
 
     def _on_close_event(self, _event: Any) -> None:
+        self._disable_blit()
         self._disconnect_callbacks()
         self._close_resolver_session()
         self._closed = True
@@ -1693,6 +1764,7 @@ class LayoutViewer2D:
         for name in (
             "_curve_visuals",
             "_object_visuals",
+            "_feature_edge_cache",
             "_pick_targets",
             "curve_artists",
             "object_artists",
@@ -1711,7 +1783,6 @@ class LayoutViewer2D:
             "_object_artists",
             "_beam_frame_artists",
             "_named_frame_artists",
-            "_bounds_points",
             "_batch_entries",
             "_object_pick_visuals",
             "_batched_frame_visuals",
@@ -1728,6 +1799,10 @@ class LayoutViewer2D:
         self._batch_current_facecolors = empty4
         self._batch_current_edgecolors = empty4
         self._batch_object_collection = None
+        self._blit_background = None
+        self._blit_enabled = False
+        self._blit_suspended = False
+        self._hover_overlay_artists = ()
         self.curve_scope = ()
         self.object_scope = ()
         self.layout = None
@@ -1749,7 +1824,60 @@ class LayoutViewer2D:
 
     def _request_draw(self) -> None:
         if self._draw_started and not self._closed:
+            self._invalidate_blit()
             self.canvas.draw_idle()
+
+    def _invalidate_blit(self) -> None:
+        self._blit_background = None
+
+    def _on_draw(self, event: Any) -> None:
+        """Capture the static scene after a full draw, then paint overlays."""
+
+        if (
+            not self._blit_enabled
+            or self._blit_suspended
+            or self._closed
+            or getattr(event, "canvas", self.canvas) is not self.canvas
+        ):
+            return
+        try:
+            self._blit_background = self.canvas.copy_from_bbox(self.figure.bbox)
+            self._draw_hover_overlays()
+        except (AttributeError, NotImplementedError, RuntimeError, ValueError):
+            # Some third-party canvases advertise blitting but reject it at
+            # runtime. A regular draw remains a safe backend-independent path.
+            self._disable_blit()
+            self.canvas.draw_idle()
+
+    def _draw_hover_overlays(self) -> None:
+        for artist in self._hover_overlay_artists:
+            if artist.get_visible():
+                self.ax.draw_artist(artist)
+        self.canvas.blit(self.figure.bbox)
+
+    def _disable_blit(self) -> None:
+        self._blit_enabled = False
+        self._blit_background = None
+        for artist in self._hover_overlay_artists:
+            artist.set_animated(False)
+
+    def _request_overlay_draw(self) -> None:
+        """Redraw only hover/readout artists when the backend supports it."""
+
+        if not self._draw_started or self._closed:
+            return
+        if (
+            self._blit_enabled
+            and not self._blit_suspended
+            and self._blit_background is not None
+        ):
+            try:
+                self.canvas.restore_region(self._blit_background)
+                self._draw_hover_overlays()
+                return
+            except (AttributeError, NotImplementedError, RuntimeError, ValueError):
+                self._disable_blit()
+        self.canvas.draw_idle()
 
     # -------------------------------------------------------------- selection
 
@@ -2067,6 +2195,18 @@ class LayoutViewer2D:
         self._last_hover_time = now
         self._last_hover_pixel = pixel
         selection = self._pick_selection(event)
+        if selection is None and self._hover is None:
+            return
+        if (
+            selection is not None
+            and selection.kind != "curve"
+            and self._same_selection(selection, self._hover)
+        ):
+            data = self._event_data(event)
+            if data is not None:
+                self.tooltip.xy = data
+                self._request_overlay_draw()
+            return
         self._hover = selection
         if selection is None:
             self.tooltip.set_visible(False)
@@ -2090,12 +2230,15 @@ class LayoutViewer2D:
             self.tooltip.set_visible(True)
             self._set_pose_text(selection)
             self._show_local_axes(selection.pose)
-        self._request_draw()
+        self._request_overlay_draw()
 
     def _on_leave(self, _event: Any) -> None:
         self._clear_hover()
 
     def _clear_hover(self) -> None:
+        if self._hover is None:
+            self._last_hover_pixel = None
+            return
         self._hover = None
         self._last_hover_pixel = None
         self.tooltip.set_visible(False)
@@ -2105,7 +2248,7 @@ class LayoutViewer2D:
         else:
             self._set_pose_text(self._selection)
             self._sync_selection_overlay()
-        self._request_draw()
+        self._request_overlay_draw()
 
     def _event_data(self, event: Any) -> tuple[float, float] | None:
         xdata, ydata = getattr(event, "xdata", None), getattr(event, "ydata", None)

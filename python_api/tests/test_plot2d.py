@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+
 from layout_studio import (
     AttachmentError,
     Box,
@@ -577,6 +578,77 @@ def test_synthetic_hover_and_click_interpolate_station_along_sampled_curve_chord
         viewer.close()
 
 
+def test_hover_blits_overlays_and_full_scene_changes_invalidate_background(
+    monkeypatch,
+):
+    pytest.importorskip("matplotlib")
+    layout, _curve, object_ = populated_layout()
+    viewer = layout.plot2d("xz", show=False, hover_interval=0)
+    try:
+        assert viewer.canvas.supports_blit is True
+        assert viewer._blit_enabled is True
+        assert all(artist.get_animated() for artist in viewer._hover_overlay_artists)
+
+        viewer.draw()
+        assert viewer._blit_background is not None
+
+        selection = viewer._selection_from_value(object_)
+        monkeypatch.setattr(viewer, "_pick_selection", lambda _event: selection)
+        blits = []
+        idle_draws = []
+        monkeypatch.setattr(viewer.canvas, "blit", lambda bbox=None: blits.append(bbox))
+        monkeypatch.setattr(viewer.canvas, "draw_idle", lambda: idle_draws.append(True))
+        event = types.SimpleNamespace(
+            inaxes=viewer.ax,
+            button=None,
+            x=120.0,
+            y=160.0,
+            xdata=0.2,
+            ydata=0.3,
+        )
+
+        viewer._on_motion(event)
+
+        assert viewer._hover is selection
+        assert blits
+        assert idle_draws == []
+
+        # Layer/grid/camera changes affect the cached static scene and therefore
+        # use a normal draw rather than restoring the now-stale background.
+        viewer.set_grid_visible(False)
+        assert viewer._blit_background is None
+        assert idle_draws == [True]
+    finally:
+        viewer.close()
+
+
+def test_runtime_blit_failure_falls_back_to_regular_draw(monkeypatch):
+    pytest.importorskip("matplotlib")
+    _layout, curve, _object = populated_layout()
+    viewer = curve.plot2d("xz", show=False)
+    try:
+        viewer.draw()
+        assert viewer._blit_enabled is True
+        idle_draws = []
+        monkeypatch.setattr(
+            viewer.canvas,
+            "restore_region",
+            lambda _background: (_ for _ in ()).throw(NotImplementedError()),
+        )
+        monkeypatch.setattr(viewer.canvas, "draw_idle", lambda: idle_draws.append(True))
+
+        viewer._request_overlay_draw()
+
+        assert viewer._blit_enabled is False
+        assert viewer._blit_background is None
+        assert not any(
+            artist.get_animated() for artist in viewer._hover_overlay_artists
+        )
+        assert idle_draws == [True]
+    finally:
+        viewer.close()
+
+
 def test_savefig_writes_a_nonempty_png(tmp_path: Path):
     pytest.importorskip("matplotlib")
     layout, _curve, _object = populated_layout()
@@ -589,6 +661,34 @@ def test_savefig_writes_a_nonempty_png(tmp_path: Path):
         assert output.is_file()
         assert output.stat().st_size > 1_000
         assert output.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    finally:
+        viewer.close()
+
+
+def test_savefig_temporarily_includes_animated_hover_overlays(tmp_path, monkeypatch):
+    pytest.importorskip("matplotlib")
+    _layout, curve, _object = populated_layout()
+    viewer = curve.plot2d("xz", show=False)
+    output = tmp_path / "overlays.png"
+    animated_during_save = []
+    original_savefig = viewer.figure.savefig
+
+    def savefig_spy(*args, **kwargs):
+        animated_during_save.extend(
+            artist.get_animated() for artist in viewer._hover_overlay_artists
+        )
+        return original_savefig(*args, **kwargs)
+
+    monkeypatch.setattr(viewer.figure, "savefig", savefig_spy)
+    try:
+        assert all(artist.get_animated() for artist in viewer._hover_overlay_artists)
+
+        viewer.savefig(output)
+
+        assert animated_during_save
+        assert not any(animated_during_save)
+        assert all(artist.get_animated() for artist in viewer._hover_overlay_artists)
+        assert output.is_file()
     finally:
         viewer.close()
 
@@ -612,6 +712,24 @@ def test_existing_axes_and_in_memory_screenshot_are_supported():
 
     # A viewer only owns figures it creates itself.
     assert plt.fignum_exists(figure.number)
+    plt.close(figure)
+
+
+def test_closing_shared_axes_restores_overlay_drawing():
+    pytest.importorskip("matplotlib")
+    import matplotlib.pyplot as plt
+
+    _layout, curve, _object = populated_layout()
+    figure, axes = plt.subplots()
+    viewer = curve.plot2d("xz", show=False, ax=axes)
+    overlays = viewer._hover_overlay_artists
+
+    assert overlays
+    assert all(artist.get_animated() for artist in overlays)
+    viewer.close()
+
+    assert all(not artist.get_animated() for artist in overlays)
+    assert viewer._closed
     plt.close(figure)
 
 

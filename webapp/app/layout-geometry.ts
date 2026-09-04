@@ -221,8 +221,8 @@ export type ObjectGeometry = {
   type: LayoutType;
   frame: Frame;
   vertices: Vec3[];
-  faces: number[][];
-  edges: [number, number][];
+  faces: readonly (readonly number[])[];
+  edges: readonly (readonly [number, number])[];
 };
 export type NamedFrameGeometry = {
   object: string;
@@ -244,6 +244,10 @@ export type SceneGeometry = {
   magneticFrames: MagneticFrameGeometry[];
   bounds: { min: Vec3; max: Vec3 };
 };
+
+export type SceneScope =
+  | { kind: "layout" }
+  | { kind: "curve" | "object"; name: string };
 
 function curveTolerances(curve: CurveGeometry, point?: Vec3) {
   let geometryScale = Math.max(1, curve.totalLength);
@@ -811,7 +815,80 @@ export function curveObjectSurfaceIntersectionPaths(
   return result;
 }
 
-export function buildScene(layout: LayoutData): SceneGeometry {
+type SweepTopology = Pick<ObjectGeometry, "faces" | "edges">;
+
+// Face and edge indexes depend only on the number of vertices in each ring and
+// the number of sweep steps. Layouts commonly contain thousands of instances
+// of the same few shapes, so keep one immutable topology instead of allocating
+// identical nested arrays for every object.
+const sweepTopologyCache = new Map<string, SweepTopology>();
+
+function sweepTopology(
+  ringSize: number,
+  steps: number,
+  endCapBeforeSides = false,
+): SweepTopology {
+  const key = `${ringSize}:${steps}:${endCapBeforeSides ? 1 : 0}`;
+  const cached = sweepTopologyCache.get(key);
+  if (cached) return cached;
+
+  const faces: number[][] = [
+    Array.from({ length: ringSize }, (_, index) => ringSize - 1 - index),
+  ];
+  const endOffset = steps * ringSize;
+  const endCap = Array.from(
+    { length: ringSize },
+    (_, index) => endOffset + index,
+  );
+  if (endCapBeforeSides) faces.push(endCap);
+  const edges: [number, number][] = [];
+  for (let layer = 0; layer <= steps; layer += 1) {
+    const offset = layer * ringSize;
+    for (let index = 0; index < ringSize; index += 1) {
+      edges.push([offset + index, offset + (index + 1) % ringSize]);
+    }
+  }
+  for (let layer = 0; layer < steps; layer += 1) {
+    const offset = layer * ringSize;
+    const nextOffset = (layer + 1) * ringSize;
+    for (let index = 0; index < ringSize; index += 1) {
+      const next = (index + 1) % ringSize;
+      faces.push([
+        offset + index,
+        offset + next,
+        nextOffset + next,
+        nextOffset + index,
+      ]);
+      edges.push([offset + index, nextOffset + index]);
+    }
+  }
+  if (!endCapBeforeSides) faces.push(endCap);
+
+  const topology: SweepTopology = Object.freeze({
+    faces: Object.freeze(
+      faces.map((face) => Object.freeze(face)),
+    ),
+    edges: Object.freeze(
+      edges.map((edge) => Object.freeze(edge)),
+    ),
+  });
+  sweepTopologyCache.set(key, topology);
+  return topology;
+}
+
+export function buildScene(
+  layout: LayoutData,
+  scope: SceneScope = { kind: "layout" },
+): SceneGeometry {
+  if (
+    scope.kind === "curve" &&
+    !Object.hasOwn(layout.reference_curves, scope.name)
+  ) {
+    throw new Error(`Unknown reference curve: ${scope.name}`);
+  }
+  if (scope.kind === "object" && !Object.hasOwn(layout.objects, scope.name)) {
+    throw new Error(`Unknown object: ${scope.name}`);
+  }
   const curveCache = new Map<string, CurveGeometry>();
   const objectCache = new Map<string, Frame>();
   const namedFrameCache = new Map<string, Frame>();
@@ -1006,10 +1083,21 @@ export function buildScene(layout: LayoutData): SceneGeometry {
     return frame;
   };
 
-  const curves = Object.keys(layout.reference_curves).map((name) =>
+  const curveNames = scope.kind === "layout"
+    ? Object.keys(layout.reference_curves)
+    : scope.kind === "curve"
+      ? [scope.name]
+      : [];
+  const objectEntries = scope.kind === "layout"
+    ? Object.entries(layout.objects)
+    : scope.kind === "object" && Object.hasOwn(layout.objects, scope.name)
+      ? [[scope.name, layout.objects[scope.name]] as const]
+      : [];
+
+  const curves = curveNames.map((name) =>
     resolveCurve(name, []),
   );
-  const objects: ObjectGeometry[] = Object.entries(layout.objects).map(
+  const objects: ObjectGeometry[] = objectEntries.map(
     ([name, object]) => {
       const frame = resolveObject(name, []);
       const type = layout.types[object.type];
@@ -1030,30 +1118,6 @@ export function buildScene(layout: LayoutData): SceneGeometry {
             vertices.push(localToWorld(sectionFrame, [x, y, 0]));
           }
         }
-        const faces: number[][] = [[3, 2, 1, 0]];
-        const edges: [number, number][] = [];
-        for (let layer = 0; layer <= steps; layer += 1) {
-          const offset = layer * 4;
-          for (let corner = 0; corner < 4; corner += 1) {
-            edges.push([offset + corner, offset + (corner + 1) % 4]);
-          }
-        }
-        for (let layer = 0; layer < steps; layer += 1) {
-          const offset = layer * 4;
-          const nextOffset = (layer + 1) * 4;
-          for (let corner = 0; corner < 4; corner += 1) {
-            const nextCorner = (corner + 1) % 4;
-            faces.push([
-              offset + corner,
-              offset + nextCorner,
-              nextOffset + nextCorner,
-              nextOffset + corner,
-            ]);
-            edges.push([offset + corner, nextOffset + corner]);
-          }
-        }
-        const endOffset = steps * 4;
-        faces.push([endOffset, endOffset + 1, endOffset + 2, endOffset + 3]);
         return {
           name,
           object,
@@ -1061,8 +1125,7 @@ export function buildScene(layout: LayoutData): SceneGeometry {
           type,
           frame,
           vertices,
-          faces,
-          edges,
+          ...sweepTopology(4, steps),
         };
       }
 
@@ -1081,31 +1144,6 @@ export function buildScene(layout: LayoutData): SceneGeometry {
           ]));
         }
       }
-      const faces: number[][] = [
-        Array.from({ length: sides }, (_, index) => sides - 1 - index),
-        Array.from({ length: sides }, (_, index) => steps * sides + index),
-      ];
-      const edges: [number, number][] = [];
-      for (let layer = 0; layer <= steps; layer += 1) {
-        const offset = layer * sides;
-        for (let index = 0; index < sides; index += 1) {
-          edges.push([offset + index, offset + (index + 1) % sides]);
-        }
-      }
-      for (let layer = 0; layer < steps; layer += 1) {
-        const offset = layer * sides;
-        const nextOffset = (layer + 1) * sides;
-        for (let index = 0; index < sides; index += 1) {
-          const next = (index + 1) % sides;
-          faces.push([
-            offset + index,
-            offset + next,
-            nextOffset + next,
-            nextOffset + index,
-          ]);
-          edges.push([offset + index, nextOffset + index]);
-        }
-      }
       return {
         name,
         object,
@@ -1113,13 +1151,12 @@ export function buildScene(layout: LayoutData): SceneGeometry {
         type,
         frame,
         vertices,
-        faces,
-        edges,
+        ...sweepTopology(sides, steps, true),
       };
     },
   );
 
-  const frames = Object.entries(layout.objects).flatMap(([objectName, object]) =>
+  const frames = objectEntries.flatMap(([objectName, object]) =>
     Object.keys(layout.types[object.type].frames).map((frameName) => ({
       object: objectName,
       name: frameName,
@@ -1128,49 +1165,70 @@ export function buildScene(layout: LayoutData): SceneGeometry {
     })),
   );
 
-  const magneticFrames: MagneticFrameGeometry[] = Object.entries(
-    layout.objects,
-  ).flatMap(([objectName, object]) => {
-    const type = layout.types[object.type];
-    const planeScale = 1.08;
-    return MAGNETIC_BOUNDARY_FRAME_NAMES.map((name) => {
-      const frame = resolveFrame(objectName, name, []);
-      const localVertices: Vec3[] = type.shape[0] === "box"
-        ? [
-            [-type.shape[1] * planeScale / 2, -type.shape[2] * planeScale / 2, 0],
-            [type.shape[1] * planeScale / 2, -type.shape[2] * planeScale / 2, 0],
-            [type.shape[1] * planeScale / 2, type.shape[2] * planeScale / 2, 0],
-            [-type.shape[1] * planeScale / 2, type.shape[2] * planeScale / 2, 0],
-          ]
-        : Array.from({ length: 24 }, (_, index): Vec3 => {
-            const angle = index / 24 * Math.PI * 2;
-            const radius = type.shape[1] * planeScale;
-            return [Math.cos(angle) * radius, Math.sin(angle) * radius, 0];
-          });
-      return {
-        object: objectName,
-        name,
-        typeName: object.type,
-        frame,
-        vertices: localVertices.map((vertex) => localToWorld(frame, vertex)),
-      };
-    });
-  });
+  const magneticFrames: MagneticFrameGeometry[] = objectEntries.flatMap(
+    ([objectName, object]) => {
+      const type = layout.types[object.type];
+      const planeScale = 1.08;
+      return MAGNETIC_BOUNDARY_FRAME_NAMES.map((name) => {
+        const frame = resolveFrame(objectName, name, []);
+        const localVertices: Vec3[] = type.shape[0] === "box"
+          ? [
+              [-type.shape[1] * planeScale / 2, -type.shape[2] * planeScale / 2, 0],
+              [type.shape[1] * planeScale / 2, -type.shape[2] * planeScale / 2, 0],
+              [type.shape[1] * planeScale / 2, type.shape[2] * planeScale / 2, 0],
+              [-type.shape[1] * planeScale / 2, type.shape[2] * planeScale / 2, 0],
+            ]
+          : Array.from({ length: 24 }, (_, index): Vec3 => {
+              const angle = index / 24 * Math.PI * 2;
+              const radius = type.shape[1] * planeScale;
+              return [Math.cos(angle) * radius, Math.sin(angle) * radius, 0];
+            });
+        return {
+          object: objectName,
+          name,
+          typeName: object.type,
+          frame,
+          vertices: localVertices.map((vertex) => localToWorld(frame, vertex)),
+        };
+      });
+    },
+  );
 
-  const positions: Vec3[] = [
-    ...curves.flatMap((curve) => curve.samples.map((sample) => sample.p)),
-    ...objects.flatMap((object) => object.vertices),
-    ...frames.map((frame) => frame.frame.o),
-    ...magneticFrames.flatMap((frame) => frame.vertices),
+  let hasPosition = false;
+  const min: Vec3 = [
+    Number.POSITIVE_INFINITY,
+    Number.POSITIVE_INFINITY,
+    Number.POSITIVE_INFINITY,
   ];
-  if (!positions.length) positions.push([-1, -1, -1], [1, 1, 1]);
-  const min: Vec3 = [...positions[0]];
-  const max: Vec3 = [...positions[0]];
-  for (const position of positions.slice(1)) {
+  const max: Vec3 = [
+    Number.NEGATIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+  ];
+  const includePosition = (position: Vec3) => {
+    hasPosition = true;
     for (let axis = 0; axis < 3; axis += 1) {
       min[axis] = Math.min(min[axis], position[axis]);
       max[axis] = Math.max(max[axis], position[axis]);
     }
+  };
+  for (const curve of curves) {
+    for (const sample of curve.samples) includePosition(sample.p);
+  }
+  for (const object of objects) {
+    for (const vertex of object.vertices) includePosition(vertex);
+  }
+  for (const frame of frames) includePosition(frame.frame.o);
+  for (const frame of magneticFrames) {
+    for (const vertex of frame.vertices) includePosition(vertex);
+  }
+  if (!hasPosition) {
+    min[0] = -1;
+    min[1] = -1;
+    min[2] = -1;
+    max[0] = 1;
+    max[1] = 1;
+    max[2] = 1;
   }
   return { curves, objects, frames, magneticFrames, bounds: { min, max } };
 }

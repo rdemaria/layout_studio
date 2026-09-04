@@ -301,6 +301,38 @@ test("renders viewer layers, world axes, and combines curve station with World p
   assert.ok(zoomedCameraDistance(0.5, -120, [0, 0, 0]) < 0.5);
 });
 
+test("reports scene failures through Python render barriers", async () => {
+  const { viewportCommandRenderError } = await vite.ssrLoadModule(
+    "/app/layout-viewport.tsx",
+  );
+  const barrier = {
+    id: 7,
+    command: "set_visibility",
+    visibility: {},
+  };
+
+  assert.equal(
+    viewportCommandRenderError(barrier, "cyclic dependency"),
+    "Cannot render viewport: cyclic dependency",
+  );
+  assert.equal(viewportCommandRenderError(barrier, ""), undefined);
+  assert.equal(
+    viewportCommandRenderError(
+      { id: 8, command: "set_mode", mode: "orbit" },
+      "cyclic dependency",
+    ),
+    undefined,
+  );
+  const source = await readFile(
+    path.join(root, "app", "layout-viewport.tsx"),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /if \(command\.command === "set_visibility"\)[\s\S]*?finish\(viewportCommandRenderError\(command, geometryError\)\)/,
+  );
+});
+
 test("supports canonical camera directions and rectangle zoom", async () => {
   const {
     cameraForCanonicalView,
@@ -384,6 +416,93 @@ test("supports canonical camera directions and rectangle zoom", async () => {
       600,
     ),
     front,
+  );
+});
+
+test("keeps canvas redraws cheap and display annotations stable", async () => {
+  const {
+    sceneBoundsForVisibility,
+    syncCanvasDimensions,
+    traceProjectedPolyline,
+    viewportRelativeArrowLength,
+  } = await vite.ssrLoadModule("/app/layout-viewport.tsx");
+
+  let writes = 0;
+  let backingWidth = 0;
+  let backingHeight = 0;
+  let cssWidth = "";
+  let cssHeight = "";
+  const canvas = {
+    get width() { return backingWidth; },
+    set width(value) { writes += 1; backingWidth = value; },
+    get height() { return backingHeight; },
+    set height(value) { writes += 1; backingHeight = value; },
+    style: {
+      get width() { return cssWidth; },
+      set width(value) { writes += 1; cssWidth = value; },
+      get height() { return cssHeight; },
+      set height(value) { writes += 1; cssHeight = value; },
+    },
+  };
+  syncCanvasDimensions(canvas, 800, 600, 2);
+  assert.equal(writes, 4);
+  assert.deepEqual(
+    [backingWidth, backingHeight, cssWidth, cssHeight],
+    [1600, 1200, "800px", "600px"],
+  );
+  syncCanvasDimensions(canvas, 800, 600, 2);
+  assert.equal(writes, 4, "an unchanged redraw must not reset the backing store");
+
+  const traced = [];
+  traceProjectedPolyline(
+    {
+      moveTo(x, y) { traced.push(["M", x, y]); },
+      lineTo(x, y) { traced.push(["L", x, y]); },
+    },
+    [
+      { x: 0, y: 0 },
+      { x: 1, y: 1 },
+      null,
+      { x: 3, y: 3 },
+      { x: 4, y: 4 },
+    ],
+  );
+  assert.deepEqual(traced, [
+    ["M", 0, 0],
+    ["L", 1, 1],
+    ["M", 3, 3],
+    ["L", 4, 4],
+  ]);
+
+  assert.equal(viewportRelativeArrowLength(2, 800, 600) * 2, 45);
+  assert.equal(viewportRelativeArrowLength(0.5, 800, 600) * 0.5, 45);
+  assert.equal(viewportRelativeArrowLength(1, 200, 100), 24);
+  assert.equal(viewportRelativeArrowLength(1, 2000, 2000), 64);
+  assert.equal(viewportRelativeArrowLength(0, 800, 600), 0);
+
+  const scene = {
+    curves: [{ samples: [{ p: [0, 0, 0] }, { p: [1, 2, 3] }] }],
+    objects: [{ vertices: [[10, 0, 0], [12, 1, 1]] }],
+    frames: [{ frame: { o: [1000, 1000, 1000] } }],
+    magneticFrames: [{ vertices: [[2000, 2000, 2000]] }],
+  };
+  assert.deepEqual(
+    sceneBoundsForVisibility(scene, {
+      curves: true,
+      objects: false,
+      frames: false,
+      beamFrames: false,
+    }),
+    { min: [0, 0, 0], max: [1, 2, 3] },
+  );
+  assert.deepEqual(
+    sceneBoundsForVisibility(scene, {
+      curves: false,
+      objects: true,
+      frames: false,
+      beamFrames: false,
+    }),
+    { min: [10, 0, 0], max: [12, 1, 1] },
   );
 });
 

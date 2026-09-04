@@ -6,12 +6,27 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+
 from layout_studio import Box, Frame, Layout, Position, Segment
+from layout_studio.viewer import LayoutViewer
 
 # Select a non-interactive backend before LayoutViewer2D lazily imports pyplot.
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 _LARGE_OBJECT_COUNT = 128
+
+
+def test_vtk_batch_triangulation_accepts_ragged_polygons():
+    vertices = np.zeros((4, 3), dtype=float)
+    triangles = LayoutViewer._triangulated_faces(
+        vertices,
+        [[0, 1, 2], [0, 1, 2, 3]],
+    )
+
+    np.testing.assert_array_equal(
+        triangles,
+        [[0, 1, 2], [0, 1, 2], [0, 2, 3]],
+    )
 
 
 @pytest.fixture(scope="module")

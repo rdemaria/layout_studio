@@ -35,7 +35,8 @@ _AUTO_CURVE_RESOLUTION = 64
 _AUTO_OBJECT_RESOLUTION = 8
 _AUTO_RADIAL_RESOLUTION = 12
 _OBJECT_BATCH_THRESHOLD = 128
-_OBJECT_BATCH_SIZE = 256
+_OBJECT_BATCH_SIZE = 4096
+_OBJECT_BATCH_BYTE_BUDGET = 32 * 1024 * 1024
 _OBJECT_TRIANGLE_BUDGET = 200_000
 _NAMED_FRAME_ARROW_FRACTION = 0.05
 _ACTIVE_FRAME_ARROW_FRACTION = 0.08
@@ -389,6 +390,7 @@ class LayoutViewer:
         self._orientation_enabled = False
         self._press_position: tuple[int, int] | None = None
         self._camera_interacting = False
+        self._restore_depth_peeling = False
         self._selection: _Selection | None = None
         self._hover: _Selection | None = None
         self._last_hover_pick = 0.0
@@ -411,7 +413,8 @@ class LayoutViewer:
         self._decoration_actors: list[Any] = []
         self._display_axes: list[_DisplayAxes] = []
         self._hover_display_axes: _DisplayAxes | None = None
-        self._bounds_points: list[np.ndarray] = []
+        self._bounds_low = np.full(3, np.inf, dtype=float)
+        self._bounds_high = np.full(3, -np.inf, dtype=float)
         self._named_frames_built = False
         self._beam_frames_built = False
         self._object_highlight_actor: Any = None
@@ -434,10 +437,9 @@ class LayoutViewer:
             self._build_orientation_widget()
             self._install_interaction()
             self._apply_layer_visibility()
-            self.fit()
+            self.home()
         except BaseException:
-            self._resolver_context.__exit__(None, None, None)
-            self._resolver_context = None
+            self.close()
             raise
 
         try:
@@ -722,25 +724,36 @@ class LayoutViewer:
         self._curve_visuals[name] = visual
         self._curve_actors.extend((halo, actor))
         self._register_pick_target(actor, _PickTarget("curve", name, curve))
-        self._bounds_points.append(points)
+        self._accumulate_bounds(points)
 
     def _polyline_data(self, points: np.ndarray) -> Any:
         vtk = self._vtk
+        from vtk.util.numpy_support import (  # type: ignore[import-not-found]
+            numpy_to_vtk,
+            numpy_to_vtkIdTypeArray,
+        )
+
+        values = np.ascontiguousarray(points, dtype=np.float64)
         vtk_points = vtk.vtkPoints()
-        vtk_points.SetNumberOfPoints(len(points))
-        for index, point in enumerate(points):
-            vtk_points.SetPoint(index, *(float(item) for item in point))
+        vtk_points.SetData(numpy_to_vtk(values, deep=True))
         polydata = vtk.vtkPolyData()
         polydata.SetPoints(vtk_points)
         cells = vtk.vtkCellArray()
         if len(points) == 1:
-            cells.InsertNextCell(1)
-            cells.InsertCellPoint(0)
+            offsets = np.asarray([0, 1], dtype=np.int64)
+            connectivity = np.asarray([0], dtype=np.int64)
+            cells.SetData(
+                numpy_to_vtkIdTypeArray(offsets, deep=True),
+                numpy_to_vtkIdTypeArray(connectivity, deep=True),
+            )
             polydata.SetVerts(cells)
         else:
-            cells.InsertNextCell(len(points))
-            for index in range(len(points)):
-                cells.InsertCellPoint(index)
+            offsets = np.asarray([0, len(points)], dtype=np.int64)
+            connectivity = np.arange(len(points), dtype=np.int64)
+            cells.SetData(
+                numpy_to_vtkIdTypeArray(offsets, deep=True),
+                numpy_to_vtkIdTypeArray(connectivity, deep=True),
+            )
             polydata.SetLines(cells)
         return polydata
 
@@ -758,6 +771,7 @@ class LayoutViewer:
             obj,
             resolution=mesh_resolution,
             radial_resolution=self.radial_resolution,
+            include_metadata=False,
         )
         vertices = _as_points(_data_field(data, "vertices", ()))
         faces = self._triangulated_faces(vertices, _data_field(data, "faces", ()))
@@ -770,7 +784,7 @@ class LayoutViewer:
         visual = _ObjectVisual(name, obj, vertices, faces, None, color, pose)
         self._object_visuals[name] = visual
         self._object_visual_by_identity[id(obj)] = visual
-        self._bounds_points.append(vertices)
+        self._accumulate_bounds(vertices)
 
         if self.batched_objects:
             self._pending_object_visuals.append(visual)
@@ -831,13 +845,42 @@ class LayoutViewer:
             return 1
         if self._requested_object_resolution is not None:
             return self.object_resolution
-        # Retain large arcs even when the scene-wide polygon budget reduced
-        # the baseline: at most roughly 7.5 degrees of bend per chord.
+        # Retain large arcs, but keep automatic detail inside the scene-wide
+        # triangle budget.  Without this cap thousands of curved objects could
+        # each force 64 sections and defeat the large-layout LOD entirely.
         angle_resolution = math.ceil(curvature_value * length_value / math.radians(7.5))
-        return max(2, self.object_resolution, min(64, angle_resolution))
+        sides = max(4, getattr(self, "radial_resolution", _AUTO_RADIAL_RESOLUTION))
+        scene_cap = max(
+            2,
+            _OBJECT_TRIANGLE_BUDGET
+            // (2 * max(1, getattr(self, "_object_count", 1)) * sides),
+        )
+        return max(
+            2,
+            self.object_resolution,
+            min(64, scene_cap, angle_resolution),
+        )
 
     @staticmethod
     def _triangulated_faces(vertices: np.ndarray, faces: Any) -> np.ndarray:
+        try:
+            array = np.asarray(faces)
+        except (TypeError, ValueError):
+            # NumPy 1.24+ rejects ragged polygon lists instead of producing an
+            # object array.  The general fan-triangulation path supports them.
+            array = np.asarray((), dtype=np.int64)
+        if array.ndim == 2 and array.shape[1:] == (3,):
+            try:
+                triangles = np.ascontiguousarray(array, dtype=np.int64)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(
+                    "object mesh faces must contain integer indices"
+                ) from exc
+            if len(triangles) and (
+                np.min(triangles) < 0 or np.max(triangles) >= len(vertices)
+            ):
+                raise ValueError("object mesh face contains an invalid vertex index")
+            return triangles
         triangles: list[tuple[int, int, int]] = []
         for face in faces:
             ids = [int(index) for index in face]
@@ -854,8 +897,28 @@ class LayoutViewer:
         """Build chunked, directly-coloured object actors for large layouts."""
 
         visuals = self._pending_object_visuals
-        for first in range(0, len(visuals), self.object_batch_size):
-            self._add_object_batch(visuals[first : first + self.object_batch_size])
+        batch: list[_ObjectVisual] = []
+        batch_bytes = 0
+        for visual in visuals:
+            # Batching duplicates offset connectivity and then deep-copies the
+            # arrays into VTK. Bound raw NumPy intermediates as well as object
+            # count so an explicit high-resolution mesh cannot create a
+            # multi-gigabyte 4096-object concatenation.
+            visual_bytes = (
+                int(visual.vertices.nbytes)
+                + 2 * int(visual.faces.nbytes)
+                + 3 * len(visual.faces)
+            )
+            if batch and (
+                len(batch) >= self.object_batch_size
+                or batch_bytes + visual_bytes > _OBJECT_BATCH_BYTE_BUDGET
+            ):
+                self._add_object_batch(batch)
+                batch = []
+                batch_bytes = 0
+            batch.append(visual)
+            batch_bytes += visual_bytes
+        self._add_object_batch(batch)
         visuals.clear()
 
     def _add_object_batch(self, visuals: list[_ObjectVisual]) -> None:
@@ -936,20 +999,55 @@ class LayoutViewer:
 
     def _surface_data(self, vertices: np.ndarray, faces: Any) -> Any:
         vtk = self._vtk
+        from vtk.util.numpy_support import (  # type: ignore[import-not-found]
+            numpy_to_vtk,
+            numpy_to_vtkIdTypeArray,
+        )
+
+        vertex_array = np.ascontiguousarray(vertices, dtype=np.float64)
         points = vtk.vtkPoints()
-        points.SetNumberOfPoints(len(vertices))
-        for index, point in enumerate(vertices):
-            points.SetPoint(index, *(float(item) for item in point))
+        points.SetData(numpy_to_vtk(vertex_array, deep=True))
+
+        try:
+            face_array = np.asarray(faces)
+        except ValueError:
+            face_array = np.asarray((), dtype=np.int64)
+        if face_array.ndim == 2 and face_array.dtype != object:
+            cell_width = face_array.shape[1]
+            if cell_width < 3:
+                connectivity = np.empty(0, dtype=np.int64)
+                offsets = np.asarray([0], dtype=np.int64)
+            else:
+                connectivity = np.ascontiguousarray(face_array, dtype=np.int64).reshape(
+                    -1
+                )
+                offsets = np.arange(
+                    0,
+                    (len(face_array) + 1) * cell_width,
+                    cell_width,
+                    dtype=np.int64,
+                )
+        else:
+            rows: list[np.ndarray] = []
+            for face in faces:
+                ids = np.asarray(tuple(face), dtype=np.int64).reshape(-1)
+                if len(ids) >= 3:
+                    rows.append(ids)
+            counts = np.fromiter((len(row) for row in rows), dtype=np.int64)
+            offsets = np.empty(len(rows) + 1, dtype=np.int64)
+            offsets[0] = 0
+            np.cumsum(counts, out=offsets[1:])
+            connectivity = np.concatenate(rows) if rows else np.empty(0, dtype=np.int64)
+
+        if len(connectivity) and (
+            np.min(connectivity) < 0 or np.max(connectivity) >= len(vertex_array)
+        ):
+            raise ValueError("object mesh face contains an invalid vertex index")
         polygons = vtk.vtkCellArray()
-        for face in faces:
-            ids = [int(index) for index in face]
-            if len(ids) < 3:
-                continue
-            if any(index < 0 or index >= len(vertices) for index in ids):
-                raise ValueError("object mesh face contains an invalid vertex index")
-            polygons.InsertNextCell(len(ids))
-            for index in ids:
-                polygons.InsertCellPoint(index)
+        polygons.SetData(
+            numpy_to_vtkIdTypeArray(np.ascontiguousarray(offsets), deep=True),
+            numpy_to_vtkIdTypeArray(np.ascontiguousarray(connectivity), deep=True),
+        )
         polydata = vtk.vtkPolyData()
         polydata.SetPoints(points)
         polydata.SetPolys(polygons)
@@ -969,12 +1067,12 @@ class LayoutViewer:
         return type_
 
     def _finish_bounds(self) -> None:
-        if self._bounds_points:
-            points = np.concatenate(self._bounds_points, axis=0)
+        if np.all(np.isfinite(self._bounds_low)):
+            low = self._bounds_low
+            high = self._bounds_high
         else:
-            points = np.asarray([[-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]])
-        low = np.min(points, axis=0)
-        high = np.max(points, axis=0)
+            low = np.asarray([-1.0, -1.0, -1.0])
+            high = np.asarray([1.0, 1.0, 1.0])
         self._bounds = np.asarray(
             [low[0], high[0], low[1], high[1], low[2], high[2]], dtype=float
         )
@@ -982,13 +1080,17 @@ class LayoutViewer:
         self._scene_scale = max(1.0, float(np.linalg.norm(extent)))
         self.bounds = tuple(float(value) for value in self._bounds)
 
-    def _extend_bounds(self, points: Any) -> None:
+    def _accumulate_bounds(self, points: Any) -> None:
         values = _as_points(points)
         if not len(values):
             return
-        low, high = np.min(values, axis=0), np.max(values, axis=0)
-        self._bounds[[0, 2, 4]] = np.minimum(self._bounds[[0, 2, 4]], low)
-        self._bounds[[1, 3, 5]] = np.maximum(self._bounds[[1, 3, 5]], high)
+        self._bounds_low = np.minimum(self._bounds_low, np.min(values, axis=0))
+        self._bounds_high = np.maximum(self._bounds_high, np.max(values, axis=0))
+
+    def _extend_bounds(self, points: Any) -> None:
+        self._accumulate_bounds(points)
+        self._bounds[[0, 2, 4]] = self._bounds_low
+        self._bounds[[1, 3, 5]] = self._bounds_high
         self.bounds = tuple(float(value) for value in self._bounds)
 
     def _build_ground_grid(self) -> None:
@@ -1124,16 +1226,26 @@ class LayoutViewer:
         if not records:
             return
         vtk = self._vtk
+        from vtk.util.numpy_support import (  # type: ignore[import-not-found]
+            numpy_to_vtk,
+            numpy_to_vtkIdTypeArray,
+        )
+
+        origins = np.ascontiguousarray(
+            [_pose_origin(pose) for _name, _obj, _frame, pose in records],
+            dtype=np.float64,
+        )
         points = vtk.vtkPoints()
+        points.SetData(numpy_to_vtk(origins, deep=True))
         cells = vtk.vtkCellArray()
+        cells.SetData(
+            numpy_to_vtkIdTypeArray(
+                np.arange(len(records) + 1, dtype=np.int64), deep=True
+            ),
+            numpy_to_vtkIdTypeArray(np.arange(len(records), dtype=np.int64), deep=True),
+        )
         targets: list[_PickTarget] = []
-        origins: list[np.ndarray] = []
-        for index, (object_name, obj, frame_name, pose) in enumerate(records):
-            origin = _pose_origin(pose)
-            points.InsertNextPoint(*(float(value) for value in origin))
-            cells.InsertNextCell(1)
-            cells.InsertCellPoint(index)
-            origins.append(origin)
+        for object_name, obj, frame_name, pose in records:
             targets.append(
                 _PickTarget(
                     "frame", f"{object_name}.{frame_name}", obj, pose, obj, frame_name
@@ -1163,20 +1275,31 @@ class LayoutViewer:
         if not records:
             return
         vtk = self._vtk
-        points = vtk.vtkPoints()
-        polygons = vtk.vtkCellArray()
         targets: list[_PickTarget] = []
         colors = np.empty((len(records), 3), dtype=np.uint8)
-        point_index = 0
-        all_vertices: list[np.ndarray] = []
+        all_vertices = [
+            np.ascontiguousarray(vertices, dtype=np.float64)
+            for _name, _obj, _frame, _pose, vertices in records
+        ]
+        counts = np.fromiter(
+            (len(vertices) for vertices in all_vertices),
+            dtype=np.int64,
+            count=len(all_vertices),
+        )
+        offsets = np.empty(len(records) + 1, dtype=np.int64)
+        offsets[0] = 0
+        np.cumsum(counts, out=offsets[1:])
+        vertex_array = np.ascontiguousarray(np.concatenate(all_vertices, axis=0))
+        connectivity = np.arange(len(vertex_array), dtype=np.int64)
+        if np.all(counts == counts[0]):
+            faces: Any = connectivity.reshape(len(records), int(counts[0]))
+        else:
+            faces = np.split(connectivity, offsets[1:-1])
+        polydata = self._surface_data(vertex_array, faces)
+
         for cell_index, (object_name, obj, frame_name, pose, vertices) in enumerate(
             records
         ):
-            polygons.InsertNextCell(len(vertices))
-            for vertex in vertices:
-                points.InsertNextPoint(*(float(value) for value in vertex))
-                polygons.InsertCellPoint(point_index)
-                point_index += 1
             color_text = "#66c7ff" if frame_name == "magnetic_entry" else "#ff9b78"
             colors[cell_index] = np.rint(
                 np.asarray(_hex_color(color_text, color_text)) * 255.0
@@ -1191,10 +1314,6 @@ class LayoutViewer:
                     frame_name,
                 )
             )
-            all_vertices.append(vertices)
-        polydata = vtk.vtkPolyData()
-        polydata.SetPoints(points)
-        polydata.SetPolys(polygons)
 
         from vtk.util.numpy_support import (  # type: ignore[import-not-found]
             numpy_to_vtk,
@@ -1229,7 +1348,7 @@ class LayoutViewer:
             self._register_batched_targets(actor, targets)
             actors.append(actor)
         self._beam_frame_actors.extend(actors)
-        self._extend_bounds(np.concatenate(all_vertices, axis=0))
+        self._extend_bounds(vertex_array)
 
     def _add_named_frame(
         self, object_name: str, obj: Any, frame_name: str, pose: Any
@@ -1625,10 +1744,22 @@ class LayoutViewer:
 
     # ------------------------------------------------------------- camera/io
 
-    def fit(self) -> LayoutViewer:
-        """Fit the camera to scoped entity geometry without forcing a render."""
+    def fit(
+        self,
+        entity: Any = None,
+        *,
+        preserve_orientation: bool = True,
+    ) -> LayoutViewer:
+        """Fit the camera to the scope or one curve/object.
 
-        bounds = self._padded_bounds()
+        By default the current viewing direction is preserved, matching the
+        web viewer's fit interaction.  Pass ``preserve_orientation=False`` or
+        call :meth:`home` to restore the canonical isometric direction.
+        """
+
+        self._ensure_open()
+        original_view_up = tuple(float(value) for value in self.camera.GetViewUp())
+        bounds = self._padded_bounds(self._entity_bounds(entity))
         center = np.asarray(
             [
                 (bounds[0] + bounds[1]) / 2.0,
@@ -1637,31 +1768,35 @@ class LayoutViewer:
             ],
             dtype=float,
         )
-        azimuth, elevation = -0.68, 0.42
-        direction = np.asarray(
-            [
-                math.sin(azimuth) * math.cos(elevation),
-                math.sin(elevation),
-                math.cos(azimuth) * math.cos(elevation),
-            ],
-            dtype=float,
-        )
-        diagonal = math.sqrt(
-            (bounds[1] - bounds[0]) ** 2
-            + (bounds[3] - bounds[2]) ** 2
-            + (bounds[5] - bounds[4]) ** 2
-        )
-        distance = max(2.0, diagonal * 1.35)
-        self.camera.SetFocalPoint(*(float(value) for value in center))
-        self.camera.SetPosition(
-            *(float(value) for value in center + direction * distance)
-        )
-        self.camera.SetViewUp(0.0, 1.0, 0.0)
+        if not preserve_orientation:
+            azimuth, elevation = -0.68, 0.42
+            direction = np.asarray(
+                [
+                    math.sin(azimuth) * math.cos(elevation),
+                    math.sin(elevation),
+                    math.cos(azimuth) * math.cos(elevation),
+                ],
+                dtype=float,
+            )
+            diagonal = math.sqrt(
+                (bounds[1] - bounds[0]) ** 2
+                + (bounds[3] - bounds[2]) ** 2
+                + (bounds[5] - bounds[4]) ** 2
+            )
+            distance = max(2.0, diagonal * 1.35)
+            self.camera.SetFocalPoint(*(float(value) for value in center))
+            self.camera.SetPosition(
+                *(float(value) for value in center + direction * distance)
+            )
+            self.camera.SetViewUp(0.0, 1.0, 0.0)
         try:
             self.renderer.ResetCamera(*bounds)
         except TypeError:
             self.renderer.ResetCamera(bounds)
-        self.camera.SetViewUp(0.0, 1.0, 0.0)
+        if preserve_orientation:
+            self.camera.SetViewUp(*original_view_up)
+        else:
+            self.camera.SetViewUp(0.0, 1.0, 0.0)
         try:
             self.renderer.ResetCameraClippingRange(*bounds)
         except TypeError:
@@ -1670,21 +1805,84 @@ class LayoutViewer:
         self._request_render()
         return self
 
-    def _padded_bounds(self) -> tuple[float, float, float, float, float, float]:
-        result = self._bounds.astype(float).copy()
+    def _entity_bounds(self, entity: Any) -> np.ndarray:
+        if entity is None or entity is self.layout:
+            return self._bounds
+        curve_visual: _CurveVisual | None = None
+        object_visual: _ObjectVisual | None = None
+        if isinstance(entity, str):
+            text = entity.strip()
+            if text.startswith("curve:"):
+                curve_visual = self._curve_visuals.get(text[6:])
+            elif text.startswith("object:"):
+                object_visual = self._object_visuals.get(text[7:])
+            else:
+                curve_visual = self._curve_visuals.get(text)
+                object_visual = self._object_visuals.get(text)
+                if curve_visual is not None and object_visual is not None:
+                    raise ValueError(
+                        f"fit name {text!r} is ambiguous; use 'curve:' or 'object:'"
+                    )
+        else:
+            curve_visual = next(
+                (
+                    item
+                    for item in self._curve_visuals.values()
+                    if item.entity is entity
+                ),
+                None,
+            )
+            object_visual = next(
+                (
+                    item
+                    for item in self._object_visuals.values()
+                    if item.entity is entity
+                ),
+                None,
+            )
+        points = (
+            curve_visual.points
+            if curve_visual is not None
+            else object_visual.vertices
+            if object_visual is not None
+            else None
+        )
+        if points is None or not len(points):
+            raise ValueError("fit entity is not represented in this viewer scope")
+        low, high = np.min(points, axis=0), np.max(points, axis=0)
+        return np.asarray(
+            [low[0], high[0], low[1], high[1], low[2], high[2]], dtype=float
+        )
+
+    def _padded_bounds(
+        self, source: Sequence[float] | None = None
+    ) -> tuple[float, float, float, float, float, float]:
+        result = np.asarray(
+            self._bounds if source is None else source, dtype=float
+        ).copy()
+        local_scale = math.sqrt(
+            (result[1] - result[0]) ** 2
+            + (result[3] - result[2]) ** 2
+            + (result[5] - result[4]) ** 2
+        )
         for low_index, high_index in ((0, 1), (2, 3), (4, 5)):
             span = result[high_index] - result[low_index]
-            padding = max(self._scene_scale * 0.025, span * 0.06, 1e-3)
+            padding = max(local_scale * 0.025, span * 0.06, 1e-3)
             if span < 1e-10:
                 padding = max(padding, 0.5)
             result[low_index] -= padding
             result[high_index] += padding
         return tuple(float(value) for value in result)
 
-    def reset_camera(self) -> LayoutViewer:
-        """Alias for :meth:`fit`, useful at an interactive prompt."""
+    def home(self, entity: Any = None) -> LayoutViewer:
+        """Fit the scope or entity using the canonical isometric direction."""
 
-        return self.fit()
+        return self.fit(entity, preserve_orientation=False)
+
+    def reset_camera(self) -> LayoutViewer:
+        """Restore the canonical isometric view and fit the scoped geometry."""
+
+        return self.home()
 
     def show(self) -> LayoutViewer:
         """Render the scene and, for native windows, start the interactor."""
@@ -1810,50 +2008,43 @@ class LayoutViewer:
         self._render_started = False
         self._press_position = None
         self._hover = None
+
+        def cleanup(subject: Any, method_name: str, *args: Any) -> None:
+            if subject is None:
+                return
+            with suppress(Exception):
+                method = getattr(subject, method_name, None)
+                if callable(method):
+                    method(*args)
+
         try:
+            orientation_widget = getattr(self, "orientation_widget", None)
             if self._orientation_enabled:
-                self.orientation_widget.SetEnabled(False)
+                cleanup(orientation_widget, "SetEnabled", False)
                 self._orientation_enabled = False
-            detach_widget = getattr(self.orientation_widget, "SetInteractor", None)
-            if callable(detach_widget):
-                detach_widget(None)
+            cleanup(orientation_widget, "SetInteractor", None)
 
             for subject, tag in reversed(self._observer_tags):
-                try:
-                    subject.RemoveObserver(tag)
-                except (AttributeError, RuntimeError):
-                    pass
+                cleanup(subject, "RemoveObserver", tag)
             self._observer_tags.clear()
 
-            remove_locators = getattr(self.picker, "RemoveAllLocators", None)
-            if callable(remove_locators):
-                remove_locators()
-            clear_pick_list = getattr(self.picker, "InitializePickList", None)
-            if callable(clear_pick_list):
-                clear_pick_list()
+            picker = getattr(self, "picker", None)
+            cleanup(picker, "RemoveAllLocators")
+            cleanup(picker, "InitializePickList")
             self._pick_locators.clear()
-            set_picker = getattr(self.interactor, "SetPicker", None)
-            if callable(set_picker):
-                set_picker(None)
+            interactor = getattr(self, "interactor", None)
+            cleanup(interactor, "SetPicker", None)
+            cleanup(interactor, "TerminateApp")
+            if self._interactor_initialised:
+                cleanup(interactor, "Disable")
 
-            terminate = getattr(self.interactor, "TerminateApp", None)
-            if callable(terminate):
-                terminate()
-            disable = getattr(self.interactor, "Disable", None)
-            if self._interactor_initialised and callable(disable):
-                disable()
-
-            finalize = getattr(self.render_window, "Finalize", None)
-            if callable(finalize):
-                finalize()
-            set_window = getattr(self.interactor, "SetRenderWindow", None)
-            if callable(set_window):
-                set_window(None)
-            set_style = getattr(self.interactor, "SetInteractorStyle", None)
-            if callable(set_style):
-                set_style(None)
-            self.renderer.RemoveAllViewProps()
-            self.render_window.RemoveRenderer(self.renderer)
+            render_window = getattr(self, "render_window", None)
+            cleanup(render_window, "Finalize")
+            cleanup(interactor, "SetRenderWindow", None)
+            cleanup(interactor, "SetInteractorStyle", None)
+            renderer = getattr(self, "renderer", None)
+            cleanup(renderer, "RemoveAllViewProps")
+            cleanup(render_window, "RemoveRenderer", renderer)
 
             # IPython retains the value of the last expression in Out[n].
             # Release scene-sized Python/VTK references even while the closed
@@ -1871,9 +2062,14 @@ class LayoutViewer:
             self._decoration_actors.clear()
             self._display_axes.clear()
             self._hover_display_axes = None
-            self._bounds_points.clear()
-            self.curve_actors.clear()
-            self.object_actors.clear()
+            self._bounds_low = np.full(3, np.inf, dtype=float)
+            self._bounds_high = np.full(3, -np.inf, dtype=float)
+            public_curve_actors = getattr(self, "curve_actors", None)
+            if hasattr(public_curve_actors, "clear"):
+                public_curve_actors.clear()
+            public_object_actors = getattr(self, "object_actors", None)
+            if hasattr(public_object_actors, "clear"):
+                public_object_actors.clear()
             self._object_highlight_actor = None
             self._selection = None
             self._hover = None
@@ -1883,9 +2079,11 @@ class LayoutViewer:
             self.object_scope = ()
             self.layout = None
         finally:
-            if self._resolver_context is not None:
-                self._resolver_context.__exit__(None, None, None)
-                self._resolver_context = None
+            resolver_context = self._resolver_context
+            self._resolver_context = None
+            if resolver_context is not None:
+                with suppress(Exception):
+                    resolver_context.__exit__(None, None, None)
             self.resolver = None
             self._closing = False
 
@@ -1915,6 +2113,7 @@ class LayoutViewer:
     ) -> LayoutViewer:
         """Highlight a scoped entity/frame, or clear selection with ``None``."""
 
+        self._ensure_open()
         if entity is None:
             self._set_selection(None)
             return self
@@ -2173,8 +2372,10 @@ class LayoutViewer:
             self.set_objects_visible(not self.objects_visible)
         elif key == "b":
             self.set_beam_frames_visible(not self.beam_frames_visible)
-        elif key in {"f", "r"}:
+        elif key == "f":
             self.fit()
+        elif key == "r":
+            self.home()
         elif key in {"escape", "esc"}:
             self.clear_selection()
 
@@ -2208,6 +2409,16 @@ class LayoutViewer:
         self._last_hover_position = position
         self._last_hover_pick = now
         selection = self._pick_selection(x, y)
+        if selection is None and self._hover is None:
+            return
+        if (
+            selection is not None
+            and selection.kind != "curve"
+            and self._same_selection(selection, self._hover)
+        ):
+            self.tooltip.SetDisplayPosition(x + 14, y + 14)
+            self._request_render()
+            return
         self._hover = selection
         if selection is None:
             self.tooltip.SetVisibility(False)
@@ -2229,6 +2440,9 @@ class LayoutViewer:
         self._request_render()
 
     def _on_mouse_leave(self, _caller: Any, _event: str) -> None:
+        if self._hover is None:
+            self._last_hover_position = None
+            return
         self._hover = None
         self._last_hover_position = None
         self.tooltip.SetVisibility(False)
@@ -2242,10 +2456,25 @@ class LayoutViewer:
 
     def _on_interaction_start(self, _caller: Any, _event: str) -> None:
         self._camera_interacting = True
+        get_depth_peeling = getattr(self.renderer, "GetUseDepthPeeling", None)
+        set_depth_peeling = getattr(self.renderer, "SetUseDepthPeeling", None)
+        if (
+            callable(get_depth_peeling)
+            and callable(set_depth_peeling)
+            and bool(get_depth_peeling())
+        ):
+            self._restore_depth_peeling = True
+            set_depth_peeling(False)
 
     def _on_interaction_end(self, _caller: Any, _event: str) -> None:
         self._camera_interacting = False
         self._last_hover_position = None
+        if self._restore_depth_peeling:
+            self._restore_depth_peeling = False
+            set_depth_peeling = getattr(self.renderer, "SetUseDepthPeeling", None)
+            if callable(set_depth_peeling):
+                set_depth_peeling(True)
+            self._request_render()
 
     def _on_exit(self, caller: Any, _event: str) -> None:
         # Installing an ExitEvent observer suppresses VTK's default exit

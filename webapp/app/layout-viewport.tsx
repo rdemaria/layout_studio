@@ -57,6 +57,7 @@ import {
   type CurveSample,
   type MagneticFrameGeometry,
   type SceneGeometry,
+  type SceneScope,
 } from "./layout-geometry";
 
 type NavigationMode = "orbit" | "pan" | "select" | "zoom-region";
@@ -64,6 +65,7 @@ type Camera = { azimuth: number; elevation: number; distance: number; target: Ve
 type Projection = { x: number; y: number; depth: number; scale: number };
 type Projector = (point: Vec3) => Projection | null;
 export type CanonicalView = "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+const DEFAULT_SCENE_SCOPE: SceneScope = { kind: "layout" };
 export type ScreenRectangle = {
   startX: number;
   startY: number;
@@ -76,6 +78,41 @@ export type ViewportFitRequest = {
   kind: "curve" | "object";
   name: string;
 };
+
+export type ViewportCommand =
+  | {
+      id: number;
+      command: "fit";
+      target:
+        | { kind: "layout" }
+        | { kind: "curve" | "object"; name: string };
+    }
+  | { id: number; command: "set_mode"; mode: NavigationMode }
+  | { id: number; command: "set_view"; view: CanonicalView }
+  | {
+      id: number;
+      command: "set_visibility";
+      visibility: {
+        curves?: boolean;
+        objects?: boolean;
+        frames?: boolean;
+        beam_frames?: boolean;
+      };
+    };
+
+export type ViewportCommandApplied = (
+  id: number,
+  error?: string,
+) => void;
+
+export function viewportCommandRenderError(
+  command: ViewportCommand,
+  geometryError: string,
+): string | undefined {
+  return command.command === "set_visibility" && geometryError
+    ? `Cannot render viewport: ${geometryError}`
+    : undefined;
+}
 
 type HoverTarget =
   | {
@@ -156,6 +193,52 @@ type CurveProbe = {
   sources: CurveStationSource[];
 };
 
+export function syncCanvasDimensions(
+  canvas: Pick<HTMLCanvasElement, "width" | "height" | "style">,
+  width: number,
+  height: number,
+  ratio: number,
+): void {
+  const pixelWidth = Math.floor(width * ratio);
+  const pixelHeight = Math.floor(height * ratio);
+  if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+  if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
+  const cssWidth = `${width}px`;
+  const cssHeight = `${height}px`;
+  if (canvas.style.width !== cssWidth) canvas.style.width = cssWidth;
+  if (canvas.style.height !== cssHeight) canvas.style.height = cssHeight;
+}
+
+export function traceProjectedPolyline(
+  context: Pick<CanvasRenderingContext2D, "moveTo" | "lineTo">,
+  points: ({ x: number; y: number } | null)[],
+): void {
+  let started = false;
+  for (const point of points) {
+    if (!point) {
+      started = false;
+      continue;
+    }
+    if (started) context.lineTo(point.x, point.y);
+    else context.moveTo(point.x, point.y);
+    started = true;
+  }
+}
+
+export function viewportRelativeArrowLength(
+  projectedScale: number,
+  width: number,
+  height: number,
+): number {
+  if (
+    !Number.isFinite(projectedScale) || projectedScale <= 0 ||
+    !Number.isFinite(width) || width <= 0 ||
+    !Number.isFinite(height) || height <= 0
+  ) return 0;
+  const desiredPixels = Math.max(24, Math.min(64, Math.min(width, height) * 0.075));
+  return desiredPixels / projectedScale;
+}
+
 export function toggleViewerSelection(
   current: SelectedEntity,
   candidate: SelectedEntity,
@@ -186,6 +269,51 @@ const EMPTY_SCENE: SceneGeometry = {
   magneticFrames: [],
   bounds: { min: [-1, -1, -1], max: [1, 1, 1] },
 };
+
+export function sceneBoundsForVisibility(
+  scene: SceneGeometry,
+  visibility: {
+    curves: boolean;
+    objects: boolean;
+    frames: boolean;
+    beamFrames: boolean;
+  },
+): { min: Vec3; max: Vec3 } | null {
+  let min: Vec3 | null = null;
+  let max: Vec3 | null = null;
+  const include = (point: Vec3) => {
+    if (!point.every(Number.isFinite)) return;
+    if (!min || !max) {
+      min = [...point];
+      max = [...point];
+      return;
+    }
+    for (let axis = 0; axis < 3; axis += 1) {
+      min[axis] = Math.min(min[axis], point[axis]);
+      max[axis] = Math.max(max[axis], point[axis]);
+    }
+  };
+
+  if (visibility.curves) {
+    for (const curve of scene.curves) {
+      for (const sample of curve.samples) include(sample.p);
+    }
+  }
+  if (visibility.objects) {
+    for (const object of scene.objects) {
+      for (const vertex of object.vertices) include(vertex);
+    }
+    if (visibility.beamFrames) {
+      for (const frame of scene.magneticFrames) {
+        for (const vertex of frame.vertices) include(vertex);
+      }
+    }
+  }
+  if (visibility.frames) {
+    for (const frame of scene.frames) include(frame.frame.o);
+  }
+  return min && max ? { min, max } : null;
+}
 
 function sameHoverTarget(a: HoverTarget, b: HoverTarget): boolean {
   if (!a || !b) return a === b;
@@ -624,11 +752,17 @@ export function LayoutViewport({
   selection,
   onSelect,
   fitRequest = null,
+  command = null,
+  onCommandApplied,
+  scope = DEFAULT_SCENE_SCOPE,
 }: {
   layout: LayoutData;
   selection: SelectedEntity;
   onSelect: (selection: SelectedEntity) => void;
   fitRequest?: ViewportFitRequest | null;
+  command?: ViewportCommand | null;
+  onCommandApplied?: ViewportCommandApplied;
+  scope?: SceneScope;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -647,26 +781,36 @@ export function LayoutViewport({
   } | null>(null);
   const fittedOnceRef = useRef(false);
   const handledFitRequestRef = useRef(0);
+  const handledCommandRef = useRef(0);
+  const reportedCommandRef = useRef(0);
+  const handledScopeRef = useRef(
+    scope.kind === "layout" ? "layout" : `${scope.kind}:${scope.name}`,
+  );
   const sceneResult = useMemo(() => {
     try {
-      return { scene: buildScene(layout), error: "" };
+      return { scene: buildScene(layout, scope), error: "" };
     } catch (error) {
       return {
         scene: EMPTY_SCENE,
         error: error instanceof Error ? error.message : "Unknown geometry error",
       };
     }
-  }, [layout]);
+  }, [layout, scope]);
   const { scene } = sceneResult;
   const geometryError = sceneResult.error;
   const [mode, setMode] = useState<NavigationMode>("orbit");
   const [hovered, setHovered] = useState<HoverTarget>(null);
   const [showCurves, setShowCurves] = useState(true);
   const [showObjects, setShowObjects] = useState(true);
+  const [showFrames, setShowFrames] = useState(true);
   const [showBeamFrames, setShowBeamFrames] = useState(true);
   const [curveProbe, setCurveProbe] = useState<CurveProbe | null>(null);
   const [zoomRectangle, setZoomRectangle] =
     useState<ScreenRectangle | null>(null);
+  const [commandResult, setCommandResult] = useState<{
+    id: number;
+    error?: string;
+  } | null>(null);
   const [camera, setCamera] = useState<Camera>({
     azimuth: -0.68,
     elevation: 0.42,
@@ -760,6 +904,17 @@ export function LayoutViewport({
       });
     }
 
+    if (showFrames) {
+      for (const namedFrame of scene.frames) {
+        addFrameStation(
+          namedFrame.frame.o,
+          namedFrame.object,
+          namedFrame.name,
+          `${namedFrame.object}.${namedFrame.name}`,
+        );
+      }
+    }
+
     if (showObjects) {
       for (const object of scene.objects) {
         addFrameStation(
@@ -767,14 +922,6 @@ export function LayoutViewport({
           object.name,
           "center",
           `${object.name}.center`,
-        );
-      }
-      for (const namedFrame of scene.frames) {
-        addFrameStation(
-          namedFrame.frame.o,
-          namedFrame.object,
-          namedFrame.name,
-          `${namedFrame.object}.${namedFrame.name}`,
         );
       }
       const surfacePaths = curveObjectSurfaceIntersectionPaths(
@@ -849,7 +996,15 @@ export function LayoutViewport({
       }
     }
     return grouped;
-  }, [geometryError, layout, scene, selectedCurve, showBeamFrames, showObjects]);
+  }, [
+    geometryError,
+    layout,
+    scene,
+    selectedCurve,
+    showBeamFrames,
+    showFrames,
+    showObjects,
+  ]);
 
   const activeCurveProbe = useMemo<CurveProbe | null>(() => {
     if (!selectedCurve || geometryError) return null;
@@ -879,10 +1034,20 @@ export function LayoutViewport({
     );
   }, [size.height, size.width]);
 
+  const visibleBounds = useMemo(
+    () => sceneBoundsForVisibility(scene, {
+      curves: showCurves,
+      objects: showObjects,
+      frames: showFrames,
+      beamFrames: showBeamFrames,
+    }),
+    [scene, showBeamFrames, showCurves, showFrames, showObjects],
+  );
+
   const fit = useCallback(() => {
     setZoomRectangle(null);
-    fitPoints(boundsCorners(scene.bounds));
-  }, [fitPoints, scene.bounds]);
+    fitPoints(visibleBounds ? boundsCorners(visibleBounds) : []);
+  }, [fitPoints, visibleBounds]);
 
   useEffect(() => {
     if (!fittedOnceRef.current) {
@@ -890,6 +1055,20 @@ export function LayoutViewport({
       fit();
     }
   }, [fit]);
+
+  /* eslint-disable react-hooks/set-state-in-effect -- The command prop is an
+     external command stream. Applying a committed command here is the
+     synchronization boundary, and the follow-up effect acknowledges its
+     resulting render. */
+  useEffect(() => {
+    const scopeKey = scope.kind === "layout"
+      ? "layout"
+      : `${scope.kind}:${scope.name}`;
+    if (scopeKey === handledScopeRef.current) return;
+    handledScopeRef.current = scopeKey;
+    const timeout = window.setTimeout(fit, 0);
+    return () => window.clearTimeout(timeout);
+  }, [fit, scope]);
 
   useEffect(() => {
     if (
@@ -955,10 +1134,7 @@ export function LayoutViewport({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ratio = Math.min(2, window.devicePixelRatio || 1);
-    canvas.width = Math.floor(size.width * ratio);
-    canvas.height = Math.floor(size.height * ratio);
-    canvas.style.width = `${size.width}px`;
-    canvas.style.height = `${size.height}px`;
+    syncCanvasDimensions(canvas, size.width, size.height, ratio);
     const context = canvas.getContext("2d");
     if (!context) return;
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
@@ -1021,10 +1197,13 @@ export function LayoutViewport({
       color: string;
       selected: boolean;
     };
+    const objectProjections = showObjects
+      ? scene.objects.map((object) => object.vertices.map(project))
+      : [];
     const faces: FaceDraw[] = [];
     if (showObjects) {
-      for (const object of scene.objects) {
-        const projected = object.vertices.map(project);
+      for (const [objectIndex, object] of scene.objects.entries()) {
+        const projected = objectProjections[objectIndex];
         for (const face of object.faces) {
           const polygon = face
             .map((index) => projected[index])
@@ -1104,16 +1283,7 @@ export function LayoutViewport({
       context.lineCap = "round";
       context.lineJoin = "round";
       context.beginPath();
-      let started = false;
-      for (const point of projected) {
-        if (!point) continue;
-        if (!started) {
-          context.moveTo(point.x, point.y);
-          started = true;
-        } else {
-          context.lineTo(point.x, point.y);
-        }
-      }
+      traceProjectedPolyline(context, projected);
       context.strokeStyle = active
         ? "rgba(255, 190, 93, .32)"
         : rgba(curveColor, hovering ? 0.3 : 0.14);
@@ -1175,8 +1345,8 @@ export function LayoutViewport({
       }
     }
 
-    if (showObjects) for (const object of scene.objects) {
-      const projected = object.vertices.map(project);
+    if (showObjects) for (const [objectIndex, object] of scene.objects.entries()) {
+      const projected = objectProjections[objectIndex];
       const active =
         (selection?.kind === "object" && selection.name === object.name) ||
         (selection?.kind === "frame" && selection.object === object.name);
@@ -1187,15 +1357,17 @@ export function LayoutViewport({
         active || hovering
           ? rgba(object.type.color, 1)
           : rgba(object.type.color, 0.76);
+      context.beginPath();
+      let hasVisibleEdge = false;
       for (const [aIndex, bIndex] of object.edges) {
         const a = projected[aIndex];
         const b = projected[bIndex];
         if (!a || !b) continue;
-        context.beginPath();
         context.moveTo(a.x, a.y);
         context.lineTo(b.x, b.y);
-        context.stroke();
+        hasVisibleEdge = true;
       }
+      if (hasVisibleEdge) context.stroke();
       const ringSize = object.type.shape[0] === "box" ? 4 : 18;
       const rings: ({ x: number; y: number; radius: number } | null)[] = [];
       for (let offset = 0; offset < projected.length; offset += ringSize) {
@@ -1233,7 +1405,7 @@ export function LayoutViewport({
       }
     }
 
-    if (showObjects) for (const namedFrame of scene.frames) {
+    if (showFrames) for (const namedFrame of scene.frames) {
       const projected = project(namedFrame.frame.o);
       if (!projected) continue;
       const active =
@@ -1300,6 +1472,7 @@ export function LayoutViewport({
     selection,
     showBeamFrames,
     showCurves,
+    showFrames,
     showObjects,
     size,
   ]);
@@ -1308,16 +1481,7 @@ export function LayoutViewport({
     const canvas = overlayRef.current;
     if (!canvas) return;
     const ratio = Math.min(2, window.devicePixelRatio || 1);
-    const pixelWidth = Math.floor(size.width * ratio);
-    const pixelHeight = Math.floor(size.height * ratio);
-    if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
-    if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
-    if (canvas.style.width !== `${size.width}px`) {
-      canvas.style.width = `${size.width}px`;
-    }
-    if (canvas.style.height !== `${size.height}px`) {
-      canvas.style.height = `${size.height}px`;
-    }
+    syncCanvasDimensions(canvas, size.width, size.height, ratio);
     const context = canvas.getContext("2d");
     if (!context) return;
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
@@ -1329,7 +1493,7 @@ export function LayoutViewport({
         ? hovered.sample.frame
         : hovered?.kind === "magnetic_frame" && showObjects && showBeamFrames
           ? hovered.frame
-        : hovered?.kind === "frame" && showObjects
+        : hovered?.kind === "frame" && showFrames
           ? scene.frames.find(
               (namedFrame) =>
                 namedFrame.object === hovered.object &&
@@ -1339,9 +1503,10 @@ export function LayoutViewport({
     if (hoveredFrame) {
       const origin = project(hoveredFrame.o);
       if (origin) {
-        const axisSize = Math.max(
-          minimumCameraDistance(camera.target) * 16,
-          camera.distance * 0.035,
+        const axisSize = viewportRelativeArrowLength(
+          origin.scale,
+          size.width,
+          size.height,
         );
         const axes = [
           { vector: hoveredFrame.x, color: "#ff7185", label: "x" },
@@ -1411,6 +1576,7 @@ export function LayoutViewport({
     selection,
     showBeamFrames,
     showCurves,
+    showFrames,
     showObjects,
     size,
     zoomRectangle,
@@ -1420,7 +1586,7 @@ export function LayoutViewport({
     let closestFrame: { distance: number; target: FrameHitTarget } | null = null;
     for (const target of hitTargetsRef.current) {
       if (target.kind !== "frame") continue;
-      if (!showObjects) continue;
+      if (!showFrames) continue;
       const distance = Math.hypot(x - target.x, y - target.y);
       if (distance <= 11 && (!closestFrame || distance < closestFrame.distance)) {
         closestFrame = { distance, target };
@@ -1490,7 +1656,7 @@ export function LayoutViewport({
       x: closest.x,
       y: closest.y,
     };
-  }, [scene.curves, showBeamFrames, showCurves, showObjects]);
+  }, [scene.curves, showBeamFrames, showCurves, showFrames, showObjects]);
 
   const curveProbeAtPointer = useCallback((
     x: number,
@@ -1774,10 +1940,10 @@ export function LayoutViewport({
     setZoomRectangle(null);
   };
 
-  const selectNavigationMode = (nextMode: NavigationMode) => {
+  const selectNavigationMode = useCallback((nextMode: NavigationMode) => {
     setMode(nextMode);
     setZoomRectangle(null);
-  };
+  }, []);
 
   const hoverLabel =
     hovered?.kind === "frame" || hovered?.kind === "magnetic_frame"
@@ -1792,7 +1958,7 @@ export function LayoutViewport({
         frame: activeCurveProbe.sample.frame,
       };
     }
-    if (hovered?.kind === "frame" && showObjects) {
+    if (hovered?.kind === "frame" && showFrames) {
       const namedFrame = scene.frames.find(
         (candidate) =>
           candidate.object === hovered.object && candidate.name === hovered.name,
@@ -1834,7 +2000,7 @@ export function LayoutViewport({
           }
         : null;
     }
-    if (selection?.kind === "frame" && showObjects) {
+    if (selection?.kind === "frame" && showFrames) {
       const namedFrame = scene.frames.find(
         (candidate) =>
           candidate.object === selection.object &&
@@ -1856,6 +2022,7 @@ export function LayoutViewport({
     selection,
     showBeamFrames,
     showCurves,
+    showFrames,
     showObjects,
   ]);
 
@@ -1888,7 +2055,7 @@ export function LayoutViewport({
         : activeCurveProbe?.sources.length
           ? `Snapped to ${stationSourceLabel(activeCurveProbe.sources)}`
           : "Free curve position";
-  const setCurveLayerVisible = (checked: boolean) => {
+  const setCurveLayerVisible = useCallback((checked: boolean) => {
     setShowCurves(checked);
     if (!checked) {
       hitTargetsRef.current = hitTargetsRef.current.filter(
@@ -1896,9 +2063,9 @@ export function LayoutViewport({
       );
       setHovered((current) => current?.kind === "curve" ? null : current);
     }
-  };
+  }, []);
 
-  const setObjectLayerVisible = (checked: boolean) => {
+  const setObjectLayerVisible = useCallback((checked: boolean) => {
     setShowObjects(checked);
     if (!checked) {
       hitTargetsRef.current = hitTargetsRef.current.filter(
@@ -1908,9 +2075,19 @@ export function LayoutViewport({
         current && current.kind !== "curve" ? null : current
       );
     }
-  };
+  }, []);
 
-  const setBeamFramesVisible = (checked: boolean) => {
+  const setFrameLayerVisible = useCallback((checked: boolean) => {
+    setShowFrames(checked);
+    if (!checked) {
+      hitTargetsRef.current = hitTargetsRef.current.filter(
+        (target) => target.kind !== "frame",
+      );
+      setHovered((current) => current?.kind === "frame" ? null : current);
+    }
+  }, []);
+
+  const setBeamFramesVisible = useCallback((checked: boolean) => {
     setShowBeamFrames(checked);
     if (!checked) {
       hitTargetsRef.current = hitTargetsRef.current.filter(
@@ -1920,7 +2097,98 @@ export function LayoutViewport({
         current?.kind === "magnetic_frame" ? null : current
       );
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!command || command.id <= handledCommandRef.current) return;
+    handledCommandRef.current = command.id;
+    const finish = (error?: string) => {
+      setCommandResult(error ? { id: command.id, error } : { id: command.id });
+    };
+
+    if (command.command === "set_mode") {
+      selectNavigationMode(command.mode);
+      finish();
+      return;
+    }
+    if (command.command === "set_view") {
+      setZoomRectangle(null);
+      setCamera((current) => cameraForCanonicalView(current, command.view));
+      finish();
+      return;
+    }
+    if (command.command === "set_visibility") {
+      if (command.visibility.curves !== undefined) {
+        setCurveLayerVisible(command.visibility.curves);
+      }
+      if (command.visibility.objects !== undefined) {
+        setObjectLayerVisible(command.visibility.objects);
+      }
+      if (command.visibility.frames !== undefined) {
+        setFrameLayerVisible(command.visibility.frames);
+      }
+      if (command.visibility.beam_frames !== undefined) {
+        setBeamFramesVisible(command.visibility.beam_frames);
+      }
+      finish(viewportCommandRenderError(command, geometryError));
+      return;
+    }
+    if (geometryError) {
+      finish(`Cannot fit viewport: ${geometryError}`);
+      return;
+    }
+    if (command.target.kind === "layout") {
+      fit();
+      finish();
+      return;
+    }
+    if (command.target.kind === "curve") {
+      const curveName = command.target.name;
+      const curve = scene.curves.find(
+        (candidate) => candidate.name === curveName,
+      );
+      if (!curve) {
+        finish(`Cannot fit curve "${curveName}": target is not in the current scene.`);
+        return;
+      }
+      fitPoints(curve.samples.map((sample) => sample.p));
+      finish();
+      return;
+    }
+    const objectName = command.target.name;
+    const object = scene.objects.find(
+      (candidate) => candidate.name === objectName,
+    );
+    if (!object) {
+      finish(`Cannot fit object "${objectName}": target is not in the current scene.`);
+      return;
+    }
+    fitPoints(object.vertices);
+    finish();
+  }, [
+    command,
+    fit,
+    fitPoints,
+    geometryError,
+    scene.curves,
+    scene.objects,
+    selectNavigationMode,
+    setBeamFramesVisible,
+    setCurveLayerVisible,
+    setFrameLayerVisible,
+    setObjectLayerVisible,
+  ]);
+
+  useEffect(() => {
+    if (
+      !commandResult ||
+      commandResult.id <= reportedCommandRef.current ||
+      !onCommandApplied
+    ) return;
+    reportedCommandRef.current = commandResult.id;
+    onCommandApplied(commandResult.id, commandResult.error);
+  }, [commandResult, onCommandApplied]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   return (
     <div className="viewport-shell">
@@ -2030,6 +2298,16 @@ export function LayoutViewport({
               size="sm"
             />
             <label htmlFor="viewer-objects-visible">Objects</label>
+          </div>
+          <div className="viewport-layer-toggle">
+            <Switch
+              aria-label="Show named frames"
+              checked={showFrames}
+              id="viewer-frames-visible"
+              onCheckedChange={setFrameLayerVisible}
+              size="sm"
+            />
+            <label htmlFor="viewer-frames-visible">Named frames</label>
           </div>
           <div className="viewport-layer-toggle">
             <Switch
