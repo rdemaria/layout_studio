@@ -1,0 +1,842 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\IfFileExists{lmodern.sty}{\usepackage{lmodern}}{}
+\IfFileExists{microtype.sty}{\usepackage{microtype}}{}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage[margin=25mm]{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{codebg}{HTML}{F4F6F8}
+\definecolor{codekey}{HTML}{1F4E79}
+\definecolor{codecomment}{HTML}{607D8B}
+\lstdefinelanguage{LayoutJSON}{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{black!15},
+  breaklines=true,
+  showstringspaces=false,
+  columns=fullflexible,
+  string=[b]",
+  stringstyle=\color{codekey},
+  comment=[l]{//},
+  commentstyle=\color{codecomment},
+}
+\lstset{language=LayoutJSON}
+
+\setlist[itemize]{leftmargin=*,itemsep=0.25em}
+\setlist[enumerate]{leftmargin=*,itemsep=0.25em}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\SE}{\mathrm{SE}(3)}
+\newcommand{\Frame}{\mathsf{F}}
+\newcommand{\Rot}{\operatorname{Rot}}
+\newcommand{\Apply}{\operatorname{Apply}}
+\newcommand{\Path}{\operatorname{Path}}
+\newcommand{\ops}{\mathcal{O}}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\trans}{\mathsf{T}}
+\newcommand{\identity}{\mathsf{I}}
+
+\title{A Curve-Referenced Positioning Model for Beam-Line Layouts}
+\author{}
+\date{Prototype specification --- 4 September 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document specifies a three-dimensional positioning model intended to serve
+both installation geometry and beam-line modelling.  A layout contains named
+reference curves, reusable types, and positioned object instances.  Every
+position of interest is a right-handed frame, not merely a point.  Curves and
+type geometries may be curved; object placement can align any named target frame
+of an object with a transformed curve frame or with a frame on another object.
+The document defines the canonical data model and the mathematics required to
+obtain world frames, swept object geometry, Beam entry and exit planes, and a
+curve station inferred from an arbitrary world point.
+\end{abstract}
+
+\tableofcontents
+
+\section{Scope and design principles}
+
+The model separates three concerns:
+
+\begin{itemize}
+  \item A \emph{reference curve} supplies a stable spatial path and a frame at
+        every path coordinate.
+  \item A \emph{type} owns reusable physical geometry, its local curved axis,
+        Beam-axis metadata, and named local frames.
+  \item An \emph{object} is an instance of a type.  It owns only its type name
+        and a positioning rule.
+\end{itemize}
+
+This separation permits many physical instances to share one type while being
+placed independently.  It also keeps the installation frame graph distinct
+from a subsequently derived accelerator model.  This specification defines
+geometry and placement; it does not prescribe how a MAD-X sequence or its
+misalignments are fitted to that geometry.
+
+The JSON format described here is the canonical prototype format.  There is no
+legacy migration layer.  All stored lengths are in metres, curvatures in
+metres$^{-1}$, and angles in radians.  A user interface may display degrees or
+different step sizes without changing the stored units.
+
+\section{Frames, coordinates, and composition}
+
+\subsection{World and local axes}
+
+The fixed world axes are denoted $X,Y,Z$.  A local frame is
+\begin{equation}
+  \Frame=(\mathbf{o},\mathbf{x},\mathbf{y},\mathbf{t}),
+\end{equation}
+where $\mathbf{o}\in\R^3$ is its origin and
+$\mathbf{x},\mathbf{y},\mathbf{t}$ are an orthonormal, right-handed triad:
+\begin{equation}
+  \mathbf{x}\times\mathbf{y}=\mathbf{t}.
+\end{equation}
+The vector $\mathbf{t}$ is the local longitudinal axis and, on a path, its
+tangent.  The data model and user interface call this axis \texttt{s}; this
+document uses $s$ for the scalar path coordinate and $\mathbf{t}$ for the vector
+to avoid ambiguity.
+
+The homogeneous matrix of the frame is
+\begin{equation}
+  [\Frame]
+  =
+  \begin{bmatrix}
+    \mathbf{x} & \mathbf{y} & \mathbf{t} & \mathbf{o}\\
+    0&0&0&1
+  \end{bmatrix}
+  \in\SE.
+  \label{eq:frame-matrix}
+\end{equation}
+It maps a local point $\mathbf{q}=(q_x,q_y,q_s)^\mathsf{T}$ to world
+coordinates:
+\begin{equation}
+  \mathbf{p}_{W}
+  =\mathbf{o}+q_x\mathbf{x}+q_y\mathbf{y}+q_s\mathbf{t}.
+  \label{eq:local-to-world}
+\end{equation}
+The world frame is
+$\identity=(\mathbf{0},\mathbf{e}_X,\mathbf{e}_Y,\mathbf{e}_Z)$.
+
+Frame composition is ordinary matrix multiplication.  If $\Frame_A$ is a
+frame in world coordinates and $\Frame_B$ is expressed locally in $A$, then
+\begin{equation}
+  [\Frame_{W\leftarrow B}]
+  = [\Frame_{W\leftarrow A}][\Frame_{A\leftarrow B}].
+  \label{eq:composition}
+\end{equation}
+
+\subsection{Ordered elementary operations}
+
+A transformation is stored as an ordered list of two-element arrays
+\texttt{[name,value]}.  Except for \texttt{ts}, operations act on the
+\emph{current} local axes.  Equivalently, their elementary matrices are
+post-multiplied onto the current frame.
+
+Let
+\begin{equation}
+  T_x(a)=
+  \begin{bmatrix}1&0&0&a\\0&1&0&0\\0&0&1&0\\0&0&0&1\end{bmatrix},\quad
+  T_y(a)=
+  \begin{bmatrix}1&0&0&0\\0&1&0&a\\0&0&1&0\\0&0&0&1\end{bmatrix},
+\end{equation}
+and
+\begin{equation}
+  T_t(a)=
+  \begin{bmatrix}1&0&0&0\\0&1&0&0\\0&0&1&a\\0&0&0&1\end{bmatrix}.
+\end{equation}
+The local-axis rotation matrices are
+\begin{align}
+  R_x(\alpha)&=
+  \begin{bmatrix}
+    1&0&0\\0&\cos\alpha&-\sin\alpha\\0&\sin\alpha&\cos\alpha
+  \end{bmatrix},\\
+  R_y(\beta)&=
+  \begin{bmatrix}
+    \cos\beta&0&\sin\beta\\0&1&0\\-\sin\beta&0&\cos\beta
+  \end{bmatrix},\\
+  R_t(\gamma)&=
+  \begin{bmatrix}
+    \cos\gamma&-\sin\gamma&0\\\sin\gamma&\cos\gamma&0\\0&0&1
+  \end{bmatrix}.
+\end{align}
+They are embedded in homogeneous matrices with zero translation.
+
+The operations have the following meanings.
+
+\begin{center}
+\begin{tabular}{>{\ttfamily}l l l}
+\toprule
+\normalfont Operation & Meaning & Unit \\
+\midrule
+tx & translate along current $\mathbf{x}$ & m \\
+ty & translate along current $\mathbf{y}$ & m \\
+tt & translate in a straight line along current $\mathbf{t}$ & m \\
+rx & right-handed rotation about current $\mathbf{x}$ & rad \\
+ry & right-handed rotation about current $\mathbf{y}$ & rad \\
+rs & right-handed rotation about current $\mathbf{t}$ & rad \\
+ts & advance along a curve or type-local curved path & m \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Thus, for a list containing no \texttt{ts},
+\begin{equation}
+ [\Apply(\Frame,[o_1,\ldots,o_n])]
+ = [\Frame]E(o_1)\cdots E(o_n).
+ \label{eq:ordered-ops}
+\end{equation}
+Order matters.  For example, a translation followed by a rotation generally
+does not equal the same rotation followed by that translation.
+
+The operation \texttt{tt} is an ordinary straight translation.  The operation
+\texttt{ts} is \emph{not} an elementary rigid transform independent of context:
+it requests movement along a specified curved path and changes the tangent
+frame accordingly.  Its two evaluation modes are defined in
+Sections~\ref{sec:reference-transform} and~\ref{sec:type-local}.
+
+\section{Canonical entity model}
+
+\subsection{Layout}
+
+A layout is a strict JSON object with exactly three name-indexed dictionaries:
+\begin{equation}
+  \mathcal{L}=(\texttt{reference\_curves},\texttt{types},\texttt{objects}).
+\end{equation}
+Names are non-empty strings and are unique within their dictionary.  Every
+symbolic reference must resolve.
+
+\subsection{References and transformations}
+
+A reference is exactly one of
+\begin{align*}
+ &\texttt{\{"kind":"world"\}},\\
+ &\texttt{\{"kind":"curve","curve":curveName\}},\\
+ &\texttt{\{"kind":"object\_frame","object":objectName,
+             "frame":frameName\}}.
+\end{align*}
+The third alternative names a complete frame belonging to an object.
+
+A general transformation has the form
+\begin{lstlisting}
+{
+  "reference": <reference>,
+  "transformation": [[<operation>, <finite number>], ...]
+}
+\end{lstlisting}
+and is used for a curve's starting frame.  In a general transformation,
+\texttt{ts} is valid only with a curve reference.
+
+An object position extends it with a required target:
+\begin{lstlisting}
+{
+  "target": "center or named frame",
+  "reference": <reference>,
+  "reference_curve": "optional curve name",
+  "transformation": [[<operation>, <finite number>], ...]
+}
+\end{lstlisting}
+The field \texttt{target} is required in the canonical JSON.  The conventional
+target is \texttt{center}.  The optional \texttt{reference\_curve} has meaning
+only when a world or object-frame reference is combined with \texttt{ts}; in
+that case it is required and supports the station-inference rule of
+Section~\ref{sec:s-inference}.  It is forbidden when the primary reference is
+already a curve.  If it is present without \texttt{ts}, it has no geometric
+effect and should be omitted.
+
+\subsection{Reference curves}
+
+A reference curve contains
+\begin{lstlisting}
+{
+  "color": "#RRGGBB",
+  "starting_frame": <transformation>,
+  "segments": [[length, angle, roll], ...]
+}
+\end{lstlisting}
+There is at least one segment.  Each segment length is strictly positive;
+\texttt{angle} is the signed total bend angle and \texttt{roll} selects the bend
+plane.  The color is visual metadata and does not affect geometry.
+
+\subsection{Types}
+
+A type is a reusable definition:
+\begin{lstlisting}
+{
+  "shape": <shape tuple>,
+  "color": "#RRGGBB",
+  "magnetic_center": {"transformation": [...]},
+  "magnetic_length": <positive number>,
+  "frames": {
+    "name": {"transformation": [...]}
+  }
+}
+\end{lstlisting}
+Its shape is exactly one of
+\begin{align*}
+  &[\texttt{"box"},d_x,d_y,d_z,\kappa,\omega],\\
+  &[\texttt{"cylinder"},r,d_z,\kappa,\omega].
+\end{align*}
+The dimensions are positive.  The longitudinal value $d_z$ is centerline arc
+length, $\kappa$ is signed constant curvature, and $\omega$ is the constant
+bend-plane roll.  The type's center frame is at local path coordinate zero, so
+the physical shape spans $[-d_z/2,d_z/2]$ along its curved centerline.
+
+The local transformations in \texttt{magnetic\_center} and \texttt{frames}
+have no explicit reference: their implicit reference is the type center.
+Stored frame names may not use the reserved implicit frame names
+\begin{equation}
+  \texttt{center},\quad
+  \texttt{magnetic\_center},\quad
+  \texttt{magnetic\_entry},\quad
+  \texttt{magnetic\_exit}.
+\end{equation}
+
+\subsection{Objects}
+
+An object contains only a type name and an object position:
+\begin{lstlisting}
+{
+  "type": "typeName",
+  "position": <object position>
+}
+\end{lstlisting}
+Shape, color, Beam-axis data, and named local frames belong to the type, not to
+the instance.  Any number of objects may instantiate the same type.
+
+\section{Reference-curve geometry}
+\label{sec:curve-geometry}
+
+Consider segment $i$ with start frame
+$\Frame_i=(\mathbf{r}_i,\mathbf{x}_i,\mathbf{y}_i,\mathbf{t}_i)$,
+length $L_i>0$, signed angle $\alpha_i$, and roll $\omega_i$.  Its signed
+curvature is
+\begin{equation}
+  \kappa_i=\frac{\alpha_i}{L_i}.
+\end{equation}
+The unit vector toward the centre of curvature and the bend axis are
+\begin{align}
+  \mathbf{n}_i
+    &=-\cos\omega_i\,\mathbf{x}_i-
+      \sin\omega_i\,\mathbf{y}_i,\\
+  \mathbf{b}_i&=\mathbf{t}_i\times\mathbf{n}_i.
+  \label{eq:bend-plane}
+\end{align}
+At zero roll, a positive segment angle bends in the local $x$--$s$ plane
+toward $-\mathbf{x}$.  Increasing positive roll rotates the positive-curvature
+direction from $-\mathbf{x}$ toward $-\mathbf{y}$; at $\omega_i=\pi/2$ it
+points exactly toward $-\mathbf{y}$.
+
+For a local distance $u\in[0,L_i]$ and nonzero curvature, put
+$\theta=\kappa_i u$.  The exact frame is
+\begin{align}
+  \mathbf{r}_i(u)
+    &=\mathbf{r}_i
+      +\frac{\sin\theta}{\kappa_i}\mathbf{t}_i
+      +\frac{1-\cos\theta}{\kappa_i}\mathbf{n}_i,
+      \label{eq:arc-position}\\
+  \mathbf{x}_i(u)&=\Rot(\mathbf{b}_i,\theta)\mathbf{x}_i,\\
+  \mathbf{y}_i(u)&=\Rot(\mathbf{b}_i,\theta)\mathbf{y}_i,\\
+  \mathbf{t}_i(u)&=\Rot(\mathbf{b}_i,\theta)\mathbf{t}_i.
+  \label{eq:arc-frame}
+\end{align}
+Here $\Rot(\mathbf{b},\theta)$ is Rodrigues' right-handed rotation about unit
+axis $\mathbf{b}$:
+\begin{equation}
+ \Rot(\mathbf{b},\theta)\mathbf{v}
+ =\mathbf{v}\cos\theta
+  +(\mathbf{b}\times\mathbf{v})\sin\theta
+  +\mathbf{b}(\mathbf{b}\cdot\mathbf{v})(1-\cos\theta).
+\end{equation}
+For $\kappa_i=0$, the continuous limiting definition is
+\begin{equation}
+  \mathbf{r}_i(u)=\mathbf{r}_i+u\mathbf{t}_i,
+  \qquad
+  (\mathbf{x}_i(u),\mathbf{y}_i(u),\mathbf{t}_i(u))
+  =(\mathbf{x}_i,\mathbf{y}_i,\mathbf{t}_i).
+  \label{eq:straight-segment}
+\end{equation}
+
+Let $S_i=\sum_{j<i}L_j$ be the global path coordinate at the segment start.
+The frame at $s=S_i+u$ is given by the expressions above, and the segment end
+frame becomes the next segment's start frame.  This construction makes the
+position and entire triad continuous at a junction.  The tangent satisfies
+\begin{equation}
+  \frac{d\mathbf{r}}{ds}=\mathbf{t}(s),
+\end{equation}
+and no independent twist is added within a segment; the triad is transported by
+the common bend rotation in Equation~\eqref{eq:arc-frame}.
+
+The defined curve domain is $[0,L_C]$, where $L_C=\sum_iL_i$.  Direct frame
+evaluation is extended beyond this domain by straight tangent continuation:
+\begin{align}
+  \Frame_C(s)&=\Frame_C(0)T_t(s), &&s<0,\\
+  \Frame_C(s)&=\Frame_C(L_C)T_t(s-L_C), &&s>L_C.
+  \label{eq:curve-extrapolation}
+\end{align}
+Station inference, in contrast, searches only the defined domain
+$[0,L_C]$.
+
+\section{Evaluation of referenced transformations}
+\label{sec:reference-transform}
+
+Let a transformation have reference $R$ and operation list $\ops$.  Define
+\begin{equation}
+  \Delta s(\ops)=\sum_{(o,q)\in\ops,\;o=\texttt{ts}}q,
+\end{equation}
+and let $\ops_{\neg ts}$ be the same list with every \texttt{ts} removed while
+preserving the relative order of all remaining operations.
+
+For a curve reference $C$, the resolved frame is
+\begin{equation}
+  \operatorname{Resolve}(C,\ops)
+  =\Apply\!\left(\Frame_C(\Delta s(\ops)),\ops_{\neg ts}\right).
+  \label{eq:curve-reference}
+\end{equation}
+Thus all \texttt{ts} values on a curve reference are collected before any
+other operation.  Their positions in the list do not interleave with rotations
+or translations.  The non-\texttt{ts} operations still run in list order.
+
+For a world reference, or an object-frame reference with no \texttt{ts},
+\begin{align}
+  \operatorname{Resolve}(\text{world},\ops)
+    &=\Apply(\identity,\ops),\\
+  \operatorname{Resolve}(A.f,\ops)
+    &=\Apply(\Frame_{A.f}^{W},\ops).
+  \label{eq:ordinary-reference}
+\end{align}
+An object-frame reference containing \texttt{ts} uses the special projection
+semantics in Section~\ref{sec:s-inference}.
+
+The starting frame of a curve is obtained using the same rules.  It may refer
+to world, another curve, or a frame on an object.  Consequently, curves need
+not be rooted directly in world coordinates.
+
+\section{Type-local curved geometry and frames}
+\label{sec:type-local}
+
+\subsection{The type path operator}
+
+For a type $T$ with shape curvature $\kappa_T$ and roll $\omega_T$, define
+\begin{equation}
+  \Path_T(\Frame,d)
+  =\operatorname{Advance}(\Frame,d,\kappa_T d,\omega_T),
+  \label{eq:type-path}
+\end{equation}
+where \(\operatorname{Advance}\) is the straight/arc construction of
+Equations~\eqref{eq:arc-position}--\eqref{eq:straight-segment}, now permitted
+for signed distance $d$.  Therefore a negative \texttt{ts} follows the same
+centerline backward.
+
+A local operation list is evaluated sequentially from the current frame:
+\begin{equation}
+ \Frame_{j+1}=
+ \begin{cases}
+   \Path_T(\Frame_j,q_j), & o_j=\texttt{ts},\\
+   \Apply(\Frame_j,[(o_j,q_j)]), & o_j\ne\texttt{ts}.
+ \end{cases}
+ \label{eq:type-operation-recursion}
+\end{equation}
+Unlike a curve reference, type-local \texttt{ts} operations are \emph{not}
+collected.  They execute at their exact list positions.  Hence a rotation
+before \texttt{ts} changes the plane in which the local path advances, and a
+\texttt{tt} before \texttt{ts} differs from a \texttt{tt} after it.
+
+Write the resulting operator as $\Apply_T(\Frame,\ops)$.  Each elementary
+operation is invertible.  The inverse list is obtained by reversing the order
+and negating every value:
+\begin{equation}
+  \ops^{-1}=\big[(o_n,-q_n),\ldots,(o_1,-q_1)\big],
+  \qquad
+  \Apply_T(\Apply_T(\Frame,\ops),\ops^{-1})=\Frame.
+  \label{eq:inverse-operations}
+\end{equation}
+
+\subsection{Swept shape}
+
+Let
+\begin{equation}
+  \Frame_T(u)=\Path_T(\identity,u),
+  \qquad -d_z/2\le u\le d_z/2.
+\end{equation}
+For a box, its swept volume is parameterized by
+\begin{equation}
+  \mathbf{g}_{\rm box}(u,\xi,\eta)
+  =\mathbf{r}_T(u)+\xi\mathbf{x}_T(u)+\eta\mathbf{y}_T(u),
+  \quad
+  |\xi|\le d_x/2,\quad |\eta|\le d_y/2.
+  \label{eq:box-sweep}
+\end{equation}
+For a cylinder, a useful surface parameterization is
+\begin{equation}
+  \mathbf{g}_{\rm cyl}(u,\varphi)
+  =\mathbf{r}_T(u)
+   +r\cos\varphi\,\mathbf{x}_T(u)
+   +r\sin\varphi\,\mathbf{y}_T(u),
+  \quad 0\le\varphi<2\pi.
+  \label{eq:cylinder-sweep}
+\end{equation}
+For an object with world center frame $\Frame_O^W$, the world surface follows
+from Equation~\eqref{eq:local-to-world}, or equivalently by replacing
+$\identity$ with $\Frame_O^W$ in the type path operator.
+
+\subsection{Stored and implicit local frames}
+
+Every stored entry in \texttt{frames} is an operation list $\ops_f$ from the
+type center.  Its local frame is
+\begin{equation}
+  \Frame_{T.f}=\Apply_T(\identity,\ops_f).
+  \label{eq:named-local-frame}
+\end{equation}
+The reserved local center frame is
+$\Frame_{T.\mathrm{center}}=\identity$.
+
+The Beam-axis definition consists of a magnetic-center list $\ops_m$ and a
+positive magnetic length $\ell_m$.  The derived local frames are
+\begin{align}
+  \Frame_{T.\mathrm{magnetic\_center}}
+    &=\Apply_T(\identity,\ops_m),\\
+  \Frame_{T.\mathrm{magnetic\_entry}}
+    &=\Apply_T\!\left(\identity,
+       \ops_m\mathbin{+}[\texttt{ts},-\ell_m/2]\right),\\
+  \Frame_{T.\mathrm{magnetic\_exit}}
+    &=\Apply_T\!\left(\identity,
+       \ops_m\mathbin{+}[\texttt{ts},+\ell_m/2]\right).
+  \label{eq:magnetic-frames}
+\end{align}
+Here $+$ denotes list concatenation, not matrix addition.  The entry and exit
+planes pass through the corresponding origins and are spanned by the local
+$\mathbf{x}$ and $\mathbf{y}$ axes; their normal is the local tangent
+$\mathbf{t}$.  The magnetic length is not required to equal or fit within the
+physical shape length, and the magnetic-center transform may include offsets
+or rotations.
+
+\section{Object positioning by target alignment}
+\label{sec:object-alignment}
+
+Let object $O$ instantiate type $T$, and let its requested target frame be
+$a$ (for example \texttt{center}, \texttt{magnetic\_entry}, or a stored named
+frame).  First resolve the object's position specification to a desired world
+target frame $\Frame_D^W$.  Then obtain the target's type-local operation list
+$\ops_a$ using Section~\ref{sec:type-local}.
+
+The object center world frame is the unique frame satisfying
+\begin{equation}
+  \Apply_T(\Frame_O^W,\ops_a)=\Frame_D^W.
+  \label{eq:target-constraint}
+\end{equation}
+It is computed as
+\begin{equation}
+  \boxed{\Frame_O^W=\Apply_T(\Frame_D^W,\ops_a^{-1})}
+  \label{eq:object-frame}
+\end{equation}
+or, in homogeneous notation,
+\begin{equation}
+  [\Frame_O^W]=[\Frame_D^W][\Frame_{T.a}]^{-1}.
+\end{equation}
+This is the formal meaning of a statement such as ``place \texttt{B.start} at
+a transformation from \texttt{A.end}.''  The reference and position operations
+determine $\Frame_D^W$; inverting the local transform of \texttt{B.start}
+determines the center of object $B$.
+
+Once the object center is known, the world frame of any local frame $f$ is
+\begin{equation}
+  \boxed{\Frame_{O.f}^W=\Apply_T(\Frame_O^W,\ops_f)}
+  \label{eq:frame-world-frame}
+\end{equation}
+and all shape points follow from Equations~\eqref{eq:box-sweep} or
+\eqref{eq:cylinder-sweep} with $\Frame_O^W$ as the initial frame.
+
+\section{Inferring a curve station from a world point}
+\label{sec:s-inference}
+
+This rule supports imported data in which a position is expressed using
+\texttt{ts}, even though its primary reference is world or an object frame.
+Let $P$ be the origin of that primary reference frame, and let $C$ be the named
+\texttt{reference\_curve}.  The orientation of the primary reference is not
+used in station inference.
+
+\subsection{Candidate stations}
+
+The transverse plane of the curve frame at station $s$ is
+\begin{equation}
+  \Pi_C(s)=
+  \left\{Q\in\R^3:\big(Q-\mathbf{r}_C(s)\big)
+  \cdot\mathbf{t}_C(s)=0\right\}.
+\end{equation}
+Candidate stations are
+\begin{equation}
+  \mathcal{S}(P,C)=
+  \left\{s\in[0,L_C]:
+  \big(P-\mathbf{r}_C(s)\big)\cdot\mathbf{t}_C(s)=0\right\}.
+  \label{eq:station-equation}
+\end{equation}
+
+For a straight segment beginning at global station $S_i$, let
+$\mathbf{q}=P-\mathbf{r}_i$.  The unique local candidate is
+\begin{equation}
+  u=\mathbf{q}\cdot\mathbf{t}_i,
+  \label{eq:straight-station-root}
+\end{equation}
+accepted only if $0\le u\le L_i$.
+
+For a curved segment, define $\kappa=\alpha_i/L_i$,
+$\mathbf{q}=P-\mathbf{r}_i$, and
+\begin{equation}
+  A=\mathbf{q}\cdot\mathbf{t}_i,
+  \qquad
+  B=\mathbf{q}\cdot\mathbf{n}_i-\frac{1}{\kappa}.
+\end{equation}
+Substituting Equations~\eqref{eq:arc-position} and~\eqref{eq:arc-frame} into
+Equation~\eqref{eq:station-equation} gives
+\begin{equation}
+  A\cos\theta+B\sin\theta=0,
+  \qquad \theta=\kappa u.
+  \label{eq:arc-station-root}
+\end{equation}
+If $(A,B)\ne(0,0)$, all roots can be enumerated as
+\begin{equation}
+  \theta=\operatorname{atan2}(B,A)+\frac{\pi}{2}+k\pi,
+  \qquad k\in\mathbb{Z},
+  \label{eq:arc-root-enumeration}
+\end{equation}
+retaining only those for which $u=\theta/\kappa$ is inside the segment.  If
+$A=B=0$, every station in the segment is a solution; geometrically, $P$ is at
+the circular arc's centre.  Identical roots at segment junctions are
+de-duplicated.
+
+\subsection{Closest-solution rule}
+
+The set $\mathcal{S}$ may be empty, contain one or several isolated solutions,
+or contain a continuous interval.  Define the distance from $P$ to a candidate
+curve-frame origin by
+\begin{equation}
+  d(s)=\lVert P-\mathbf{r}_C(s)\rVert_2.
+\end{equation}
+The inferred station $\widehat{s}$ exists if and only if there is one unique,
+isolated minimizer of $d$ over $\mathcal{S}$:
+\begin{equation}
+  \widehat{s}
+  =\underset{s\in\mathcal{S}(P,C)}{\operatorname{argmin}}\;d(s).
+  \label{eq:closest-station}
+\end{equation}
+Accordingly:
+\begin{itemize}
+  \item if $\mathcal{S}$ is empty, evaluation raises an exception;
+  \item if one isolated solution is strictly closest, it is selected even when
+        farther solutions or a farther continuous interval exist;
+  \item if two or more closest solutions are equidistant, evaluation raises an
+        ambiguity exception;
+  \item if a closest continuous interval exists, evaluation raises the same
+        ambiguity exception.
+\end{itemize}
+Floating-point implementations shall use scale-aware distance and path
+tolerances both for equality and for junction de-duplication.
+
+\subsection{Applying the inferred station}
+
+Let $\Delta s$ be the sum of the object's \texttt{ts} values and
+$\ops_{\neg ts}$ its remaining operations.  The desired target frame is
+\begin{equation}
+  \boxed{
+  \Frame_D^W
+  =\Apply\!\left(\Frame_C(\widehat{s}+\Delta s),
+                  \ops_{\neg ts}\right)}.
+  \label{eq:inferred-position}
+\end{equation}
+The origin $P$ is used only to infer $\widehat{s}$.  Both the origin and
+orientation of the primary reference frame are then replaced by the curve frame
+at $\widehat{s}+\Delta s$.  The remaining operations are applied in their
+original relative order.  Finally Equation~\eqref{eq:object-frame} aligns the
+object's requested target frame with $\Frame_D^W$.
+
+\section{Complete world-resolution algorithm}
+\label{sec:resolution-algorithm}
+
+World geometry is obtained by recursively resolving named curves and objects.
+The following algorithm is normative at the semantic level.
+
+\begin{enumerate}
+  \item Validate the canonical structure, finite numbers, positive dimensions
+        and lengths, colors, operation names, target names, and all references.
+  \item Construct a dependency graph whose nodes are named curves and objects.
+        A curve depends on the curve or object named by its starting-frame
+        reference.  An object depends on the curve or object named by its
+        position reference; a non-curve object position containing \texttt{ts}
+        additionally depends on its \texttt{reference\_curve}.
+  \item Reject the layout if that graph contains a directed cycle.
+  \item Resolve nodes in topological order, or use memoized recursion with an
+        active-resolution stack.
+  \item To resolve a curve, resolve its starting frame using
+        Equations~\eqref{eq:curve-reference} or
+        \eqref{eq:ordinary-reference}, then propagate all segments using
+        Section~\ref{sec:curve-geometry}.
+  \item To resolve an object, resolve its desired target frame:
+        \begin{itemize}
+          \item a curve reference uses Equation~\eqref{eq:curve-reference};
+          \item a world or object-frame reference without \texttt{ts} uses
+                Equation~\eqref{eq:ordinary-reference};
+          \item a world or object-frame reference with \texttt{ts} uses
+                Equations~\eqref{eq:closest-station} and
+                \eqref{eq:inferred-position}.
+        \end{itemize}
+  \item Align the object's target using Equation~\eqref{eq:object-frame}.
+  \item Resolve its named and Beam frames using
+        Equation~\eqref{eq:frame-world-frame}, and sweep its shape in world
+        coordinates using Section~\ref{sec:type-local}.
+\end{enumerate}
+
+The following identities summarize the output of the algorithm:
+\begin{align}
+  \text{object centre:}\quad
+  [\Frame_O^W]&=[\Frame_D^W][\Frame_{T.a}]^{-1},\\
+  \text{named frame:}\quad
+  [\Frame_{O.f}^W]&=[\Frame_O^W][\Frame_{T.f}],\\
+  \text{world shape point:}\quad
+  \begin{bmatrix}\mathbf{p}_W\\1\end{bmatrix}
+  &=[\Frame_O^W]
+    \begin{bmatrix}\mathbf{p}_T\\1\end{bmatrix}.
+\end{align}
+
+\section{Validity and failure conditions}
+
+A conforming reader rejects a layout when any of the following holds:
+\begin{itemize}
+  \item a JSON object contains unsupported fields or has a missing required
+        field;
+  \item an entity name is empty, an operation value is not finite, a curve
+        segment length is not positive, a shape dimension is not positive, or
+        the magnetic length is not positive;
+  \item a shape tuple is not exactly one of the two canonical forms
+        \begin{align*}
+          &[\texttt{"box"},d_x,d_y,d_z,\kappa,\omega],\\
+          &[\texttt{"cylinder"},r,d_z,\kappa,\omega];
+        \end{align*}
+  \item a color is not a six-digit hexadecimal color;
+  \item a type, curve, object, named frame, or positioning target does not
+        exist;
+  \item a stored frame uses an implicit reserved name;
+  \item \texttt{ts} is used with a world or object-frame reference outside an
+        object position, or it is used in an object position without the
+        required \texttt{reference\_curve};
+  \item \texttt{reference\_curve} is supplied with a primary curve reference;
+  \item the reference dependency graph contains a cycle;
+  \item station inference has no solution or has equidistant closest solutions,
+        including a closest continuous interval.
+\end{itemize}
+
+\section{World-pose readout and MAD-X-style angles}
+\label{sec:madx-angles}
+
+The world position of any resolved frame is simply its origin
+$\mathbf{o}=(X,Y,Z)$.  For display, the current editor derives
+MAD-X-style survey angles from the frame as follows.  Let
+\begin{align}
+ \widehat{\mathbf{t}}&=\frac{\mathbf{t}}{\lVert\mathbf{t}\rVert},\\
+ \widehat{\mathbf{x}}&=
+ \frac{\mathbf{x}-(\mathbf{x}\cdot\widehat{\mathbf{t}})
+       \widehat{\mathbf{t}}}
+      {\left\lVert\mathbf{x}-(\mathbf{x}\cdot\widehat{\mathbf{t}})
+       \widehat{\mathbf{t}}\right\rVert},\\
+ \widehat{\mathbf{y}}&=\widehat{\mathbf{t}}\times
+                       \widehat{\mathbf{x}},\\
+ h&=\sqrt{t_X^2+t_Z^2}.
+\end{align}
+Away from the vertical singularity,
+\begin{align}
+ \theta&=\operatorname{atan2}(t_X,t_Z),\\
+ \phi&=\operatorname{atan2}(t_Y,h),\\
+ \psi&=\operatorname{atan2}(x_Y,y_Y).
+ \label{eq:madx-readout}
+\end{align}
+Here $\theta$ is horizontal azimuth, $\phi$ is vertical elevation, and $\psi$
+is roll about the local tangent.  At $h\approx0$, the display fixes
+$\theta=0$ and uses
+$\psi=\operatorname{atan2}(-y_X,x_X)$.  This branch choice makes the readout
+deterministic at the usual Euler-angle singularity; the frame matrix remains the
+authoritative pose.
+
+\section{Canonical example}
+
+The following layout places \texttt{Q1.center} at $s=10$ m on a straight
+reference curve.  The reusable type also defines two local frames by following
+its type path from the center.
+
+\begin{lstlisting}
+{
+  "reference_curves": {
+    "main": {
+      "color": "#7d91ff",
+      "starting_frame": {
+        "reference": {"kind": "world"},
+        "transformation": []
+      },
+      "segments": [[100.0, 0.0, 0.0]]
+    }
+  },
+  "types": {
+    "magnet": {
+      "shape": ["box", 2.0, 2.0, 2.0, 0.0, 0.0],
+      "color": "#f0a84b",
+      "magnetic_center": {"transformation": []},
+      "magnetic_length": 2.0,
+      "frames": {
+        "start": {"transformation": [["ts", -1.0]]},
+        "end":   {"transformation": [["ts",  1.0]]}
+      }
+    }
+  },
+  "objects": {
+    "Q1": {
+      "type": "magnet",
+      "position": {
+        "target": "center",
+        "reference": {"kind": "curve", "curve": "main"},
+        "transformation": [["ts", 10.0]]
+      }
+    }
+  }
+}
+\end{lstlisting}
+
+For this example,
+\begin{align*}
+ \Frame_{Q1.\mathrm{center}}^W&=\Frame_{\mathrm{main}}(10),\\
+ \Frame_{Q1.\mathrm{start}}^W
+   &=\Path_{\mathrm{magnet}}(\Frame_{Q1.\mathrm{center}}^W,-1),\\
+ \Frame_{Q1.\mathrm{end}}^W
+   &=\Path_{\mathrm{magnet}}(\Frame_{Q1.\mathrm{center}}^W,+1).
+\end{align*}
+Since both the curve and type curvature are zero, the three origins are
+$(0,0,10)$ m, $(0,0,9)$ m, and $(0,0,11)$ m respectively, with identical
+orientations.
+
+\section{Conformance notes}
+
+The homogeneous frame is the authoritative result.  Sampled polylines,
+triangulated display meshes, transparent rendering, curve tubes, hover frames,
+and station snapping are viewer concerns and do not change the equations in
+this specification.  In particular, implementations should evaluate an arc
+analytically for positioning even if they draw it using samples.
+
+Named frames carry both an origin and an orientation because alignment normally
+requires both.  Beam entry and exit are likewise frames;
+their $x$--$y$ planes are the physically meaningful transverse planes.  A later
+beam-physics export may use these frames to construct element boundaries and
+derive survey offsets or misalignments without changing the installation
+layout itself.
+
+\end{document}

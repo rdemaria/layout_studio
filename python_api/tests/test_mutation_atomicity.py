@@ -1,0 +1,246 @@
+from __future__ import annotations
+
+import pytest
+from layout_studio import (
+    AmbiguousNameError,
+    AttachmentError,
+    Box,
+    Curve,
+    Frame,
+    Layout,
+    NameConflictError,
+    Operation,
+    Position,
+    ReferenceInUseError,
+    Segment,
+    Type,
+    ValidationError,
+)
+
+
+def detached_curve(color="#112233"):
+    return Curve(
+        starting_frame=Frame("world"),
+        color=color,
+        segments=[Segment(1.0), Segment(2.0, 0.1, 0.2)],
+    )
+
+
+def detached_type(color="#445566"):
+    return Type(
+        shape=Box(1.0, 2.0, 3.0),
+        color=color,
+        magnetic_center=Frame().tx(0.1),
+        magnetic_length=1.5,
+    )
+
+
+def operation_pairs(frame):
+    return [(operation.name, operation.value) for operation in frame.operations]
+
+
+def test_curve_set_and_segment_slice_fail_atomically():
+    curve = detached_curve()
+    original_dict = curve.to_dict()
+    original_segments = list(curve.segments)
+    original_frame = curve.starting_frame
+
+    replacement_frame = Frame("world").tx(5.0)
+    with pytest.raises(ValidationError):
+        curve.set(
+            starting_frame=replacement_frame,
+            color="#abcdef",
+            segments=[],
+        )
+
+    assert curve.to_dict() == original_dict
+    assert list(curve.segments) == original_segments
+    assert curve.starting_frame is original_frame
+    assert original_frame.owner is curve
+    assert replacement_frame.owner is None
+
+    with pytest.raises(ValidationError):
+        curve.segments[:] = []
+    assert list(curve.segments) == original_segments
+
+    with pytest.raises(ValidationError):
+        curve.segments[0] = [0.0, 0.0, 0.0]
+    assert list(curve.segments) == original_segments
+
+
+def test_curve_batch_add_segments_is_all_or_nothing():
+    curve = detached_curve()
+    original_segments = list(curve.segments)
+
+    with pytest.raises(ValidationError):
+        curve.add_segments(
+            [
+                (3.0, 0.0, 0.0),
+                (0.0, 0.0, 0.0),
+                (4.0, 0.0, 0.0),
+            ],
+            index=1,
+        )
+
+    assert list(curve.segments) == original_segments
+    assert curve.length == pytest.approx(3.0)
+
+
+def test_frame_operation_edit_insert_move_remove_and_clear():
+    frame = Frame("world").tx(1.0).ty(2.0).rs(3.0)
+
+    assert frame.set_operation(1, name="tt", value=4.0) is frame
+    assert operation_pairs(frame) == [("tx", 1.0), ("tt", 4.0), ("rs", 3.0)]
+
+    assert frame.insert_operation(1, "rx", 0.5) is frame
+    assert operation_pairs(frame) == [
+        ("tx", 1.0),
+        ("rx", 0.5),
+        ("tt", 4.0),
+        ("rs", 3.0),
+    ]
+
+    assert frame.move_operation(0, 3) is frame
+    assert operation_pairs(frame) == [
+        ("rx", 0.5),
+        ("tt", 4.0),
+        ("rs", 3.0),
+        ("tx", 1.0),
+    ]
+
+    removed = frame.remove_operation(1)
+    assert removed == Operation("tt", 4.0)
+    assert operation_pairs(frame) == [("rx", 0.5), ("rs", 3.0), ("tx", 1.0)]
+
+    before_invalid_edit = operation_pairs(frame)
+    with pytest.raises(ValidationError):
+        frame.set_operation(0, name="tz")
+    assert operation_pairs(frame) == before_invalid_edit
+
+    assert frame.clear_operations() is frame
+    assert operation_pairs(frame) == []
+
+
+def test_type_set_validates_every_change_before_committing_any():
+    type_ = detached_type()
+    original_shape = type_.shape
+    original_color = type_.color
+    original_center = type_.magnetic_center
+    original_length = type_.magnetic_length
+    replacement_center = Frame().ty(0.4)
+
+    with pytest.raises(ValidationError):
+        type_.set(
+            shape=Box(4.0, 5.0, 6.0),
+            color="#abcdef",
+            magnetic_center=replacement_center,
+            magnetic_length=0.0,
+        )
+
+    assert type_.shape is original_shape
+    assert type_.color == original_color
+    assert type_.magnetic_center is original_center
+    assert type_.magnetic_length == original_length
+    assert original_center.owner is type_
+    assert replacement_center.owner is None
+
+
+def test_position_set_rolls_back_and_operations_remain_a_live_alias():
+    position = Position("world", target="center").tx(1.0)
+    original_reference = position.reference
+    original_target = position.target_name
+    candidate_reference = Frame("world").tt(5.0)
+
+    with pytest.raises(ValidationError):
+        position.set(
+            reference=candidate_reference,
+            target="other",
+            reference_curve="main",
+            operations=[["ty", 2.0], ["bad", 3.0]],
+        )
+
+    assert position.reference is original_reference
+    assert original_reference.owner is position
+    assert candidate_reference.owner is None
+    assert position.target_name == original_target
+    assert position.reference_curve is None
+    assert operation_pairs(position.reference) == [("tx", 1.0)]
+    assert position.operations is position.reference.operations
+
+    position.operations.append(Operation("tt", 2.0))
+    assert operation_pairs(position.reference) == [("tx", 1.0), ("tt", 2.0)]
+    position.reference.operations[0] = Operation("ty", 4.0)
+    assert operation_pairs(position) == [("ty", 4.0), ("tt", 2.0)]
+
+
+def test_entity_map_direct_replacement_transfers_ownership_atomically():
+    layout = Layout()
+    first = layout.add_curve("main", detached_curve())
+    replacement = detached_curve("#778899")
+
+    layout.curves["main"] = replacement
+    assert layout.curves["main"] is replacement
+    assert replacement.owner is layout
+    assert replacement.name == "main"
+    assert first.owner is None
+    assert first.name is None
+
+    already_bound = layout.add_curve("other", detached_curve("#aabbcc"))
+    with pytest.raises(AttachmentError):
+        layout.curves["main"] = already_bound
+    assert layout.curves["main"] is replacement
+    assert already_bound.owner is layout
+    assert already_bound.name == "other"
+
+
+def test_replacing_a_referenced_map_value_is_rejected_without_detaching_either_value():
+    layout = Layout()
+    curve = layout.add_curve("main", detached_curve())
+    type_ = layout.add_type("kind", detached_type())
+    layout.new_object("Q1", type=type_, position=Position(curve).ts(0.5))
+    candidate = detached_curve("#abcdef")
+
+    with pytest.raises(ReferenceInUseError):
+        layout.curves["main"] = candidate
+
+    assert layout.curves["main"] is curve
+    assert curve.owner is layout
+    assert curve.name == "main"
+    assert candidate.owner is None
+
+
+def test_ambiguous_rename_and_pop_are_non_mutating_and_explicit_forms_work():
+    layout = Layout()
+    curve = layout.add_curve("same", detached_curve())
+    type_ = layout.add_type("kind", detached_type())
+    object_ = layout.new_object("same", type=type_, position=Position("world"))
+
+    with pytest.raises(AmbiguousNameError):
+        layout.rename("same", "renamed")
+    with pytest.raises(AmbiguousNameError):
+        layout.pop("same")
+
+    assert layout.curves["same"] is curve
+    assert layout.objects["same"] is object_
+    assert "renamed" not in layout.curves
+    assert "renamed" not in layout.objects
+
+    assert layout.rename("same", "beam", kind="curve") is curve
+    assert layout.curves["beam"] is curve
+    assert layout["same"] is object_
+    assert layout.pop("same", kind="object") is object_
+    assert object_.owner is None
+
+
+def test_conflicting_rename_leaves_both_registry_entries_unchanged():
+    layout = Layout()
+    first = layout.add_curve("first", detached_curve())
+    second = layout.add_curve("second", detached_curve("#abcdef"))
+
+    with pytest.raises(NameConflictError):
+        layout.rename(first, "second")
+
+    assert layout.curves["first"] is first
+    assert layout.curves["second"] is second
+    assert first.name == "first"
+    assert second.name == "second"
