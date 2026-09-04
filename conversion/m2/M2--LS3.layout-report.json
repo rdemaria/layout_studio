@@ -1,0 +1,66 @@
+{
+  "machine": "M2",
+  "version": "LS3",
+  "curve_name": "M2",
+  "machine_length": 1185.5781,
+  "machine_length_source": "direct coverage of LDB root 'M2-LINE'",
+  "input_transformations": 428,
+  "output_objects": 428,
+  "skipped_objects": {},
+  "input_type_names": 100,
+  "output_types": 115,
+  "split_type_names": {
+    "PXMBHHEHWC": [
+      "PXMBHHEHWC__M_01",
+      "PXMBHHEHWC__M_02",
+      "PXMBHHEHWC__M_03"
+    ],
+    "PXMBXGDCWP": [
+      "PXMBXGDCWP__M_01",
+      "PXMBXGDCWP__M_02",
+      "PXMBXGDCWP__M_03"
+    ],
+    "PXMBXHACWP": [
+      "PXMBXHACWP__M_01",
+      "PXMBXHACWP__M_02",
+      "PXMBXHACWP__M_03"
+    ],
+    "PXMCXCAHWC": [
+      "PXMCXCAHWC__M_01",
+      "PXMCXCAHWC__M_02"
+    ],
+    "SPMBNV_HWP": [
+      "SPMBNV_HWP__M_01",
+      "SPMBNV_HWP__M_02",
+      "SPMBNV_HWP__M_03",
+      "SPMBNV_HWP__M_04"
+    ],
+    "SPMDPX_": [
+      "SPMDPX___M_01",
+      "SPMDPX___M_02",
+      "SPMDPX___M_03"
+    ],
+    "SPMTN__HWP": [
+      "SPMTN__HWP__M_01",
+      "SPMTN__HWP__M_02",
+      "SPMTN__HWP__M_03"
+    ],
+    "SPXVWAJ001": [
+      "SPXVWAJ001__X_01",
+      "SPXVWAJ001__X_02"
+    ]
+  },
+  "curve_segments": 29,
+  "curve_total_angle": 0.022283900000000002,
+  "zero_mechanical_length_objects": 5,
+  "zero_optic_length_objects": 225,
+  "zero_length_display_value": 0.1,
+  "zero_magnetic_length_value": 1e-09,
+  "warnings": [
+    "split 8 LDB type name(s) because geometry and/or color initial varies",
+    "displayed 5 zero-length object(s) with dz=0.1 m",
+    "represented 225 zero optic length(s) with magnetic_length=1e-09 m"
+  ],
+  "root_name": "M2-LINE",
+  "root_name_source": "machine-name alias"
+}

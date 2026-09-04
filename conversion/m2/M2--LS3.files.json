@@ -1,0 +1,26 @@
+{
+  "machine": "M2",
+  "version": "LS3",
+  "artifacts": {
+    "M2--LS3.pickle": {
+      "bytes": 149157,
+      "sha256": "ae0cb8020c4a0ae049eff4c03bd2d8139866d3d822ba4076a7fc68f4d42f2544",
+      "role": "source Machine snapshot (not committed)"
+    },
+    "M2--LS3.layout.json": {
+      "bytes": 110108,
+      "sha256": "ba680ad54a33aedb82a2db15a51a43289b50c70b411f70e4e3af9ba11bce4a11",
+      "role": "generated compact Layout Studio model (uncompressed, not committed)"
+    },
+    "M2--LS3.layout.json.gz": {
+      "bytes": 7125,
+      "sha256": "8bb97ed69cabcc02189e54729854bb7ea617acfc9c8d4a22141c3fd8b44b8ea0",
+      "role": "generated compact Layout Studio model (committed gzip)"
+    },
+    "M2--LS3.layout-report.json": {
+      "bytes": 1631,
+      "sha256": "538ca68f353103700898ead81752c65d336f8a76093b6ae203f6320fef1f2390",
+      "role": "conversion report"
+    }
+  }
+}

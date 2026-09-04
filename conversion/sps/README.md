@@ -31,8 +31,10 @@ sizes and SHA-256 checksums of the input snapshot and prepared outputs.
   intentionally kept separate.
 - Color is determined by the first character of each object name. Source types
   are split where instance geometry or required color differs.
-- SPS circumference is inferred from the six top-level sextants as
-  6911.51818896 m. `--machine-length` overrides this.
+- The LDB root is the exact machine-name match `SPS`.
+- SPS circumference is inferred from direct root coverage by the six sextants as
+  6911.51818896 m. The converter passes this explicitly to `get_ref_curve`;
+  `--machine-length` overrides it.
 - Zero mechanical lengths use a 0.1 m display box while their mechanical frames
   remain coincident. Zero optic lengths use `magnetic_length = 1e-9 m`.
 - `VMFD.20902` is skipped because `BPCN.20902` is absent. Use
@@ -51,4 +53,4 @@ Checks performed during preparation:
   curve-station solutions.
 - Reference-curve comparison at every segment boundary against
   `LDBPoint.to_madpoint()`: maximum position difference about `7.3e-12 m` and
-  maximum orientation-matrix coefficient difference about `1.0e-15`.
+  maximum orientation-matrix coefficient difference about `1.2e-15`.

@@ -5,21 +5,21 @@
     "SPS--LS3.pickle": {
       "bytes": 2889114,
       "sha256": "9cb3476da9e1b0465af6894a55f760bf7ea7c2b164b01c0b5fdc174d2e79335f",
-      "role": "source Machine snapshot"
+      "role": "source Machine snapshot (not committed)"
     },
     "SPS--LS3.layout.compact.json": {
       "bytes": 3036966,
       "sha256": "276b4529caec6237d850331410eb166929fc24c970c9f7c1857d8f1fd1c3cbdb",
-      "role": "generated compact Layout Studio model"
+      "role": "generated compact Layout Studio model (not committed)"
     },
     "SPS--LS3.layout.json": {
       "bytes": 5430444,
       "sha256": "0f94f891cb071d9b7d11ac6c3a489163dddc1e2ca719b92645237a0afd4fd537",
-      "role": "generated formatted Layout Studio model"
+      "role": "generated formatted Layout Studio model (not committed)"
     },
     "SPS--LS3.layout-report.json": {
-      "bytes": 1934,
-      "sha256": "a0d4215b5a9bf572fa36e60edfc647c27174e01d49fc3d5670d8c9cd3cc17a7f",
+      "bytes": 2004,
+      "sha256": "cebe133fedafe14fa05f796b4f9e9a727dd8fadfbcaa4b18c293ee9c083673ea",
       "role": "conversion report"
     }
   }

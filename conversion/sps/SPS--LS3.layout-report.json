@@ -3,7 +3,7 @@
   "version": "LS3",
   "curve_name": "SPS",
   "machine_length": 6911.51818896,
-  "machine_length_source": "top-level mechanical/optic coverage",
+  "machine_length_source": "direct coverage of LDB root 'SPS'",
   "input_transformations": 12340,
   "output_objects": 12339,
   "skipped_objects": {
@@ -67,5 +67,7 @@
     "split 3 LDB type name(s) because geometry and/or color initial varies",
     "displayed 6733 zero-length object(s) with dz=0.1 m",
     "represented 10408 zero optic length(s) with magnetic_length=1e-09 m"
-  ]
+  ],
+  "root_name": "SPS",
+  "root_name_source": "exact machine-name match"
 }
