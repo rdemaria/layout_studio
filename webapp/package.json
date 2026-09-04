@@ -1,0 +1,16 @@
+{
+  "name": "layout-studio-webapp",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Standalone curve-referenced geometry editor and interactive 3D viewer",
+  "type": "module",
+  "scripts": {
+    "build": "python3 build.py",
+    "check": "python3 build.py --check",
+    "serve": "python3 -m http.server 8000",
+    "test": "node --test tests/model.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
