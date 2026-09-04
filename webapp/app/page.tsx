@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Box as BoxIcon,
   ChevronDown,
@@ -84,6 +84,11 @@ import {
   toggleViewerSelection,
   type ViewportFitRequest,
 } from "./layout-viewport";
+import {
+  parseLayoutUrlList,
+  resolveLayoutUrl,
+  type LayoutUrlSuggestion,
+} from "./layout-url-catalog";
 
 type Status = {
   kind: "idle" | "loading" | "success" | "error";
@@ -116,12 +121,42 @@ export default function Home() {
     name: "QF1",
   });
   const [url, setUrl] = useState("");
+  const [urlSuggestions, setUrlSuggestions] = useState<
+    LayoutUrlSuggestion[]
+  >([]);
   const [status, setStatus] = useState<Status>({
     kind: "idle",
     message: "Ready",
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const viewportFitIdRef = useRef(0);
+
+  useEffect(() => {
+    if (window.location.protocol !== "http:" && window.location.protocol !== "https:") {
+      return;
+    }
+
+    const controller = new AbortController();
+    const catalogUrl = new URL("/list.json", window.location.href);
+
+    void (async () => {
+      try {
+        const response = await fetch(catalogUrl, {
+          cache: "no-cache",
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        setUrlSuggestions(
+          parseLayoutUrlList(await response.json(), catalogUrl),
+        );
+      } catch {
+        // The catalog is optional; free-form URLs remain available without it.
+      }
+    })();
+
+    return () => controller.abort();
+  }, []);
 
   const update = (mutate: (draft: LayoutData) => void) => {
     setLayout((current) => {
@@ -176,7 +211,8 @@ export default function Home() {
     if (!url.trim()) return;
     setStatus({ kind: "loading", message: "Loading URL…" });
     try {
-      const response = await fetch(url.trim());
+      const catalogUrl = new URL("/list.json", window.location.href);
+      const response = await fetch(resolveLayoutUrl(url, catalogUrl));
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       loadValue(await response.json(), "URL");
     } catch (error) {
@@ -895,14 +931,26 @@ export default function Home() {
               <Link aria-hidden="true" />
               <Input
                 aria-label="Layout JSON URL"
-                type="url"
-                placeholder="https://…/layout.json"
+                type="text"
+                inputMode="url"
+                autoComplete="off"
+                list="layout-url-suggestions"
+                placeholder="/layouts/example.json or https://…"
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void importUrl();
                 }}
               />
+              <datalist id="layout-url-suggestions">
+                {urlSuggestions.map((suggestion) => (
+                  <option
+                    key={suggestion.href}
+                    value={suggestion.path}
+                    label={suggestion.label}
+                  />
+                ))}
+              </datalist>
               <Button
                 type="button"
                 variant="secondary"

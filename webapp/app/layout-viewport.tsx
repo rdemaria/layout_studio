@@ -8,9 +8,23 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Focus, MousePointer2, Move, RotateCcw } from "lucide-react";
+import {
+  ChevronDown,
+  Focus,
+  MousePointer2,
+  Move,
+  RotateCcw,
+  ScanSearch,
+  View,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Switch } from "@/components/ui/switch";
 import {
   Tooltip,
@@ -45,10 +59,17 @@ import {
   type SceneGeometry,
 } from "./layout-geometry";
 
-type NavigationMode = "orbit" | "pan" | "select";
+type NavigationMode = "orbit" | "pan" | "select" | "zoom-region";
 type Camera = { azimuth: number; elevation: number; distance: number; target: Vec3 };
 type Projection = { x: number; y: number; depth: number; scale: number };
 type Projector = (point: Vec3) => Projection | null;
+export type CanonicalView = "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+export type ScreenRectangle = {
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+};
 
 export type ViewportFitRequest = {
   id: number;
@@ -377,6 +398,74 @@ function minimumCameraDistance(target: Vec3): number {
   return Math.max(1e-9, absoluteScale * Number.EPSILON * 64);
 }
 
+const CANONICAL_POLE_EPSILON = 1e-6;
+
+const CANONICAL_VIEWS: { value: CanonicalView; label: string }[] = [
+  { value: "+x", label: "View from +X" },
+  { value: "-x", label: "View from −X" },
+  { value: "+y", label: "View from +Y" },
+  { value: "-y", label: "View from −Y" },
+  { value: "+z", label: "View from +Z" },
+  { value: "-z", label: "View from −Z" },
+];
+
+export function cameraForCanonicalView(
+  camera: Camera,
+  view: CanonicalView,
+): Camera {
+  const orientation: Record<CanonicalView, [number, number]> = {
+    "+x": [Math.PI / 2, 0],
+    "-x": [-Math.PI / 2, 0],
+    "+y": [0, Math.PI / 2 - CANONICAL_POLE_EPSILON],
+    "-y": [0, -Math.PI / 2 + CANONICAL_POLE_EPSILON],
+    "+z": [0, 0],
+    "-z": [Math.PI, 0],
+  };
+  const [azimuth, elevation] = orientation[view];
+  return { ...camera, azimuth, elevation };
+}
+
+export function zoomCameraToRectangle(
+  camera: Camera,
+  rectangle: ScreenRectangle,
+  width: number,
+  height: number,
+): Camera {
+  const safeWidth = Math.max(1, width);
+  const safeHeight = Math.max(1, height);
+  const left = Math.max(0, Math.min(safeWidth, rectangle.startX, rectangle.endX));
+  const rightEdge = Math.max(0, Math.min(safeWidth, Math.max(rectangle.startX, rectangle.endX)));
+  const top = Math.max(0, Math.min(safeHeight, rectangle.startY, rectangle.endY));
+  const bottom = Math.max(0, Math.min(safeHeight, Math.max(rectangle.startY, rectangle.endY)));
+  const rectangleWidth = rightEdge - left;
+  const rectangleHeight = bottom - top;
+  if (rectangleWidth <= 0 || rectangleHeight <= 0) return camera;
+
+  const focal = Math.min(safeWidth, safeHeight) * 0.92;
+  const centerX = (left + rightEdge) / 2;
+  const centerY = (top + bottom) / 2;
+  const { right, up } = cameraOrientation(camera);
+  const target = add(
+    camera.target,
+    add(
+      scale(right, (centerX - safeWidth / 2) * camera.distance / focal),
+      scale(up, -(centerY - safeHeight / 2) * camera.distance / focal),
+    ),
+  );
+  const scaleFactor = Math.max(
+    rectangleWidth / safeWidth,
+    rectangleHeight / safeHeight,
+  );
+  return {
+    ...camera,
+    target,
+    distance: Math.max(
+      minimumCameraDistance(target),
+      camera.distance * scaleFactor,
+    ),
+  };
+}
+
 export function zoomedCameraDistance(
   distance: number,
   deltaY: number,
@@ -550,8 +639,11 @@ export function LayoutViewport({
     startY: number;
     x: number;
     y: number;
+    localStartX: number;
+    localStartY: number;
     button: number;
     moved: boolean;
+    zooming: boolean;
   } | null>(null);
   const fittedOnceRef = useRef(false);
   const handledFitRequestRef = useRef(0);
@@ -573,6 +665,8 @@ export function LayoutViewport({
   const [showObjects, setShowObjects] = useState(true);
   const [showBeamFrames, setShowBeamFrames] = useState(true);
   const [curveProbe, setCurveProbe] = useState<CurveProbe | null>(null);
+  const [zoomRectangle, setZoomRectangle] =
+    useState<ScreenRectangle | null>(null);
   const [camera, setCamera] = useState<Camera>({
     azimuth: -0.68,
     elevation: 0.42,
@@ -786,6 +880,7 @@ export function LayoutViewport({
   }, [size.height, size.width]);
 
   const fit = useCallback(() => {
+    setZoomRectangle(null);
     fitPoints(boundsCorners(scene.bounds));
   }, [fitPoints, scene.bounds]);
 
@@ -837,6 +932,7 @@ export function LayoutViewport({
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault();
       event.stopPropagation();
+      setZoomRectangle(null);
       const deltaY = event.deltaMode === WheelEvent.DOM_DELTA_LINE
         ? event.deltaY * 16
         : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
@@ -1287,6 +1383,26 @@ export function LayoutViewport({
         context.stroke();
       }
     }
+
+    if (zoomRectangle) {
+      const left = Math.min(zoomRectangle.startX, zoomRectangle.endX);
+      const top = Math.min(zoomRectangle.startY, zoomRectangle.endY);
+      const width = Math.abs(zoomRectangle.endX - zoomRectangle.startX);
+      const height = Math.abs(zoomRectangle.endY - zoomRectangle.startY);
+      context.save();
+      context.fillStyle = "rgba(102, 199, 255, 0.13)";
+      context.fillRect(left, top, width, height);
+      context.setLineDash([6, 4]);
+      context.lineWidth = 1.5;
+      context.strokeStyle = "rgba(190, 232, 255, 0.96)";
+      context.strokeRect(
+        left + 0.75,
+        top + 0.75,
+        Math.max(0, width - 1.5),
+        Math.max(0, height - 1.5),
+      );
+      context.restore();
+    }
   }, [
     activeCurveProbe,
     camera,
@@ -1297,6 +1413,7 @@ export function LayoutViewport({
     showCurves,
     showObjects,
     size,
+    zoomRectangle,
   ]);
 
   const pick = useCallback((x: number, y: number): HoverTarget => {
@@ -1505,14 +1622,26 @@ export function LayoutViewport({
 
   const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
+    const point = pointerCoordinates(event);
     dragRef.current = {
       startX: event.clientX,
       startY: event.clientY,
       x: event.clientX,
       y: event.clientY,
+      localStartX: point.x,
+      localStartY: point.y,
       button: event.button,
       moved: false,
+      zooming: mode === "zoom-region" && event.button === 0 && !event.shiftKey,
     };
+    if (mode === "zoom-region" && event.button === 0 && !event.shiftKey) {
+      setZoomRectangle({
+        startX: point.x,
+        startY: point.y,
+        endX: point.x,
+        endY: point.y,
+      });
+    }
   };
 
   const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -1520,11 +1649,14 @@ export function LayoutViewport({
     if (drag && event.buttons) {
       const dx = event.clientX - drag.x;
       const dy = event.clientY - drag.y;
+      const activeMode = drag.button === 2 || event.shiftKey ? "pan" : mode;
       dragRef.current = {
         startX: drag.startX,
         startY: drag.startY,
         x: event.clientX,
         y: event.clientY,
+        localStartX: drag.localStartX,
+        localStartY: drag.localStartY,
         button: drag.button,
         moved:
           drag.moved ||
@@ -1532,18 +1664,22 @@ export function LayoutViewport({
             event.clientX - drag.startX,
             event.clientY - drag.startY,
           ) > 2,
+        zooming: drag.zooming && activeMode === "zoom-region",
       };
-      const activeMode = drag.button === 2 || event.shiftKey ? "pan" : mode;
       if (activeMode === "orbit") {
         setCamera((current) => ({
           ...current,
           azimuth: current.azimuth - dx * 0.008,
           elevation: Math.max(
-            -1.45,
-            Math.min(1.45, current.elevation + dy * 0.008),
+            -Math.PI / 2 + CANONICAL_POLE_EPSILON,
+            Math.min(
+              Math.PI / 2 - CANONICAL_POLE_EPSILON,
+              current.elevation + dy * 0.008,
+            ),
           ),
         }));
       } else if (activeMode === "pan") {
+        setZoomRectangle(null);
         const panScale =
           (camera.distance / Math.max(size.width, size.height)) * 1.45;
         const cos = Math.cos(camera.azimuth);
@@ -1556,6 +1692,14 @@ export function LayoutViewport({
             (dx * sin - dy * cos * Math.sin(camera.elevation)) * panScale,
           ]),
         }));
+      } else if (activeMode === "zoom-region" && drag.zooming) {
+        const point = pointerCoordinates(event);
+        setZoomRectangle({
+          startX: drag.localStartX,
+          startY: drag.localStartY,
+          endX: Math.max(0, Math.min(size.width, point.x)),
+          endY: Math.max(0, Math.min(size.height, point.y)),
+        });
       }
       return;
     }
@@ -1578,6 +1722,26 @@ export function LayoutViewport({
   const onPointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const drag = dragRef.current;
     const point = pointerCoordinates(event);
+    if (drag?.zooming) {
+      const rectangle = {
+        startX: drag.localStartX,
+        startY: drag.localStartY,
+        endX: point.x,
+        endY: point.y,
+      };
+      if (
+        drag.moved &&
+        Math.abs(rectangle.endX - rectangle.startX) >= 6 &&
+        Math.abs(rectangle.endY - rectangle.startY) >= 6
+      ) {
+        setCamera((current) =>
+          zoomCameraToRectangle(current, rectangle, size.width, size.height)
+        );
+      }
+      setZoomRectangle(null);
+      dragRef.current = null;
+      return;
+    }
     if (drag && !drag.moved && drag.button === 0) {
       const target = pick(point.x, point.y);
       if (target?.kind === "curve") {
@@ -1603,6 +1767,16 @@ export function LayoutViewport({
       }
     }
     dragRef.current = null;
+  };
+
+  const cancelPointerInteraction = () => {
+    dragRef.current = null;
+    setZoomRectangle(null);
+  };
+
+  const selectNavigationMode = (nextMode: NavigationMode) => {
+    setMode(nextMode);
+    setZoomRectangle(null);
   };
 
   const hoverLabel =
@@ -1760,7 +1934,10 @@ export function LayoutViewport({
           onPointerMove={onPointerMove}
           onPointerLeave={() => {
             setHovered(null);
-            dragRef.current = null;
+          }}
+          onPointerCancel={cancelPointerInteraction}
+          onLostPointerCapture={() => {
+            if (dragRef.current) cancelPointerInteraction();
           }}
           onPointerUp={onPointerUp}
         />
@@ -1773,28 +1950,65 @@ export function LayoutViewport({
           <ToolButton
             active={mode === "orbit"}
             label="Orbit"
-            onClick={() => setMode("orbit")}
+            onClick={() => selectNavigationMode("orbit")}
           >
             <RotateCcw />
           </ToolButton>
           <ToolButton
             active={mode === "pan"}
             label="Pan"
-            onClick={() => setMode("pan")}
+            onClick={() => selectNavigationMode("pan")}
           >
             <Move />
           </ToolButton>
           <ToolButton
             active={mode === "select"}
             label="Select"
-            onClick={() => setMode("select")}
+            onClick={() => selectNavigationMode("select")}
           >
             <MousePointer2 />
+          </ToolButton>
+          <ToolButton
+            active={mode === "zoom-region"}
+            label="Zoom to rectangle"
+            onClick={() => selectNavigationMode("zoom-region")}
+          >
+            <ScanSearch />
           </ToolButton>
           <span className="toolbar-separator" />
           <ToolButton label="Fit layout" onClick={fit}>
             <Focus />
           </ToolButton>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                aria-label="Canonical views"
+                className="canonical-view-trigger"
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                <View />
+                <span>Views</span>
+                <ChevronDown className="canonical-view-chevron" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="canonical-view-menu">
+              {CANONICAL_VIEWS.map((view) => (
+                <DropdownMenuItem
+                  key={view.value}
+                  onSelect={() => {
+                    setZoomRectangle(null);
+                    setCamera((current) =>
+                      cameraForCanonicalView(current, view.value)
+                    );
+                  }}
+                >
+                  {view.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
         <div className="viewport-layers" aria-label="Viewer layers">
           <div className="viewport-layer-toggle">
@@ -1871,7 +2085,9 @@ export function LayoutViewport({
           <circle className="axis-marker-origin" cx="38" cy="38" r="2.7" />
         </svg>
         <div className="viewport-hint">
-          Drag to {mode} · wheel to zoom · click again or empty space to clear
+          {mode === "zoom-region"
+            ? "Draw a rectangle to zoom · Shift-drag or right-drag to pan"
+            : `Drag to ${mode} · wheel to zoom · click again or empty space to clear`}
         </div>
         {geometryError && (
           <div className="viewport-error" role="alert">

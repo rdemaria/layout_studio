@@ -30,7 +30,7 @@ lint: install
 
 test: install
 	$(NODE) --test tests/layout-data.test.mjs
-	$(NODE) --test --test-name-pattern='viewer|named-frame|dependency hierarchy|collapsible controls|top-bar action' tests/ui-components.test.mjs
+	$(NODE) --test --test-name-pattern='viewer|URL suggestions|canonical camera directions|named-frame|dependency hierarchy|collapsible controls|top-bar action' tests/ui-components.test.mjs
 
 check: lint hosted test standalone
 

@@ -84,6 +84,53 @@ test("renders sidebar skeletons deterministically", async () => {
   assert.match(first, /--skeleton-width:70%/);
 });
 
+test("builds URL suggestions from local paths in list.json", async () => {
+  const { parseLayoutUrlList, resolveLayoutUrl } = await vite.ssrLoadModule(
+    "/app/layout-url-catalog.ts",
+  );
+  const catalogUrl = "https://layout.example/list.json";
+  const suggestions = parseLayoutUrlList(
+    {
+      files: [
+        "layouts/sps.json",
+        { path: "/layouts/lhc.json", label: "LHC" },
+        "layouts/sps.json",
+        "https://elsewhere.example/layout.json",
+        "data:application/json,{}",
+        "  ",
+      ],
+    },
+    catalogUrl,
+  );
+
+  assert.deepEqual(suggestions, [
+    {
+      href: "https://layout.example/layouts/sps.json",
+      path: "layouts/sps.json",
+    },
+    {
+      href: "https://layout.example/layouts/lhc.json",
+      path: "/layouts/lhc.json",
+      label: "LHC",
+    },
+  ]);
+  assert.equal(
+    resolveLayoutUrl("layouts/sps.json", catalogUrl),
+    "https://layout.example/layouts/sps.json",
+  );
+  assert.equal(
+    resolveLayoutUrl("https://external.example/layout.json", catalogUrl),
+    "https://external.example/layout.json",
+  );
+
+  const { default: Home } = await vite.ssrLoadModule("/app/page.tsx");
+  const html = renderToStaticMarkup(React.createElement(Home));
+  assert.match(html, /list="layout-url-suggestions"/);
+  assert.match(html, /<datalist id="layout-url-suggestions"><\/datalist>/);
+  assert.match(html, /inputMode="url"/);
+  assert.match(html, /Load URL/);
+});
+
 test("renders viewer layers, world axes, and combines curve station with World pose", async () => {
   const {
     fitCameraToPoints,
@@ -140,6 +187,8 @@ test("renders viewer layers, world axes, and combines curve station with World p
     /aria-label="Selected reference curve station, world coordinates, and MAD-X Euler angles"/,
   );
   assert.match(html, /aria-label="World axis orientation"/);
+  assert.match(html, /aria-label="Zoom to rectangle"/);
+  assert.match(html, /aria-label="Canonical views"/);
   assert.match(html, /data-axis="x"/);
   assert.match(html, /data-axis="y"/);
   assert.match(html, /data-axis="z"/);
@@ -250,6 +299,92 @@ test("renders viewer layers, world axes, and combines curve station with World p
   assert.deepEqual(detailView.target, [1000000, 2000000, 3000000]);
   assert.ok(detailView.distance < 0.1);
   assert.ok(zoomedCameraDistance(0.5, -120, [0, 0, 0]) < 0.5);
+});
+
+test("supports canonical camera directions and rectangle zoom", async () => {
+  const {
+    cameraForCanonicalView,
+    zoomCameraToRectangle,
+  } = await vite.ssrLoadModule("/app/layout-viewport.tsx");
+  const viewportSource = await readFile(
+    path.join(root, "app/layout-viewport.tsx"),
+    "utf8",
+  );
+  const camera = {
+    azimuth: 0.37,
+    elevation: -0.21,
+    distance: 100,
+    target: [10, 20, 30],
+  };
+  const expectedAngles = {
+    "+x": [Math.PI / 2, 0],
+    "-x": [-Math.PI / 2, 0],
+    "+y": [0, Math.PI / 2 - 1e-6],
+    "-y": [0, -Math.PI / 2 + 1e-6],
+    "+z": [0, 0],
+    "-z": [Math.PI, 0],
+  };
+
+  for (const [view, [azimuth, elevation]] of Object.entries(expectedAngles)) {
+    const canonical = cameraForCanonicalView(camera, view);
+    assert.ok(Math.abs(canonical.azimuth - azimuth) < 1e-12);
+    assert.ok(Math.abs(canonical.elevation - elevation) < 1e-12);
+    assert.equal(canonical.distance, camera.distance);
+    assert.deepEqual(canonical.target, camera.target);
+  }
+
+  for (const label of [
+    "View from +X",
+    "View from −X",
+    "View from +Y",
+    "View from −Y",
+    "View from +Z",
+    "View from −Z",
+  ]) {
+    assert.match(viewportSource, new RegExp(label.replace("+", "\\+")));
+  }
+
+  const front = cameraForCanonicalView(
+    { ...camera, target: [0, 0, 0] },
+    "+z",
+  );
+  const centered = zoomCameraToRectangle(
+    front,
+    { startX: 300, startY: 225, endX: 500, endY: 375 },
+    800,
+    600,
+  );
+  assert.deepEqual(centered.target, front.target);
+  assert.equal(centered.distance, 25);
+
+  const reverseDrag = zoomCameraToRectangle(
+    front,
+    { startX: 500, startY: 375, endX: 300, endY: 225 },
+    800,
+    600,
+  );
+  assert.deepEqual(reverseDrag, centered);
+
+  const offCenter = zoomCameraToRectangle(
+    front,
+    { startX: 500, startY: 225, endX: 700, endY: 375 },
+    800,
+    600,
+  );
+  assert.ok(Math.abs(offCenter.target[0] - 200 * 100 / (600 * 0.92)) < 1e-12);
+  assert.equal(offCenter.target[1], 0);
+  assert.equal(offCenter.target[2], 0);
+  assert.equal(offCenter.distance, 25);
+
+  assert.equal(
+    zoomCameraToRectangle(
+      front,
+      { startX: 300, startY: 225, endX: 300, endY: 375 },
+      800,
+      600,
+    ),
+    front,
+  );
 });
 
 test("keeps viewer wheel zoom local and exposes entity fit controls", async () => {

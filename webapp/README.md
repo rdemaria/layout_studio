@@ -40,12 +40,38 @@ The small build harness lives under `standalone/`; the application source remain
 - `app/layout-data.ts` — canonical JSON model and validation.
 - `app/layout-geometry.ts` — curve, frame, object, and snapping mathematics.
 - `app/layout-viewport.tsx` — interactive 3D projection and viewer controls.
+- `app/layout-url-catalog.ts` — validation and resolution for URL suggestions.
 - `app/layout-controls.tsx` — reusable model-editing controls.
 - `app/dependency-tree.tsx` — World-rooted dependency view.
 - `app/globals.css` — responsive application styling.
 - `tests/` — model, geometry, rendering, and UI regression checks.
 - `standalone/` — repository-relative single-file bundler.
 - `build/index.html` — generated standalone application.
+
+## URL suggestions
+
+The editor reads the optional same-origin `public/list.json` catalog and suggests
+its local paths in the URL field. The compact form is:
+
+```json
+["layouts/sps.json", "layouts/lhc.json"]
+```
+
+Entries may also provide labels, as in the checked-in sample:
+
+```json
+[{"path": "layouts/sample-layout.json", "label": "Sample layout"}]
+```
+
+Only same-origin HTTP(S) paths from the catalog are offered. A manually entered
+URL may still point elsewhere. The catalog is optional, so the editor keeps working
+when it is absent.
+
+## Viewer navigation
+
+The viewer toolbar supports orbit, pan, selection, whole-layout fit, signed
+canonical views (`+X`, `-X`, `+Y`, `-Y`, `+Z`, `-Z`), and rectangle zoom. Rectangle
+zoom reframes the selected screen region without changing the current orientation.
 
 ## Layout JSON
 

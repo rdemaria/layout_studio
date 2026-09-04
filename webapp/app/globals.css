@@ -1190,6 +1190,7 @@ textarea {
 .viewport-canvas.mode-orbit:active { cursor: grabbing; }
 .viewport-canvas.mode-pan { cursor: move; }
 .viewport-canvas.mode-select { cursor: crosshair; }
+.viewport-canvas.mode-zoom-region { cursor: zoom-in; }
 
 .viewport-toolbar {
   position: absolute;
@@ -1213,6 +1214,28 @@ textarea {
 .viewport-toolbar button[data-variant="default"] {
   background: #317c82;
   color: #fff;
+}
+
+.viewport-toolbar .canonical-view-trigger {
+  height: 28px;
+  gap: 5px;
+  padding-inline: 7px;
+  font-size: 0.69rem;
+}
+
+.viewport-toolbar .canonical-view-trigger > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.viewport-toolbar .canonical-view-trigger .canonical-view-chevron {
+  width: 11px;
+  height: 11px;
+  opacity: 0.68;
+}
+
+.canonical-view-menu {
+  min-width: 9.5rem;
 }
 
 .toolbar-separator {
