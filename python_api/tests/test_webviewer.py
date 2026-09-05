@@ -219,6 +219,93 @@ def test_standalone_asset_is_reused_at_a_tokenized_route(web_viewer, bridge_asse
     assert headers["Content-Encoding"] == "gzip"
     assert int(headers["Content-Length"]) == len(compressed)
     assert head_body == b""
+    assert _request(web_viewer, "/viewer/list.json")[0] == 404
+
+
+def test_standalone_catalog_serves_only_allowlisted_local_json(
+    canonical_layout_dict,
+    tmp_path,
+):
+    standalone_dir = tmp_path / "standalone"
+    layouts_dir = standalone_dir / "layouts"
+    layouts_dir.mkdir(parents=True)
+    index = standalone_dir / "index.html"
+    index.write_text(
+        "<!doctype html><title>test app</title>"
+        "<script>/* layout-studio-python protocol 1 */</script>",
+        encoding="utf-8",
+    )
+    sample = {"reference_curves": {}, "types": {}, "objects": {}}
+    sample_bytes = json.dumps(sample).encode()
+    (layouts_dir / "sample layout.json").write_bytes(sample_bytes)
+    compressed_bytes = gzip.compress(sample_bytes, mtime=0)
+    (layouts_dir / "compressed.json.gz").write_bytes(compressed_bytes)
+    (layouts_dir / "readme.txt").write_text("not JSON", encoding="utf-8")
+    (standalone_dir / "unlisted.json").write_text("{}", encoding="utf-8")
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"secret":true}', encoding="utf-8")
+    # Invalid entries do not consume the browser's 500-suggestion limit, so
+    # they must not consume the server-side allow-list limit either.
+    catalog = [None] * 500 + [
+        {"path": "layouts/sample%20layout.json", "label": "Sample"},
+        "layouts/compressed.json.gz?version=1",
+        "layouts/readme.txt",
+        "../outside.json",
+        "/absolute.json",
+        "https://example.invalid/remote.json",
+        "http://[",
+    ]
+    catalog_bytes = json.dumps(catalog).encode()
+    (standalone_dir / "list.json").write_bytes(catalog_bytes)
+
+    viewer = WebViewer(
+        Layout.from_dict(canonical_layout_dict),
+        standalone_path=index,
+        poll_timeout=0.01,
+    )
+    try:
+        status, headers, payload = _request(viewer, "/viewer/list.json")
+        assert status == 200
+        assert headers["Content-Type"] == "application/json; charset=utf-8"
+        assert payload == catalog_bytes
+
+        status, headers, payload = _request(
+            viewer,
+            "/viewer/layouts/sample%20layout.json",
+        )
+        assert status == 200
+        assert headers["Content-Type"] == "application/json; charset=utf-8"
+        assert headers.get("Content-Encoding") is None
+        assert payload == sample_bytes
+
+        status, headers, payload = _request(
+            viewer,
+            "/viewer/layouts/compressed.json.gz?version=1",
+        )
+        assert status == 200
+        assert headers["Content-Encoding"] == "gzip"
+        assert payload == compressed_bytes
+        assert gzip.decompress(payload) == sample_bytes
+
+        status, headers, payload = _request(
+            viewer,
+            "/viewer/layouts/compressed.json.gz",
+            method="HEAD",
+        )
+        assert status == 200
+        assert headers["Content-Encoding"] == "gzip"
+        assert int(headers["Content-Length"]) == len(compressed_bytes)
+        assert payload == b""
+
+        for suffix in (
+            "/viewer/unlisted.json",
+            "/viewer/%2e%2e/outside.json",
+            "/viewer/absolute.json",
+            "/viewer/layouts/readme.txt",
+        ):
+            assert _request(viewer, suffix)[0] == 404
+    finally:
+        viewer.close()
 
 
 def test_layout_endpoint_caches_compact_deterministic_gzip(web_viewer):

@@ -22,6 +22,7 @@ standalone: install
 	$(NPM) run build:standalone
 	test -s build/index.html
 	$(NODE) -e "const fs=require('node:fs'); if(!fs.readFileSync('build/index.html','utf8').includes('layout-studio-python')) process.exit(1)"
+	$(NODE) --test tests/standalone-assets.test.mjs
 
 hosted: install
 	$(NPM) run build

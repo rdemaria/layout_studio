@@ -1,0 +1,107 @@
+{
+  "reference_curves": {
+    "ring": {
+      "color": "#68d5c8",
+      "starting_frame": {
+        "reference": {
+          "kind": "world"
+        },
+        "transformation": [
+          ["tx", -5]
+        ]
+      },
+      "segments": [
+        [5, 0, 0],
+        [5, 1.0471975511965976, 0],
+        [4, 0, 0],
+        [4, -0.6283185307179586, 0.22]
+      ]
+    }
+  },
+  "types": {
+    "quadrupole": {
+      "shape": ["box", 1.1, 0.9, 1.6, 0.22, 0],
+      "color": "#f0a84b",
+      "magnetic_center": {
+        "transformation": []
+      },
+      "magnetic_length": 1.4,
+      "frames": {
+        "survey_mark": {
+          "transformation": [
+            ["tx", 0.45],
+            ["ty", 0.35]
+          ]
+        }
+      }
+    },
+    "monitor": {
+      "shape": ["cylinder", 0.62, 0.7, 0, 0],
+      "color": "#5fd6c7",
+      "magnetic_center": {
+        "transformation": []
+      },
+      "magnetic_length": 0.5,
+      "frames": {}
+    },
+    "detector": {
+      "shape": ["box", 2.2, 1.5, 0.55, 0, 0],
+      "color": "#8898ff",
+      "magnetic_center": {
+        "transformation": []
+      },
+      "magnetic_length": 0.4,
+      "frames": {
+        "sensor_origin": {
+          "transformation": [
+            ["tx", 0.9],
+            ["ty", 0.55]
+          ]
+        }
+      }
+    }
+  },
+  "objects": {
+    "QF1": {
+      "type": "quadrupole",
+      "position": {
+        "target": "center",
+        "reference": {
+          "kind": "curve",
+          "curve": "ring"
+        },
+        "transformation": [
+          ["ts", 3.5]
+        ]
+      }
+    },
+    "BPM1": {
+      "type": "monitor",
+      "position": {
+        "target": "center",
+        "reference": {
+          "kind": "curve",
+          "curve": "ring"
+        },
+        "transformation": [
+          ["ts", 8.4]
+        ]
+      }
+    },
+    "Detector": {
+      "type": "detector",
+      "position": {
+        "target": "magnetic_entry",
+        "reference": {
+          "kind": "object_frame",
+          "object": "QF1",
+          "frame": "magnetic_exit"
+        },
+        "transformation": [
+          ["tt", 2.2],
+          ["rs", 0.18]
+        ]
+      }
+    }
+  }
+}

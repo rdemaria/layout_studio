@@ -24,8 +24,9 @@ interface tests.
 
 ## Standalone build
 
-Running the standalone build produces a fully self-contained `build/index.html`
-with its JavaScript and CSS inlined. Rebuild it after bridge/source changes before
+Running the standalone build produces `build/index.html` with its JavaScript and
+CSS fully inlined. It also copies the optional URL catalog and its listed local
+JSON files beside the page. Rebuild after bridge/source or catalog changes before
 using it from Python:
 
 ```bash
@@ -58,8 +59,9 @@ wheel. Do not add a second generated HTML copy under `python_api`.
 
 ## URL suggestions
 
-The editor reads the optional same-origin `public/list.json` catalog and suggests
-its local paths in the URL field. The compact form is:
+The editor reads the optional same-origin `list.json` next to the served page and
+shows its local paths in a dropdown beside the free-form URL field. In a source
+development server this file comes from `public/list.json`. The compact form is:
 
 ```json
 ["layouts/sps.json", "layouts/lhc.json"]
@@ -71,9 +73,10 @@ Entries may also provide labels, as in the checked-in sample:
 [{"path": "layouts/sample-layout.json", "label": "Sample layout"}]
 ```
 
-Only same-origin HTTP(S) paths from the catalog are offered. A manually entered
-URL may still point elsewhere. The catalog is optional, so the editor keeps working
-when it is absent.
+Only same-origin HTTP(S) paths from the catalog are offered. Prefer relative paths
+so a layout continues to work when the app is mounted below an origin root. A
+manually entered URL may still point elsewhere. The catalog is optional, so the
+editor keeps working when it is absent.
 
 ## Viewer navigation
 

@@ -85,10 +85,9 @@ test("renders sidebar skeletons deterministically", async () => {
 });
 
 test("builds URL suggestions from local paths in list.json", async () => {
-  const { parseLayoutUrlList, resolveLayoutUrl } = await vite.ssrLoadModule(
-    "/app/layout-url-catalog.ts",
-  );
-  const catalogUrl = "https://layout.example/list.json";
+  const { layoutCatalogUrl, parseLayoutUrlList, resolveLayoutUrl } =
+    await vite.ssrLoadModule("/app/layout-url-catalog.ts");
+  const catalogUrl = "https://layout.example/tools/studio/list.json";
   const suggestions = parseLayoutUrlList(
     {
       files: [
@@ -105,7 +104,7 @@ test("builds URL suggestions from local paths in list.json", async () => {
 
   assert.deepEqual(suggestions, [
     {
-      href: "https://layout.example/layouts/sps.json",
+      href: "https://layout.example/tools/studio/layouts/sps.json",
       path: "layouts/sps.json",
     },
     {
@@ -116,19 +115,44 @@ test("builds URL suggestions from local paths in list.json", async () => {
   ]);
   assert.equal(
     resolveLayoutUrl("layouts/sps.json", catalogUrl),
-    "https://layout.example/layouts/sps.json",
+    "https://layout.example/tools/studio/layouts/sps.json",
   );
   assert.equal(
     resolveLayoutUrl("https://external.example/layout.json", catalogUrl),
     "https://external.example/layout.json",
   );
+  assert.equal(
+    layoutCatalogUrl(
+      "https://layout.example/tools/studio/index.html?preview=1#viewer",
+    ).href,
+    "https://layout.example/tools/studio/list.json",
+  );
+  assert.equal(
+    layoutCatalogUrl("https://layout.example/tools/studio/").href,
+    "https://layout.example/tools/studio/list.json",
+  );
 
-  const { default: Home } = await vite.ssrLoadModule("/app/page.tsx");
+  const { default: Home, LayoutUrlPicker } = await vite.ssrLoadModule(
+    "/app/page.tsx",
+  );
   const html = renderToStaticMarkup(React.createElement(Home));
   assert.match(html, /list="layout-url-suggestions"/);
   assert.match(html, /<datalist id="layout-url-suggestions"><\/datalist>/);
+  assert.match(html, /aria-label="Available layout JSON files"/);
+  assert.match(html, /No JSON catalog/);
   assert.match(html, /inputMode="url"/);
   assert.match(html, /Load URL/);
+
+  const pickerHtml = renderToStaticMarkup(
+    React.createElement(LayoutUrlPicker, {
+      suggestions,
+      onSelect() {},
+    }),
+  );
+  assert.match(pickerHtml, /Available JSON…/);
+  assert.match(pickerHtml, /value="layouts\/sps.json"/);
+  assert.match(pickerHtml, /value="\/layouts\/lhc.json"/);
+  assert.match(pickerHtml, /LHC — \/layouts\/lhc.json/);
 });
 
 test("renders viewer layers, world axes, and combines curve station with World pose", async () => {

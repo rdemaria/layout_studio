@@ -2,9 +2,13 @@ import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { copyLayoutCatalogAssets } from "./layout-catalog-assets.mjs";
+
 const standaloneRoot = dirname(fileURLToPath(import.meta.url));
 const outputRoot = resolve(standaloneRoot, "dist");
-const target = resolve(standaloneRoot, "../build/index.html");
+const publicRoot = resolve(standaloneRoot, "../public");
+const buildRoot = resolve(standaloneRoot, "../build");
+const target = resolve(buildRoot, "index.html");
 let html = await readFile(resolve(outputRoot, "index.html"), "utf8");
 
 html = await replaceAsync(
@@ -32,6 +36,7 @@ if (/\b(?:src|href)="\.?\/assets\//.test(html)) {
 }
 
 await writeFile(target, html);
+await copyLayoutCatalogAssets(publicRoot, buildRoot);
 
 async function replaceAsync(input, expression, replacer) {
   const matches = [...input.matchAll(expression)];

@@ -21,6 +21,7 @@ import os
 import queue
 import secrets
 import socket
+import stat as stat_module
 import sys
 import threading
 import time
@@ -52,6 +53,8 @@ _BRIDGE_PROTOCOL = 1
 _BRIDGE_MARKER = _BRIDGE_SOURCE.encode("ascii")
 _DEFAULT_POLL_TIMEOUT = 20.0
 _MAX_EVENT_BYTES = 32 * 1024 * 1024
+_MAX_CATALOG_BYTES = 1024 * 1024
+_MAX_CATALOG_ENTRIES = 500
 _MAX_INFLIGHT_EVENT_BYTES = 32 * 1024 * 1024
 _MAX_CACHED_MESSAGE_BYTES = 64 * 1024 * 1024
 _MAX_COMMAND_HISTORY = 512
@@ -78,10 +81,18 @@ class WebViewerTimeoutError(WebViewerError, TimeoutError):
 
 
 @dataclass(frozen=True)
+class _StandaloneFile:
+    path: Path
+    content_encoding: str | None = None
+
+
+@dataclass(frozen=True)
 class _StandaloneAsset:
     content: bytes
     gzip_content: bytes
     label: str
+    catalog_content: bytes | None
+    catalog_files: Mapping[str, _StandaloneFile]
 
 
 @dataclass(frozen=True)
@@ -626,6 +637,20 @@ class _BridgeRequestHandler(BaseHTTPRequestHandler):
                 standalone=True,
             )
             return
+        if parsed.path == f"{root}/viewer/list.json" and not parsed.query:
+            if state.standalone is None or state.standalone.catalog_content is None:
+                self._not_found()
+                return
+            self._send_bytes(
+                HTTPStatus.OK,
+                state.standalone.catalog_content,
+                "application/json; charset=utf-8",
+            )
+            return
+        catalog_file = self._catalog_file(parsed.path)
+        if catalog_file is not None:
+            self._send_file(catalog_file)
+            return
         if parsed.path in (f"{root}/layout.json", f"{root}/layout.json.gz"):
             valid_query, requested_version = self._parse_layout_query(parsed.query)
             if not valid_query:
@@ -710,6 +735,21 @@ class _BridgeRequestHandler(BaseHTTPRequestHandler):
                 standalone=True,
                 head=True,
             )
+            return
+        if parsed.path == f"{root}/viewer/list.json" and not parsed.query:
+            if state.standalone is None or state.standalone.catalog_content is None:
+                self._not_found()
+                return
+            self._send_bytes(
+                HTTPStatus.OK,
+                state.standalone.catalog_content,
+                "application/json; charset=utf-8",
+                head=True,
+            )
+            return
+        catalog_file = self._catalog_file(parsed.path)
+        if catalog_file is not None:
+            self._send_file(catalog_file, head=True)
             return
         if parsed.path in (f"{root}/layout.json", f"{root}/layout.json.gz"):
             valid_query, requested_version = self._parse_layout_query(parsed.query)
@@ -1012,6 +1052,74 @@ class _BridgeRequestHandler(BaseHTTPRequestHandler):
             return False
         state = self.server.state
         return host.lower() == f"127.0.0.1:{state.port}"
+
+    def _catalog_file(self, request_path: str) -> _StandaloneFile | None:
+        state = self.server.state
+        if state.standalone is None:
+            return None
+        prefix = f"{state.root_path}/viewer/"
+        if not request_path.startswith(prefix):
+            return None
+        encoded_path = request_path[len(prefix) :]
+        try:
+            relative_path = urllib.parse.unquote(encoded_path, errors="strict")
+        except UnicodeDecodeError:
+            return None
+        return state.standalone.catalog_files.get(relative_path)
+
+    def _send_file(self, asset: _StandaloneFile, *, head: bool = False) -> None:
+        try:
+            if asset.path.resolve(strict=True) != asset.path:
+                self._not_found()
+                return
+            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(asset.path, flags)
+        except OSError:
+            self._not_found()
+            return
+
+        try:
+            with os.fdopen(descriptor, "rb") as stream:
+                file_stat = os.fstat(stream.fileno())
+                if not stat_module.S_ISREG(file_stat.st_mode):
+                    self._not_found()
+                    return
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(file_stat.st_size))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header(
+                    "Permissions-Policy",
+                    "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+                )
+                self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+                if asset.content_encoding is not None:
+                    self.send_header("Content-Encoding", asset.content_encoding)
+                self.end_headers()
+                if head:
+                    return
+                try:
+                    remaining = file_stat.st_size
+                    while remaining:
+                        chunk = stream.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            # The file was truncated after fstat(). Closing the
+                            # connection prevents the next response from being
+                            # mistaken for the missing body bytes.
+                            self.close_connection = True
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+        except OSError:
+            # A file removed while it is being served is an ordinary local
+            # asset miss; avoid leaking filesystem details to the browser.
+            if not self.wfile.closed:
+                self.close_connection = True
 
     def _send_bytes(
         self,
@@ -1322,20 +1430,163 @@ def _read_explicit_standalone(path_value: PathLike) -> _StandaloneAsset:
     if path.is_dir():
         path = path / "index.html"
     try:
-        stat = path.stat()
-        return _read_path_asset(str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+        resolved = path.resolve(strict=True)
+        file_stat = resolved.stat()
     except OSError as exc:
         raise WebViewerAssetError(
             f"could not read standalone web viewer at {path}"
         ) from exc
+    catalog_path = resolved.parent / "list.json"
+    try:
+        resolved_catalog = catalog_path.resolve(strict=True)
+        catalog_stat = resolved_catalog.stat()
+        catalog_signature = (
+            str(resolved_catalog),
+            catalog_stat.st_mtime_ns,
+            catalog_stat.st_size,
+        )
+    except OSError:
+        catalog_signature = ("", -1, -1)
+    return _read_path_asset(
+        str(resolved),
+        file_stat.st_mtime_ns,
+        file_stat.st_size,
+        *catalog_signature,
+    )
 
 
 @lru_cache(maxsize=8)
 def _read_path_asset(
-    resolved_path: str, _mtime_ns: int, _size: int
+    resolved_path: str,
+    _mtime_ns: int,
+    _size: int,
+    resolved_catalog: str,
+    _catalog_mtime_ns: int,
+    _catalog_size: int,
 ) -> _StandaloneAsset:
     path = Path(resolved_path)
-    return _standalone_asset(path.read_bytes(), resolved_path)
+    catalog_content, catalog_files = _read_standalone_catalog(
+        path.parent,
+        Path(resolved_catalog) if resolved_catalog else None,
+    )
+    return _standalone_asset(
+        path.read_bytes(),
+        resolved_path,
+        catalog_content=catalog_content,
+        catalog_files=catalog_files,
+    )
+
+
+def _read_standalone_catalog(
+    root: Path,
+    catalog_path: Path | None,
+) -> tuple[bytes | None, Mapping[str, _StandaloneFile]]:
+    empty: Mapping[str, _StandaloneFile] = MappingProxyType({})
+    if catalog_path is None:
+        return None, empty
+    try:
+        root = root.resolve(strict=True)
+        catalog_path.relative_to(root)
+        catalog_stat = catalog_path.stat()
+        if (
+            not stat_module.S_ISREG(catalog_stat.st_mode)
+            or catalog_stat.st_size > _MAX_CATALOG_BYTES
+        ):
+            return None, empty
+        content = catalog_path.read_bytes()
+    except (OSError, ValueError):
+        return None, empty
+
+    try:
+        document = json.loads(content)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        # Serve the catalog so the web app can report its normal parse error,
+        # but never derive file capabilities from malformed JSON.
+        return content, empty
+
+    if isinstance(document, list):
+        entries = document
+    elif isinstance(document, dict) and isinstance(document.get("layouts"), list):
+        entries = document["layouts"]
+    elif isinstance(document, dict) and isinstance(document.get("files"), list):
+        entries = document["files"]
+    else:
+        return content, empty
+
+    files: dict[str, _StandaloneFile] = {}
+    for raw_entry in entries:
+        if isinstance(raw_entry, str):
+            raw_path = raw_entry.strip()
+        elif isinstance(raw_entry, dict) and isinstance(raw_entry.get("path"), str):
+            raw_path = cast(str, raw_entry["path"]).strip()
+        else:
+            continue
+        catalog_file = _resolve_catalog_file(root, raw_path)
+        if catalog_file is None:
+            continue
+        relative_path, asset = catalog_file
+        files.setdefault(relative_path, asset)
+        if len(files) >= _MAX_CATALOG_ENTRIES:
+            break
+    return content, MappingProxyType(files)
+
+
+def _resolve_catalog_file(
+    root: Path,
+    raw_path: str,
+) -> tuple[str, _StandaloneFile] | None:
+    if not raw_path or raw_path.startswith(("/", "\\")) or "\\" in raw_path:
+        return None
+    try:
+        unresolved = urllib.parse.urlsplit(raw_path)
+        if unresolved.scheme or unresolved.netloc:
+            return None
+        resolved_url = urllib.parse.urlsplit(
+            urllib.parse.urljoin(
+                "http://layout-studio.invalid/viewer/list.json",
+                raw_path,
+            )
+        )
+    except ValueError:
+        return None
+    prefix = "/viewer/"
+    if (
+        resolved_url.scheme != "http"
+        or resolved_url.netloc != "layout-studio.invalid"
+        or not resolved_url.path.startswith(prefix)
+    ):
+        return None
+    try:
+        relative_path = urllib.parse.unquote(
+            resolved_url.path[len(prefix) :],
+            errors="strict",
+        )
+    except UnicodeDecodeError:
+        return None
+    if (
+        not relative_path
+        or relative_path == "list.json"
+        or "\0" in relative_path
+        or "\\" in relative_path
+        or not relative_path.lower().endswith((".json", ".json.gz"))
+    ):
+        return None
+
+    try:
+        path = (root / relative_path).resolve(strict=True)
+        path.relative_to(root)
+        file_stat = path.stat()
+    except (OSError, ValueError):
+        return None
+    if not stat_module.S_ISREG(file_stat.st_mode):
+        return None
+    return (
+        relative_path,
+        _StandaloneFile(
+            path,
+            content_encoding="gzip" if relative_path.lower().endswith(".gz") else None,
+        ),
+    )
 
 
 def _find_standalone() -> _StandaloneAsset:
@@ -1352,11 +1603,21 @@ def _find_standalone() -> _StandaloneAsset:
     )
 
 
-def _standalone_asset(content: bytes, label: str) -> _StandaloneAsset:
+def _standalone_asset(
+    content: bytes,
+    label: str,
+    *,
+    catalog_content: bytes | None = None,
+    catalog_files: Mapping[str, _StandaloneFile] | None = None,
+) -> _StandaloneAsset:
     return _StandaloneAsset(
         content=content,
         gzip_content=gzip.compress(content, compresslevel=1, mtime=0),
         label=label,
+        catalog_content=catalog_content,
+        catalog_files=(
+            MappingProxyType({}) if catalog_files is None else catalog_files
+        ),
     )
 
 

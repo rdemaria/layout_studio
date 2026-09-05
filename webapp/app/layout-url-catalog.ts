@@ -82,6 +82,10 @@ export function parseLayoutUrlList(
   return suggestions;
 }
 
+export function layoutCatalogUrl(documentUrl: string | URL): URL {
+  return new URL("list.json", documentUrl);
+}
+
 export function resolveLayoutUrl(
   value: string,
   catalogUrl: string | URL,

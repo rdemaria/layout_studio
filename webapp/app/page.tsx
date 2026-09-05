@@ -93,6 +93,7 @@ import {
   type PythonBridgeHandlers,
 } from "./python-bridge";
 import {
+  layoutCatalogUrl,
   parseLayoutUrlList,
   resolveLayoutUrl,
   type LayoutUrlSuggestion,
@@ -195,6 +196,40 @@ function fitTargetIsInScope(
   return target.kind === scope.kind && target.name === scope.name;
 }
 
+type LayoutUrlPickerProps = {
+  suggestions: LayoutUrlSuggestion[];
+  onSelect: (path: string) => void;
+};
+
+export function LayoutUrlPicker({
+  suggestions,
+  onSelect,
+}: LayoutUrlPickerProps) {
+  return (
+    <NativeSelect
+      aria-label="Available layout JSON files"
+      className="url-suggestion-select"
+      size="sm"
+      value=""
+      disabled={suggestions.length === 0}
+      onChange={(event) => {
+        if (event.target.value) onSelect(event.target.value);
+      }}
+    >
+      <NativeSelectOption value="">
+        {suggestions.length > 0 ? "Available JSON…" : "No JSON catalog"}
+      </NativeSelectOption>
+      {suggestions.map((suggestion) => (
+        <NativeSelectOption key={suggestion.href} value={suggestion.path}>
+          {suggestion.label
+            ? `${suggestion.label} — ${suggestion.path}`
+            : suggestion.path}
+        </NativeSelectOption>
+      ))}
+    </NativeSelect>
+  );
+}
+
 export default function Home() {
   const [layout, setLayout] = useState<LayoutData>(() =>
     structuredClone(SAMPLE_LAYOUT),
@@ -244,7 +279,7 @@ export default function Home() {
     }
 
     const controller = new AbortController();
-    const catalogUrl = new URL("/list.json", window.location.href);
+    const catalogUrl = layoutCatalogUrl(document.baseURI);
 
     void (async () => {
       try {
@@ -345,7 +380,7 @@ export default function Home() {
     if (!url.trim()) return;
     setStatus({ kind: "loading", message: "Loading URL…" });
     try {
-      const catalogUrl = new URL("/list.json", window.location.href);
+      const catalogUrl = layoutCatalogUrl(document.baseURI);
       const response = await fetch(resolveLayoutUrl(url, catalogUrl));
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       loadValue(await response.json(), "URL");
@@ -1294,7 +1329,7 @@ export default function Home() {
                 inputMode="url"
                 autoComplete="off"
                 list="layout-url-suggestions"
-                placeholder="/layouts/example.json or https://…"
+                placeholder="layouts/example.json or https://…"
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
                 onKeyDown={(event) => {
@@ -1310,6 +1345,10 @@ export default function Home() {
                   />
                 ))}
               </datalist>
+              <LayoutUrlPicker
+                suggestions={urlSuggestions}
+                onSelect={setUrl}
+              />
               <Button
                 type="button"
                 variant="secondary"

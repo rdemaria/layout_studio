@@ -193,6 +193,10 @@ A source checkout reuses `webapp/build/index.html`; rebuild it with
 `make -C webapp standalone` before first use. Generated bundles are deliberately
 excluded from Python wheels. `standalone_path=` can select a protocol-1 build,
 and `viewer_url=` can select an embeddable compatible hosted application.
+When the standalone directory contains `list.json`, the loopback viewer serves
+that catalog and only the local JSON files explicitly listed by it, so the web
+editor's URL dropdown and relative URL loading work without exposing unrelated
+files from the directory.
 Only use a hosted viewer you trust: it receives the full layout through the
 authenticated message channel. Non-loopback hosted viewers must use HTTPS.
 If the embedded application reloads, the bridge reinstalls the latest Python
