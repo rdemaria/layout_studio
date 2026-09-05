@@ -22,6 +22,8 @@ def add_type(layout, name="kind"):
         color="#112233",
         magnetic_center=Frame(),
         magnetic_length=1.0,
+        magnetic_curvature=0.0,
+        magnetic_roll=0.0,
     )
 
 
@@ -69,6 +71,45 @@ def test_dangling_type_object_and_frame_references_are_rejected():
         position=Position("A->missing"),
     )
     assert anchor.name == "A"
+    with pytest.raises(DanglingReferenceError):
+        layout.validate()
+
+
+@pytest.mark.parametrize(
+    "frame_name",
+    [
+        "magnetic_center",
+        "magnetic_entry",
+        "magnetic_exit",
+        "beam_center",
+        "beam_entry",
+        "beam_exit",
+    ],
+)
+def test_unconfigured_optional_axis_frames_are_dangling(frame_name):
+    layout = Layout()
+    type_ = layout.new_type("bare", color="#112233")
+    layout.new_object("A", type=type_, position=Position("world"))
+    layout.new_object(
+        "B",
+        type=type_,
+        position=Position(f"A->{frame_name}"),
+    )
+
+    with pytest.raises(DanglingReferenceError):
+        layout.validate()
+
+
+@pytest.mark.parametrize("target", ["magnetic_entry", "beam_entry"])
+def test_unconfigured_optional_axis_targets_are_dangling(target):
+    layout = Layout()
+    type_ = layout.new_type("bare", color="#112233")
+    layout.new_object(
+        "A",
+        type=type_,
+        position=Position("world", target=target),
+    )
+
     with pytest.raises(DanglingReferenceError):
         layout.validate()
 

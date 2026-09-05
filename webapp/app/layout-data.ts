@@ -43,10 +43,16 @@ export type LocalTransformation = {
 };
 
 export type LayoutType = {
-  shape: Shape;
+  shape?: Shape;
   color: string;
-  magnetic_center: LocalTransformation;
-  magnetic_length: number;
+  magnetic_center?: LocalTransformation;
+  magnetic_length?: number;
+  magnetic_curvature?: number;
+  magnetic_roll?: number;
+  beam_center?: LocalTransformation;
+  beam_length?: number;
+  beam_curvature?: number;
+  beam_roll?: number;
   frames: Record<string, LocalTransformation>;
 };
 
@@ -125,13 +131,17 @@ export const NON_CURVE_TRANSFORM_NAMES: NonCurveTransformName[] = [
   "rs",
 ];
 
-// These frames are derived for every type instance and may be used anywhere an
-// object-frame name is accepted. They are never stored in the frames mapping.
+// Center is present for every object. The magnetic and beam frames are derived
+// only when their complete optional feature is present. None of these names may
+// be stored in the frames mapping, even on a type that omits the feature.
 export const IMPLICIT_TYPE_FRAME_NAMES = [
   "center",
   "magnetic_center",
   "magnetic_entry",
   "magnetic_exit",
+  "beam_center",
+  "beam_entry",
+  "beam_exit",
 ] as const;
 export type ImplicitTypeFrameName =
   (typeof IMPLICIT_TYPE_FRAME_NAMES)[number];
@@ -141,6 +151,15 @@ export const MAGNETIC_BOUNDARY_FRAME_NAMES = [
 ] as const;
 export type MagneticBoundaryFrameName =
   (typeof MAGNETIC_BOUNDARY_FRAME_NAMES)[number];
+export const BEAM_BOUNDARY_FRAME_NAMES = [
+  "beam_entry",
+  "beam_exit",
+] as const;
+export type BeamBoundaryFrameName =
+  (typeof BEAM_BOUNDARY_FRAME_NAMES)[number];
+export type FeatureBoundaryFrameName =
+  | MagneticBoundaryFrameName
+  | BeamBoundaryFrameName;
 
 export const SAMPLE_LAYOUT: LayoutData = {
   reference_curves: {
@@ -164,6 +183,12 @@ export const SAMPLE_LAYOUT: LayoutData = {
       color: "#f0a84b",
       magnetic_center: { transformation: [] },
       magnetic_length: 1.4,
+      magnetic_curvature: 0.22,
+      magnetic_roll: 0,
+      beam_center: { transformation: [] },
+      beam_length: 1.4,
+      beam_curvature: 0.22,
+      beam_roll: 0,
       frames: {
         survey_mark: {
           transformation: [["tx", 0.45], ["ty", 0.35]],
@@ -175,6 +200,12 @@ export const SAMPLE_LAYOUT: LayoutData = {
       color: "#5fd6c7",
       magnetic_center: { transformation: [] },
       magnetic_length: 0.5,
+      magnetic_curvature: 0,
+      magnetic_roll: 0,
+      beam_center: { transformation: [] },
+      beam_length: 0.5,
+      beam_curvature: 0,
+      beam_roll: 0,
       frames: {},
     },
     detector: {
@@ -182,6 +213,8 @@ export const SAMPLE_LAYOUT: LayoutData = {
       color: "#8898ff",
       magnetic_center: { transformation: [] },
       magnetic_length: 0.4,
+      magnetic_curvature: 0,
+      magnetic_roll: 0,
       frames: {
         sensor_origin: {
           transformation: [["tx", 0.9], ["ty", 0.55]],
@@ -259,12 +292,33 @@ export function isImplicitTypeFrameName(
   return (IMPLICIT_TYPE_FRAME_NAMES as readonly string[]).includes(name);
 }
 
+export function hasMagneticFeature(type: LayoutType): boolean {
+  return type.magnetic_center !== undefined &&
+    type.magnetic_length !== undefined &&
+    type.magnetic_curvature !== undefined &&
+    type.magnetic_roll !== undefined;
+}
+
+export function hasBeamFeature(type: LayoutType): boolean {
+  return type.beam_center !== undefined &&
+    type.beam_length !== undefined &&
+    type.beam_curvature !== undefined &&
+    type.beam_roll !== undefined;
+}
+
 export function typeFrameNames(type: LayoutType): string[] {
-  return [...IMPLICIT_TYPE_FRAME_NAMES, ...Object.keys(type.frames)];
+  const implicit = ["center"];
+  if (hasMagneticFeature(type)) {
+    implicit.push("magnetic_center", ...MAGNETIC_BOUNDARY_FRAME_NAMES);
+  }
+  if (hasBeamFeature(type)) {
+    implicit.push("beam_center", ...BEAM_BOUNDARY_FRAME_NAMES);
+  }
+  return [...implicit, ...Object.keys(type.frames)];
 }
 
 export function hasTypeFrame(type: LayoutType, name: string): boolean {
-  return isImplicitTypeFrameName(name) || hasOwn(type.frames, name);
+  return typeFrameNames(type).includes(name);
 }
 
 function finite(value: unknown, label: string): number {
@@ -428,11 +482,56 @@ function parseShape(value: unknown, label: string): Shape {
   return shape;
 }
 
-export function shapePath(shape: Shape): {
+type OptionalAxisFeature = {
+  center: LocalTransformation;
+  length: number;
+  curvature: number;
+  roll: number;
+};
+
+function parseOptionalAxisFeature(
+  value: Record<string, unknown>,
+  label: string,
+  prefix: "magnetic" | "beam",
+): OptionalAxisFeature | undefined {
+  const fields = [
+    `${prefix}_center`,
+    `${prefix}_length`,
+    `${prefix}_curvature`,
+    `${prefix}_roll`,
+  ] as const;
+  const present = fields.filter((field) => value[field] !== undefined);
+  if (!present.length) return undefined;
+  if (present.length !== fields.length) {
+    const missing = fields.filter((field) => value[field] === undefined);
+    throw new Error(
+      `${label} must define the complete ${prefix} feature; missing ${missing.join(", ")}`,
+    );
+  }
+  const length = finite(value[`${prefix}_length`], `${label}.${prefix}_length`);
+  if (length <= 0) {
+    throw new Error(`${label}.${prefix}_length must be positive`);
+  }
+  return {
+    center: parseLocalTransformation(
+      value[`${prefix}_center`],
+      `${label}.${prefix}_center`,
+    ),
+    length,
+    curvature: finite(
+      value[`${prefix}_curvature`],
+      `${label}.${prefix}_curvature`,
+    ),
+    roll: finite(value[`${prefix}_roll`], `${label}.${prefix}_roll`),
+  };
+}
+
+export function shapePath(shape?: Shape): {
   length: number;
   curvature: number;
   roll: number;
 } {
+  if (!shape) return { length: 0, curvature: 0, roll: 0 };
   return shape[0] === "box"
     ? { length: shape[3], curvature: shape[4], roll: shape[5] }
     : { length: shape[2], curvature: shape[3], roll: shape[4] };
@@ -605,15 +704,17 @@ export function parseLayout(value: unknown): LayoutData {
       "color",
       "magnetic_center",
       "magnetic_length",
+      "magnetic_curvature",
+      "magnetic_roll",
+      "beam_center",
+      "beam_length",
+      "beam_curvature",
+      "beam_roll",
       "frames",
     ]);
-    const magnetic_length = finite(
-      raw.magnetic_length,
-      `types.${name}.magnetic_length`,
-    );
-    if (magnetic_length <= 0) {
-      throw new Error(`types.${name}.magnetic_length must be positive`);
-    }
+    const label = `types.${name}`;
+    const magnetic = parseOptionalAxisFeature(raw, label, "magnetic");
+    const beam = parseOptionalAxisFeature(raw, label, "beam");
     const frames: Record<string, LocalTransformation> = {};
     if (!isRecord(raw.frames)) {
       throw new Error(`types.${name}.frames must be an object`);
@@ -633,13 +734,26 @@ export function parseLayout(value: unknown): LayoutData {
       ));
     }
     defineDictionaryEntry(types, name, {
-      shape: parseShape(raw.shape, `types.${name}.shape`),
+      ...(raw.shape === undefined
+        ? {}
+        : { shape: parseShape(raw.shape, `types.${name}.shape`) }),
       color: parseColor(raw.color, `types.${name}.color`),
-      magnetic_center: parseLocalTransformation(
-        raw.magnetic_center,
-        `types.${name}.magnetic_center`,
-      ),
-      magnetic_length,
+      ...(magnetic
+        ? {
+            magnetic_center: magnetic.center,
+            magnetic_length: magnetic.length,
+            magnetic_curvature: magnetic.curvature,
+            magnetic_roll: magnetic.roll,
+          }
+        : {}),
+      ...(beam
+        ? {
+            beam_center: beam.center,
+            beam_length: beam.length,
+            beam_curvature: beam.curvature,
+            beam_roll: beam.roll,
+          }
+        : {}),
       frames,
     });
   }

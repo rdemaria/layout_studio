@@ -80,6 +80,9 @@ def test_transfer_line_alias_is_root_and_cached_lhc_length_is_ignored():
     assert result.report.skipped_objects == {}
     assert machine.requested_lengths == [pytest.approx(12.0)]
     assert set(result.layout["objects"]) == set(transformations)
+    for type_ in result.layout["types"].values():
+        assert type_["magnetic_curvature"] == pytest.approx(type_["shape"][4])
+        assert type_["magnetic_roll"] == pytest.approx(type_["shape"][5])
 
 
 def test_only_unrelated_missing_reference_branch_is_skipped():

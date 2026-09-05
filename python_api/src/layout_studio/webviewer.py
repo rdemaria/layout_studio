@@ -63,11 +63,6 @@ _MAX_CURSOR_DIGITS = 20
 _MAX_REQUEST_HANDLERS = 32
 _REQUEST_TIMEOUT = 10.0
 _DEFAULT_HEIGHT = 720
-_IMPLICIT_FRAME_NAMES = frozenset(
-    ("center", "magnetic_center", "magnetic_entry", "magnetic_exit")
-)
-
-
 class WebViewerError(RuntimeError):
     """Base class for browser-viewer failures."""
 
@@ -1259,11 +1254,31 @@ def _selection_catalog(document: Mapping[str, object]) -> _SelectionCatalog:
         type_name = cast(str, object_value["type"])
         type_value = types[type_name]
         frames = cast(Mapping[str, object], type_value["frames"])
-        object_frames[name] = frozenset((*_IMPLICIT_FRAME_NAMES, *frames))
+        object_frames[name] = frozenset((*_implicit_type_frames(type_value), *frames))
     return _SelectionCatalog(
         MappingProxyType(curve_segments),
         MappingProxyType(object_frames),
     )
+
+
+def _implicit_type_frames(type_value: object) -> frozenset[str]:
+    declared = getattr(type_value, "implicit_frames", None)
+    if declared is not None:
+        return frozenset(str(name) for name in declared)
+
+    result = {"center"}
+    for feature in ("magnetic", "beam"):
+        field = f"{feature}_center"
+        present = (
+            field in type_value
+            if isinstance(type_value, Mapping)
+            else getattr(type_value, field, None) is not None
+        )
+        if present:
+            result.update(
+                (f"{feature}_center", f"{feature}_entry", f"{feature}_exit")
+            )
+    return frozenset(result)
 
 
 def _selection_in_catalog(
@@ -2487,7 +2502,8 @@ class WebViewer:
         *,
         curves: bool | None = None,
         objects: bool | None = None,
-        beam_frames: bool | None = None,
+        magnetic_axis: bool | None = None,
+        beam_axis: bool | None = None,
         frames: bool | None = None,
     ) -> str:
         """Update any subset of the web viewer's layer toggles."""
@@ -2496,7 +2512,8 @@ class WebViewer:
             {
                 "curves": curves,
                 "objects": objects,
-                "beam_frames": beam_frames,
+                "magnetic_axis": magnetic_axis,
+                "beam_axis": beam_axis,
                 "frames": frames,
             },
             require_value=True,
@@ -2860,11 +2877,7 @@ def _checked_selection_target(
     if type_name not in types:
         raise KeyError(f"object {object_name!r} has unknown type {type_name!r}")
     attached_type = types[type_name]
-    implicit = getattr(
-        attached_type,
-        "implicit_frames",
-        {"center", "magnetic_center", "magnetic_entry", "magnetic_exit"},
-    )
+    implicit = _implicit_type_frames(attached_type)
     if frame_name not in implicit and frame_name not in attached_type.frames:
         raise KeyError(f"object {object_name!r} has no frame {frame_name!r}")
     return selection
@@ -2903,7 +2916,7 @@ def _visibility_values(
         return {}
     if not isinstance(value, Mapping):
         raise TypeError("visibility must be a mapping")
-    allowed = {"curves", "objects", "beam_frames", "frames"}
+    allowed = {"curves", "objects", "magnetic_axis", "beam_axis", "frames"}
     supplied: dict[str, bool] = {}
     for key, item in value.items():
         if key not in allowed:

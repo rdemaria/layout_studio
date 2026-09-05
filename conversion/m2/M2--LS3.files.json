@@ -8,13 +8,13 @@
       "role": "source Machine snapshot (not committed)"
     },
     "M2--LS3.layout.json": {
-      "bytes": 110108,
-      "sha256": "ba680ad54a33aedb82a2db15a51a43289b50c70b411f70e4e3af9ba11bce4a11",
+      "bytes": 106597,
+      "sha256": "ff6d883fb778465a7901f0e148387145bc1a4c9097914dec3b1e9134936bc03d",
       "role": "generated compact Layout Studio model (uncompressed, not committed)"
     },
     "M2--LS3.layout.json.gz": {
-      "bytes": 7125,
-      "sha256": "8bb97ed69cabcc02189e54729854bb7ea617acfc9c8d4a22141c3fd8b44b8ea0",
+      "bytes": 7259,
+      "sha256": "a984c27965910add3c5553525e5fd4c7b3f33d2af79d973a97b2e7a82ae87f3d",
       "role": "generated compact Layout Studio model (committed gzip)"
     },
     "M2--LS3.layout-report.json": {

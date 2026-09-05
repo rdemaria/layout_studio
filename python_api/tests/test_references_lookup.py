@@ -39,6 +39,8 @@ def add_type(layout: Layout, name: str = "magnet"):
         color="#445566",
         magnetic_center=Frame(),
         magnetic_length=1.0,
+        magnetic_curvature=0.0,
+        magnetic_roll=0.0,
     )
 
 
@@ -201,6 +203,51 @@ def test_removal_of_referenced_entities_or_frames_is_rejected():
         layout.pop("Q1", kind="object")
     with pytest.raises(ReferenceInUseError):
         type_.pop_frame("exit")
+
+
+def test_optional_axis_removal_is_rejected_while_implicit_frames_are_in_use():
+    layout = Layout()
+    curve = add_straight_curve(layout)
+    type_ = add_type(layout)
+    first = layout.new_object(
+        "Q1",
+        type=type_,
+        position=Position(curve).ts(2.0),
+    )
+    layout.new_object(
+        "Q2",
+        type=type_,
+        position=Position(first.ref("magnetic_exit")),
+    )
+
+    with pytest.raises(ReferenceInUseError):
+        type_.remove_magnetic_axis()
+
+    assert "magnetic_exit" in type_.implicit_frames
+    assert type_.magnetic_center is not None
+
+
+def test_optional_axis_removal_is_rejected_while_used_as_a_target():
+    layout = Layout()
+    type_ = layout.new_type(
+        "beam_type",
+        color="#445566",
+        beam_center=Frame(),
+        beam_length=1.0,
+        beam_curvature=0.0,
+        beam_roll=0.0,
+    )
+    layout.new_object(
+        "B1",
+        type=type_,
+        position=Position("world", target="beam_entry"),
+    )
+
+    with pytest.raises(ReferenceInUseError):
+        type_.remove_beam_axis()
+
+    assert "beam_entry" in type_.implicit_frames
+    assert type_.beam_center is not None
 
 
 def test_foreign_layout_instances_are_rejected():

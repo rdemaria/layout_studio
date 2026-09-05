@@ -26,6 +26,14 @@
         "transformation": []
       },
       "magnetic_length": 1.4,
+      "magnetic_curvature": 0.22,
+      "magnetic_roll": 0,
+      "beam_center": {
+        "transformation": []
+      },
+      "beam_length": 1.4,
+      "beam_curvature": 0.22,
+      "beam_roll": 0,
       "frames": {
         "survey_mark": {
           "transformation": [
@@ -42,6 +50,14 @@
         "transformation": []
       },
       "magnetic_length": 0.5,
+      "magnetic_curvature": 0,
+      "magnetic_roll": 0,
+      "beam_center": {
+        "transformation": []
+      },
+      "beam_length": 0.5,
+      "beam_curvature": 0,
+      "beam_roll": 0,
       "frames": {}
     },
     "detector": {
@@ -51,6 +67,8 @@
         "transformation": []
       },
       "magnetic_length": 0.4,
+      "magnetic_curvature": 0,
+      "magnetic_roll": 0,
       "frames": {
         "sensor_origin": {
           "transformation": [

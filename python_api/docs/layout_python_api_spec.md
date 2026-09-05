@@ -1,16 +1,16 @@
-# Layout Python API — contract revision 0.4
+# Layout Python API — contract revision 0.5
 
 Status: implemented public-interface contract. Geometry is evaluated
-analytically; interactive 2D, native 3D, and browser views use Matplotlib, VTK,
-and the Layout Studio web application, respectively.
+analytically and interactive views use the Layout Studio browser application.
 
 Package release: `layout-studio` 0.1.0. The contract revision is versioned
 independently from the installable package.
 
 ## Conventions
 
-- Canonical JSON remains unchanged: `reference_curves`, `types`, `objects`,
-  type-local `frames`, and `{kind: "object_frame", object, frame}`.
+- Canonical JSON contains `reference_curves`, `types`, `objects`, type-local
+  `frames`, and `{kind: "object_frame", object, frame}`. Type shape, magnetic
+  axis, and beam-interface axis features are optional.
 - Python exposes `Layout.curves` as the shorter name for `reference_curves`.
 - Distances are in metres, rotations in radians, and curvature in m⁻¹.
 - `Frame` means an editable symbolic transformation. `Pose` means an immutable
@@ -28,7 +28,6 @@ The declarations below are signatures, not executable code.
 
 ```python
 OperationName = Literal["tx", "ty", "ts", "tt", "rx", "ry", "rs"]
-Projection2D = Literal["xy", "yx", "xz", "zx", "yz", "zy"]
 ViewerMode = Literal["orbit", "pan", "select", "zoom-region"]
 ViewerDirection = Literal["+x", "-x", "+y", "-y", "+z", "-z"]
 RootKind = Literal["curve", "type", "object"]
@@ -112,62 +111,6 @@ class Pose:                                 # immutable
     transform_point(self, xyz: ArrayLike) -> NDArray[float]
 
 
-class LayoutViewer:                         # VTK-backed, returned by plot3d
-    renderer: vtkRenderer
-    render_window: vtkRenderWindow
-    interactor: vtkRenderWindowInteractor
-    selection: SearchEntity | None
-    show(self) -> Self
-    render(self) -> Self
-    fit(self, entity=None, *, preserve_orientation=True) -> Self
-    home(self, entity=None) -> Self
-    reset_camera(self) -> Self
-    select(self, entity=None, *, station=None) -> Self
-    clear_selection(self) -> Self
-    set_curves_visible(self, visible=True) -> Self
-    set_objects_visible(self, visible=True) -> Self
-    set_frames_visible(self, visible=True) -> Self
-    set_beam_frames_visible(self, visible=True) -> Self
-    screenshot(self, filename=None, *, scale=1, transparent=False)
-    close(self) -> None
-
-    # Constructor viewer kwargs include frames=None, curve_resolution=None,
-    # object_resolution=None, radial_resolution=None, batch_objects=None,
-    # and object_batch_size=4096. None selects adaptive behaviour. Batches are
-    # also split at an internal memory budget.
-
-
-class LayoutViewer2D:                       # Matplotlib-backed, returned by plot2d
-    figure: matplotlib.figure.Figure
-    ax: matplotlib.axes.Axes
-    axes: matplotlib.axes.Axes
-    canvas: matplotlib.backend_bases.FigureCanvasBase
-    projection: Projection2D
-    selection: SearchEntity | None
-    selected: SearchEntity | None
-    show(self, *, block: bool | None = None) -> Self
-    draw(self) -> Self
-    render(self) -> Self                    # alias of draw
-    fit(self) -> Self
-    reset_view(self) -> Self
-    reset_camera(self) -> Self               # alias of reset_view
-    select(self, entity=None, *, station=None) -> Self
-    clear_selection(self) -> Self
-    set_curves_visible(self, visible=True) -> Self
-    set_objects_visible(self, visible=True) -> Self
-    set_frames_visible(self, visible=True) -> Self
-    set_beam_frames_visible(self, visible=True) -> Self
-    set_grid_visible(self, visible=True) -> Self
-    savefig(self, filename, **kwargs) -> Path
-    screenshot(self, filename=None, **kwargs) -> Path | NDArray[np.uint8]
-    close(self) -> None
-
-    # Constructor viewer kwargs include frames=None, curve_resolution=None,
-    # object_resolution=None, radial_resolution=None, batch_objects=None,
-    # batch_threshold=128, and hover_interval=1/30. None selects adaptive
-    # behaviour; the resolution kwargs also accept "auto".
-
-
 class Resolver:                             # analytic snapshot evaluator
     __enter__(self) -> Self
     __exit__(self, *exc_info) -> None
@@ -209,7 +152,8 @@ class WebViewer:                            # nonblocking browser bridge
     set_mode(self, mode: ViewerMode) -> str
     set_view(self, direction: ViewerDirection) -> str
     set_visibility(
-        self, *, curves=None, objects=None, beam_frames=None, frames=None
+        self, *, curves=None, objects=None, magnetic_axis=None,
+        beam_axis=None, frames=None
     ) -> str
     request_layout(self) -> str
     get_event(self, timeout=0.0) -> dict[str, object] | None
@@ -255,34 +199,10 @@ class Layout(JsonValue):
         # resolve a shorthand/reference in this Layout without transforming it
     validate(self) -> None
     resolver(self) -> Resolver
-    plot2d(
-        self,
-        projection: Projection2D | str = "xy",
-        *,
-        curves: bool | Curve | str | Iterable[Curve | str] = True,
-        objects: bool | Object | str | Iterable[Object | str] = True,
-        beam_frames: bool = False,
-        selection: SearchEntity | None = None,
-        show: bool = True,
-        figsize: tuple[float, float] = (10.0, 7.2),
-        **viewer_kwargs,
-    ) -> LayoutViewer2D
-    plot3d(
-        self,
-        *,
-        curves: bool | Curve | str | Iterable[Curve | str] = True,
-        objects: bool | Object | str | Iterable[Object | str] = True,
-        beam_frames: bool = False,
-        selection: SearchEntity | None = None,
-        show: bool = True,
-        off_screen: bool = False,
-        window_size: tuple[int, int] = (1000, 720),
-        **viewer_kwargs,
-    ) -> LayoutViewer
     plot_web(
-        self, *, curves=True, objects=True, beam_frames=False, frames=False,
-        selection=None, fit=None, show=False, width="100%", height=720,
-        visibility=None, **viewer_kwargs,
+        self, *, curves=True, objects=True, magnetic_axis=False,
+        beam_axis=False, frames=False, selection=None, fit=None, show=False,
+        width="100%", height=720, visibility=None, **viewer_kwargs,
     ) -> WebViewer
 
 
@@ -315,38 +235,54 @@ class Curve(OwnedValue):
     get_frame(self, s: float, *, extrapolate: bool = True) -> Pose
     infer_station(self, point: ArrayLike | Pose) -> float
     ref(self) -> CurveReference
-    plot2d(self, projection: Projection2D | str = "xy", *, selection=None,
-           show=True, figsize=(10.0, 7.2), **viewer_kwargs) -> LayoutViewer2D
-        # displays this curve only; dependencies are resolved but not drawn
-    plot3d(self, *, selection=None, show=True, off_screen=False,
-           window_size=(1000, 720), **viewer_kwargs) -> LayoutViewer
-        # displays this curve only; dependencies are resolved but not drawn
     plot_web(self, *, selection=None, fit=None, show=False, width="100%",
              height=720, visibility=None, **viewer_kwargs) -> WebViewer
         # builds browser geometry for this curve only
 
 
 class Type(OwnedValue):
+    reserved_frames: frozenset[str]          # all seven implicit names
     color: str
-    shape: Box | Cylinder
-    magnetic_center: Frame
-    magnetic_length: float
+    shape: Box | Cylinder | None
+    magnetic_center: Frame | None
+    magnetic_length: float | None
+    magnetic_curvature: float | None
+    magnetic_roll: float | None
+    beam_center: Frame | None
+    beam_length: float | None
+    beam_curvature: float | None
+    beam_roll: float | None
+    implicit_frames: frozenset[str]          # center plus present feature frames
     frames: EntityMap[Frame]                 # stored named frames only
 
     __init__(
         self,
         *,
-        shape,
         color,
-        magnetic_center,
-        magnetic_length,
+        shape=None,
+        magnetic_center=None,
+        magnetic_length=None,
+        magnetic_curvature=None,
+        magnetic_roll=None,
+        beam_center=None,
+        beam_length=None,
+        beam_curvature=None,
+        beam_roll=None,
         frames=None,
     )
     set(self, **changes) -> Self
-    set_shape(self, shape: Box | Cylinder) -> Self
+    set_shape(self, shape: Box | Cylinder | None) -> Self
+    remove_shape(self) -> Self
     set_magnetic_axis(
-        self, *, center: Frame | None = None, length: float | None = None
+        self, *, center: Frame | None = None, length: float | None = None,
+        curvature: float | None = None, roll: float | None = None
     ) -> Self
+    remove_magnetic_axis(self) -> Self
+    set_beam_axis(
+        self, *, center: Frame | None = None, length: float | None = None,
+        curvature: float | None = None, roll: float | None = None
+    ) -> Self
+    remove_beam_axis(self) -> Self
     new_frame(
         self,
         name: str,
@@ -371,17 +307,9 @@ class Object(OwnedValue):
     set_position(self, position: Position) -> Self
     ref(self, frame: str | Frame = "center") -> ObjectReference
     get_frame(self, frame: str | Frame = "center") -> Pose
-    plot2d(self, projection: Projection2D | str = "xy", *, beam_frames=True,
-           frames=True, selection=None, show=True, figsize=(10.0, 7.2),
-           **viewer_kwargs) -> LayoutViewer2D
-        # displays this object and its requested frames only
-    plot3d(self, *, beam_frames=True, frames=True, selection=None,
-           show=True, off_screen=False, window_size=(1000, 720),
-           **viewer_kwargs) -> LayoutViewer
-        # displays this object and its requested frames only
-    plot_web(self, *, beam_frames=True, frames=True, selection=None, fit=None,
-             show=False, width="100%", height=720, visibility=None,
-             **viewer_kwargs) -> WebViewer
+    plot_web(self, *, magnetic_axis=False, beam_axis=False, frames=False,
+             selection=None, fit=None, show=False, width="100%", height=720,
+             visibility=None, **viewer_kwargs) -> WebViewer
         # builds browser geometry for this object and enabled frames only
 
 
@@ -474,6 +402,7 @@ Every argument typed as `ReferenceLike` accepts these forms:
 | `"world"` | The world frame; this word is reserved in shorthand syntax. |
 | `"curve:main"` | Curve `main`, explicitly namespaced. |
 | `"Q1->magnetic_exit"` | Frame `magnetic_exit` of object `Q1`. |
+| `"Q1->beam_exit"` | Frame `beam_exit` of object `Q1`. |
 | `"Q1->center"` | The implicit center frame of object `Q1`. |
 
 A bare string is not accepted in a generic reference position: `"main"` could
@@ -516,14 +445,16 @@ not encoded in strings, so forms such as `"curve:main@3.1"` are unsupported.
    `AttachmentError` if the frame already has an owner.
 7. A frame-instance `Position.target` must belong to the positioned object's
    type. A frame instance in `ObjectReference` must belong to the referenced
-   object's type. Implicit frames are supplied by reserved string name.
+   object's type. Implicit frames are supplied by reserved string name, but a
+   magnetic or beam-interface name resolves only when that object's type has
+   the corresponding feature.
 8. Deserializing a `Layout` creates a bound graph. Deserializing an individual
    entity creates a detached value. An entity's `to_dict()` omits its registry
    name; `Layout.to_dict()` supplies the name-indexed canonical dictionaries.
 
 Local field constraints are checked immediately. Full graph validation—names,
 references, dependency cycles, and completeness—runs on `Layout.validate()`,
-layout serialization, evaluation, and plotting. This permits incremental
+layout serialization, evaluation, and browser viewing. This permits incremental
 construction in IPython.
 
 `Layout.resolver()` creates an analytic evaluator. Each ordinary resolver
@@ -541,7 +472,8 @@ snapshot or share one active resolver across threads.
   the current tangent. `rx`, `ry`, and `rs` are rotations.
 - On a curve reference, all `ts` values are summed to select the curve station
   before non-`ts` operations run. In a type-local frame, `ts` follows the
-  curved type path at its exact list position.
+  shape's mechanical path at its exact list position. If the type has no shape,
+  this path is straight, so `ts` remains defined.
 - A world- or object-referenced `Position` containing `ts` requires
   `reference_curve`. Station inference searches only its finite domain. The
   chosen curve frame replaces the original reference orientation; the summed
@@ -553,9 +485,26 @@ snapshot or share one active resolver across threads.
   derives the object center using the inverse local target pose.
 - Positive curve angle at zero roll bends toward local −x; positive roll turns
   that bend direction toward local −y.
-- Reserved implicit type frames are `center`, `magnetic_center`,
-  `magnetic_entry`, and `magnetic_exit`. They are addressable but absent from
-  `Type.frames`.
+- `shape` is optional. When present, its `dz`, curvature, and roll define the
+  mechanical swept geometry centered on `center`; without it the type has no
+  rendered surface.
+- Magnetic and beam-interface axes are independent optional four-field groups:
+  center, positive length, finite curvature, and finite roll must be supplied
+  together or omitted together. Their entry and exit frames are evaluated at
+  `−length/2` and `+length/2` along their own axes, never along the mechanical
+  path.
+- The seven reserved implicit type-frame names are `center`,
+  `magnetic_center`, `magnetic_entry`, `magnetic_exit`, `beam_center`,
+  `beam_entry`, and `beam_exit`. `center` always resolves. Each other triplet
+  resolves only when its feature is present. All seven names remain forbidden
+  in `Type.frames`, even when the corresponding feature is absent.
+- `set_magnetic_axis()` and `set_beam_axis()` update an existing feature
+  partially. When creating an absent feature, `length` is required while the
+  center defaults to `Frame()` and curvature and roll default to zero. The
+  matching `remove_*_axis()` method removes the entire group atomically.
+- Canonical JSON omits `shape` when mechanical geometry is absent and omits all
+  four fields of an absent magnetic or beam group. It does not serialize these
+  fields as `null`. JSON containing only part of a group is rejected.
 - Draft 0.1 deliberately omits `tz` and `rz`: `ts` is a path operation, `tt` is
   tangent translation, and longitudinal rotation is `rs`; a `tz` alias would
   hide this distinction.
@@ -589,6 +538,12 @@ quad = layout.new_type(
     color="#f0a84b",
     magnetic_center=Frame(),
     magnetic_length=1.4,
+    magnetic_curvature=0.22,
+    magnetic_roll=0.0,
+    beam_center=Frame(),
+    beam_length=1.4,
+    beam_curvature=0.22,
+    beam_roll=0.0,
 )
 quad.new_frame("survey_mark").tx(0.4)
 
@@ -614,9 +569,8 @@ q2 = layout.new_object(
 
 layout.search(r"^Q", kind="object")
 layout["Q1"].get_frame("magnetic_exit")
-layout.plot2d("xy")
-layout.plot3d()
 web = layout.plot_web(show=False)
+web.set_visibility(magnetic_axis=True, beam_axis=True)
 web.close()
 layout.to_json(filename_or_url="layout.json")
 ```
@@ -657,7 +611,10 @@ JSON is not placed in HTML, URL fragments, or query strings.
 
 The browser protocol supports snapshot replacement/readback, selection, fit,
 strict scene scope, orbit/pan/select/rectangle-zoom modes, six signed canonical
-views, and curve/object/frame layer visibility. Calls return command ids;
+views, and independent curve, object, magnetic-axis, beam-axis, and stored-frame
+layer visibility. The magnetic toggle covers its axis and entry/exit frames;
+the beam toggle does the same for the beam interface. Magnetic, beam,
+and stored-frame layers default off. Calls return command ids;
 `wait_response()` is optional when acknowledgement is required, while
 after `wait_ready()`, `request_layout()` plus `wait_response()` reads back the
 edited document, and
@@ -693,93 +650,6 @@ ordered commands. A readback that was still pending across a reconnect fails
 explicitly because restoring the latest snapshot would make its historical
 result ambiguous. A viewer capability should have one active browser client at
 a time.
-
-## Matplotlib 2D viewer
-
-`plot2d(projection="xy")` returns a `LayoutViewer2D`. Projection values are
-case-insensitive and comprise all six ordered pairs of distinct world axes:
-`"xy"`, `"yx"`, `"xz"`, `"zx"`, `"yz"`, and `"zy"`. The first axis is
-horizontal and the second vertical; labels are world X/Y/Z in metres and each
-axis scales independently to fill the available plotting area. An invalid
-projection raises `ValueError`.
-
-With `show=True`, the figure is shown using the active Matplotlib backend.
-With `show=False`, the complete figure and artists are built without opening a
-GUI window, permitting headless inspection and export with `savefig()` or
-`screenshot()`. Native Matplotlib toolbar pan and zoom remain available. An
-existing Matplotlib axes can be supplied with `ax=...` for composed figures.
-Where the backend supports it, hover/readout/local-axis updates use canvas
-blitting with automatic full-redraw fallback. `LayoutViewer2D.savefig()`
-temporarily includes those animated overlays in exported images.
-
-For scopes of at least 128 objects, automatic mode represents each projected
-object by its convex silhouette and places all objects in one collection. This
-keeps drawing and interaction costs bounded while preserving object-level
-selection through a vectorized bounds index. Straight extrusions use exactly
-two longitudinal sections. Curved objects, cylinders, and reference curves use
-adaptive tessellation budgets unless an explicit `curve_resolution`,
-`object_resolution`, or `radial_resolution` is supplied. `batch_objects=False`
-requests the detailed per-object representation.
-
-Hovering shows the entity name and world pose. For curves, the nearest sampled
-chord in the projection supplies a continuously interpolated station and its
-pose. Left-click
-selects and highlights an entity, shows its local axes and pose, and retains
-the snapped curve station; clicking the same selection again clears it. The
-keys `c`, `o`, and `b` toggle curve, object, and Beam-frame layers; `g` toggles
-the grid; `f` and `r` fit the scoped geometry; and Escape clears selection.
-Stored-frame arrows and the active local-axis triad use bounded,
-viewport-relative lengths which refresh on pan, zoom, and resize. Beam planes
-remain physical object geometry.
-
-The layout view can toggle curves, objects, stored frames, and Beam entry/exit
-frames. Frame layers are lazy; their adaptive default is on for small scopes
-and off for large ones, and an explicit boolean is always honoured. Batched
-scopes also batch enabled frames. `Curve.plot2d()` and `Object.plot2d()` use the
-same strict entity scope as their 3D counterparts: upstream dependencies are
-resolved, but unrelated geometry is neither drawn nor included in fitting.
-For a full-layout viewer, boolean `curves=False` or `objects=False` controls
-initial visibility but still constructs that layer; pass an explicit empty
-scope (`curves=[]` or `objects=[]`) when the geometry should not be built.
-
-## VTK viewer
-
-`plot3d()` returns a `LayoutViewer`. With
-`show=True` the viewer opens its native VTK interactor; `show=False` builds and
-returns the scene without entering the event loop, which is convenient in
-IPython and for programmatic inspection.
-
-The VTK viewer automatically batches scopes of at least 128 objects into
-actors capped at 4096 objects and an internal memory budget, with per-cell
-colours and selection identities. It converts contiguous NumPy geometry to VTK
-in bulk, uses static cell locators, restricts picking to interactive props, and
-throttles hover work. Straight extrusions use an exact two-section mesh;
-curved/radial tessellation follows a scene-size budget. Explicit
-`curve_resolution`, `object_resolution`, `radial_resolution`, `batch_objects`,
-and `object_batch_size` values override the count-based choices, while the
-memory bound remains active.
-
-The layout view can toggle reference curves, objects, stored frames, and Beam
-entry/exit frames. Frame layers are lazy and default off only for a large
-scope; explicitly enabled large frame layers are batched. It provides Y-up
-trackball navigation, fit/reset, an X–Z ground grid, a world orientation triad,
-hover labels, click selection, selection highlighting, a local x/y/s triad,
-and a world-pose readout using MAD-X theta/phi/psi angles. `Curve.plot3d()` and
-`Object.plot3d()` use strict entity scope: upstream dependencies are resolved
-but unrelated geometry is not shown and does not affect camera fitting.
-Stored-frame arrows and the active triad are resized from camera depth and the
-renderer viewport before every frame, keeping them legible through dolly,
-parallel zoom, and window resizing. Beam planes remain physical geometry.
-`fit(entity=None, preserve_orientation=True)` preserves both viewing direction
-and camera roll; `home(entity=None)` and `reset_camera()` restore the canonical
-isometric view. Camera motion temporarily suspends depth peeling and restores
-it at interaction end.
-
-The native `show()` loop handles VTK `ExitEvent` explicitly. Closing the window
-terminates the interactor, finalizes and detaches the render window, removes
-observers and props, and releases scene-sized caches while a closed viewer
-remains referenced by IPython. `close()` performs the same teardown and is
-idempotent.
 
 ## Exceptions
 

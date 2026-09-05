@@ -16,7 +16,8 @@ export type PythonBridgeVisibility = {
   curves?: boolean;
   objects?: boolean;
   frames?: boolean;
-  beam_frames?: boolean;
+  magnetic_axis?: boolean;
+  beam_axis?: boolean;
 };
 
 export type PythonBridgeCommand =
@@ -124,6 +125,32 @@ function requireName(value: unknown, label: string): string {
   return value;
 }
 
+function parseMode(value: unknown): "orbit" | "pan" | "select" | "zoom-region" {
+  if (
+    value !== "orbit" &&
+    value !== "pan" &&
+    value !== "select" &&
+    value !== "zoom-region"
+  ) {
+    throw new Error("mode must be orbit, pan, select, or zoom-region");
+  }
+  return value;
+}
+
+function parseView(value: unknown): "+x" | "-x" | "+y" | "-y" | "+z" | "-z" {
+  if (
+    value !== "+x" &&
+    value !== "-x" &&
+    value !== "+y" &&
+    value !== "-y" &&
+    value !== "+z" &&
+    value !== "-z"
+  ) {
+    throw new Error("view must be one of +x, -x, +y, -y, +z, or -z");
+  }
+  return value;
+}
+
 function parseSelection(value: unknown): SelectedEntity {
   if (value === null) return null;
   if (!isRecord(value) || typeof value.kind !== "string") {
@@ -194,14 +221,20 @@ function parseVisibility(value: unknown): Extract<
   }
   requireOnlyKeys(
     value,
-    ["curves", "objects", "frames", "beam_frames"],
+    ["curves", "objects", "frames", "magnetic_axis", "beam_axis"],
     "visibility",
   );
   if (!Object.keys(value).length) {
     throw new Error("visibility must set at least one layer");
   }
   const visibility: PythonBridgeVisibility = {};
-  for (const key of ["curves", "objects", "frames", "beam_frames"] as const) {
+  for (const key of [
+    "curves",
+    "objects",
+    "frames",
+    "magnetic_axis",
+    "beam_axis",
+  ] as const) {
     if (value[key] === undefined) continue;
     if (typeof value[key] !== "boolean") {
       throw new Error(`visibility.${key} must be boolean`);
@@ -323,26 +356,6 @@ export function parsePythonBridgeCommand(value: unknown): PythonBridgeCommand {
       if (!Object.hasOwn(value, "layout") || !isRecord(value.layout)) {
         throw new Error("set_layout requires a layout object");
       }
-      if (
-        Object.hasOwn(value, "mode") &&
-        value.mode !== "orbit" &&
-        value.mode !== "pan" &&
-        value.mode !== "select" &&
-        value.mode !== "zoom-region"
-      ) {
-        throw new Error("mode must be orbit, pan, select, or zoom-region");
-      }
-      if (
-        Object.hasOwn(value, "view") &&
-        value.view !== "+x" &&
-        value.view !== "-x" &&
-        value.view !== "+y" &&
-        value.view !== "-y" &&
-        value.view !== "+z" &&
-        value.view !== "-z"
-      ) {
-        throw new Error("view must be one of +x, -x, +y, -y, +z, -z");
-      }
       return {
         id,
         command: "set_layout",
@@ -360,10 +373,10 @@ export function parsePythonBridgeCommand(value: unknown): PythonBridgeCommand {
           ? { fit: parseFitTarget(value.fit) }
           : {}),
         ...(Object.hasOwn(value, "mode")
-          ? { mode: value.mode }
+          ? { mode: parseMode(value.mode) }
           : {}),
         ...(Object.hasOwn(value, "view")
-          ? { view: value.view }
+          ? { view: parseView(value.view) }
           : {}),
       };
     case "get_layout":
@@ -388,28 +401,10 @@ export function parsePythonBridgeCommand(value: unknown): PythonBridgeCommand {
       return { id, command: "fit", target: parseFitTarget(value.target) };
     case "set_mode":
       requireOnlyKeys(value, [...envelopeKeys, "mode"], "set_mode command");
-      if (
-        value.mode !== "orbit" &&
-        value.mode !== "pan" &&
-        value.mode !== "select" &&
-        value.mode !== "zoom-region"
-      ) {
-        throw new Error("mode must be orbit, pan, select, or zoom-region");
-      }
-      return { id, command: "set_mode", mode: value.mode };
+      return { id, command: "set_mode", mode: parseMode(value.mode) };
     case "set_view":
       requireOnlyKeys(value, [...envelopeKeys, "view"], "set_view command");
-      if (
-        value.view !== "+x" &&
-        value.view !== "-x" &&
-        value.view !== "+y" &&
-        value.view !== "-y" &&
-        value.view !== "+z" &&
-        value.view !== "-z"
-      ) {
-        throw new Error("view must be one of +x, -x, +y, -y, +z, or -z");
-      }
-      return { id, command: "set_view", view: value.view };
+      return { id, command: "set_view", view: parseView(value.view) };
     case "set_scope":
       requireOnlyKeys(value, [...envelopeKeys, "scope"], "set_scope command");
       return { id, command: "set_scope", scope: parseScope(value.scope) };

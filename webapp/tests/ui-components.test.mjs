@@ -204,7 +204,15 @@ test("renders viewer layers, world axes, and combines curve station with World p
   );
   assert.match(
     html,
-    /<button(?=[^>]*aria-label="Show Beam entry and exit frames")(?=[^>]*data-state="checked")[^>]*>/,
+    /<button(?=[^>]*aria-label="Show magnetic axis and entry and exit frames")(?=[^>]*data-state="unchecked")[^>]*>/,
+  );
+  assert.match(
+    html,
+    /<button(?=[^>]*aria-label="Show beam interface axis and entry and exit frames")(?=[^>]*data-state="unchecked")[^>]*>/,
+  );
+  assert.match(
+    html,
+    /<button(?=[^>]*aria-label="Show named frames")(?=[^>]*data-state="unchecked")[^>]*>/,
   );
   assert.match(
     html,
@@ -506,16 +514,23 @@ test("keeps canvas redraws cheap and display annotations stable", async () => {
 
   const scene = {
     curves: [{ samples: [{ p: [0, 0, 0] }, { p: [1, 2, 3] }] }],
-    objects: [{ vertices: [[10, 0, 0], [12, 1, 1]] }],
+    objects: [
+      { vertices: [[10, 0, 0], [12, 1, 1]], frame: { o: [11, 0, 0] } },
+      { vertices: [], frame: { o: [14, -2, 0] } },
+    ],
     frames: [{ frame: { o: [1000, 1000, 1000] } }],
+    magneticAxes: [{ samples: [{ p: [20, 0, 0] }] }],
     magneticFrames: [{ vertices: [[2000, 2000, 2000]] }],
+    beamAxes: [{ samples: [{ p: [30, 0, 0] }] }],
+    beamFrames: [{ vertices: [[3000, 3000, 3000]] }],
   };
   assert.deepEqual(
     sceneBoundsForVisibility(scene, {
       curves: true,
       objects: false,
       frames: false,
-      beamFrames: false,
+      magneticAxis: false,
+      beamAxis: false,
     }),
     { min: [0, 0, 0], max: [1, 2, 3] },
   );
@@ -524,9 +539,30 @@ test("keeps canvas redraws cheap and display annotations stable", async () => {
       curves: false,
       objects: true,
       frames: false,
-      beamFrames: false,
+      magneticAxis: false,
+      beamAxis: false,
     }),
-    { min: [10, 0, 0], max: [12, 1, 1] },
+    { min: [10, -2, 0], max: [14, 1, 1] },
+  );
+  assert.deepEqual(
+    sceneBoundsForVisibility(scene, {
+      curves: false,
+      objects: false,
+      frames: false,
+      magneticAxis: true,
+      beamAxis: false,
+    }),
+    { min: [20, 0, 0], max: [2000, 2000, 2000] },
+  );
+  assert.deepEqual(
+    sceneBoundsForVisibility(scene, {
+      curves: false,
+      objects: false,
+      frames: false,
+      magneticAxis: false,
+      beamAxis: true,
+    }),
+    { min: [30, 0, 0], max: [3000, 3000, 3000] },
   );
 });
 
@@ -564,8 +600,31 @@ test("uses named-frame terminology throughout the editor", async () => {
     readFile(path.join(root, "app/layout-viewport.tsx"), "utf8"),
   ]);
   assert.match(pageSource, /Inferring s from a referenced frame origin/);
-  assert.match(viewportSource, /Hover a named frame, Beam frame, object, or curve/);
+  assert.match(
+    viewportSource,
+    /Hover a named frame, feature axis or boundary frame, object, or curve/,
+  );
   assert.doesNotMatch(html, /Named points|Object point|Target point|Point name/);
+});
+
+test("edits mechanical, magnetic, and Beam features independently", async () => {
+  const { default: Home } = await vite.ssrLoadModule("/app/page.tsx");
+  const html = renderToStaticMarkup(React.createElement(Home));
+  const source = await readFile(path.join(root, "app/page.tsx"), "utf8");
+
+  for (const heading of [
+    "Mechanical geometry",
+    "Magnetic axis",
+    "Beam interface",
+  ]) {
+    assert.match(html, new RegExp(heading));
+  }
+  assert.match(html, /aria-label="Mechanical curvature"/);
+  assert.match(html, /aria-label="Magnetic curvature"/);
+  assert.match(html, /aria-label="Beam-interface curvature"/);
+  assert.match(source, /delete type\.magnetic_center;[\s\S]*delete type\.magnetic_roll;/);
+  assert.match(source, /delete type\.beam_center;[\s\S]*delete type\.beam_roll;/);
+  assert.match(source, /No mechanical shape\. Instances remain selectable at their center\./);
 });
 
 test("orients the dependency hierarchy outward from World", async () => {

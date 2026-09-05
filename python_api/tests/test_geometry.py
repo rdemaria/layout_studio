@@ -11,10 +11,12 @@ from layout_studio import (
     Box,
     Frame,
     Layout,
+    NameConflictError,
     NoStationSolutionError,
     Position,
     Segment,
     StationOutOfRangeError,
+    UnknownEntityError,
 )
 from layout_studio.resolver import Resolver, swept_type_mesh
 
@@ -36,6 +38,8 @@ def add_type(
     roll=0.0,
     magnetic_center=None,
     magnetic_length=1.0,
+    magnetic_curvature=0.0,
+    magnetic_roll=0.0,
 ):
     return layout.new_type(
         name,
@@ -43,6 +47,8 @@ def add_type(
         color="#445566",
         magnetic_center=magnetic_center or Frame(),
         magnetic_length=magnetic_length,
+        magnetic_curvature=magnetic_curvature,
+        magnetic_roll=magnetic_roll,
     )
 
 
@@ -286,6 +292,120 @@ def test_type_local_negative_ts_follows_curved_path_backwards():
         type_.get_frame("back"),
         origin=[-1.0, 0.0, -1.0],
         tangent=[1.0, 0.0, 0.0],
+    )
+
+
+def test_type_local_ts_is_straight_when_mechanical_shape_is_absent():
+    layout = Layout()
+    type_ = layout.new_type("marker", color="#445566")
+    type_.new_frame("offset", frame=Frame().tx(0.3).ts(2.5))
+    object_ = layout.new_object(
+        "M1",
+        type=type_,
+        position=Position("world").tx(1.0).ty(-2.0).tt(3.0),
+    )
+
+    assert_pose(object_.get_frame(), origin=[1.0, -2.0, 3.0])
+    assert_pose(
+        type_.get_frame("offset"),
+        origin=[0.3, 0.0, 2.5],
+        x=[1.0, 0.0, 0.0],
+        y=[0.0, 1.0, 0.0],
+        tangent=[0.0, 0.0, 1.0],
+    )
+
+
+def test_implicit_axis_frames_exist_only_for_configured_features():
+    layout = Layout()
+    bare = layout.new_type("bare", color="#112233")
+    magnetic = layout.new_type(
+        "magnetic",
+        color="#223344",
+        magnetic_center=Frame().tx(0.2),
+        magnetic_length=1.0,
+        magnetic_curvature=0.0,
+        magnetic_roll=0.0,
+    )
+    beam = layout.new_type(
+        "beam",
+        color="#334455",
+        beam_center=Frame().ty(0.3),
+        beam_length=1.5,
+        beam_curvature=0.0,
+        beam_roll=0.0,
+    )
+
+    assert_pose(bare.get_frame("center"), origin=[0.0, 0.0, 0.0])
+    for name in ("magnetic_center", "magnetic_entry", "magnetic_exit"):
+        with pytest.raises(UnknownEntityError):
+            bare.get_frame(name)
+        magnetic.get_frame(name)
+        with pytest.raises(UnknownEntityError):
+            beam.get_frame(name)
+    for name in ("beam_center", "beam_entry", "beam_exit"):
+        with pytest.raises(UnknownEntityError):
+            bare.get_frame(name)
+        beam.get_frame(name)
+        with pytest.raises(UnknownEntityError):
+            magnetic.get_frame(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "center",
+        "magnetic_center",
+        "magnetic_entry",
+        "magnetic_exit",
+        "beam_center",
+        "beam_entry",
+        "beam_exit",
+    ],
+)
+def test_all_implicit_frame_names_remain_reserved_when_features_are_absent(name):
+    layout = Layout()
+    type_ = layout.new_type("bare", color="#112233")
+
+    with pytest.raises(NameConflictError):
+        type_.new_frame(name)
+
+
+def test_magnetic_and_beam_boundaries_follow_their_own_axes():
+    layout = Layout()
+    type_ = layout.new_type(
+        "combined",
+        color="#112233",
+        # The mechanical path deliberately differs from both feature axes.
+        shape=Box(1.0, 1.0, 4.0, curvature=-0.25, roll=0.4),
+        magnetic_center=Frame().tx(0.2),
+        magnetic_length=math.pi,
+        magnetic_curvature=1.0,
+        magnetic_roll=0.0,
+        beam_center=Frame().ty(0.3),
+        beam_length=math.pi,
+        beam_curvature=1.0,
+        beam_roll=math.pi / 2.0,
+    )
+
+    assert_pose(
+        type_.get_frame("magnetic_entry"),
+        origin=[-0.8, 0.0, -1.0],
+        tangent=[1.0, 0.0, 0.0],
+    )
+    assert_pose(
+        type_.get_frame("magnetic_exit"),
+        origin=[-0.8, 0.0, 1.0],
+        tangent=[-1.0, 0.0, 0.0],
+    )
+    assert_pose(
+        type_.get_frame("beam_entry"),
+        origin=[0.0, -0.7, -1.0],
+        tangent=[0.0, 1.0, 0.0],
+    )
+    assert_pose(
+        type_.get_frame("beam_exit"),
+        origin=[0.0, -0.7, 1.0],
+        tangent=[0.0, -1.0, 0.0],
     )
 
 

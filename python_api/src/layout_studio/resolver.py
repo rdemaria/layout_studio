@@ -52,7 +52,15 @@ FloatVector = NDArray[np.float64]
 
 OPERATION_NAMES = frozenset({"tx", "ty", "ts", "tt", "rx", "ry", "rs"})
 RESERVED_TYPE_FRAMES = frozenset(
-    {"center", "magnetic_center", "magnetic_entry", "magnetic_exit"}
+    {
+        "center",
+        "magnetic_center",
+        "magnetic_entry",
+        "magnetic_exit",
+        "beam_center",
+        "beam_entry",
+        "beam_exit",
+    }
 )
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _EPS = np.finfo(float).eps
@@ -580,6 +588,45 @@ def _shape_values(shape: Any) -> tuple[str, dict[str, float]]:
     raise EvaluationError("unsupported type shape")
 
 
+def _axis_feature_values(
+    type_: Any, feature: str
+) -> tuple[Any, float, float, float] | None:
+    """Return one optional type axis as ``(center, length, curvature, roll)``."""
+
+    fields = tuple(f"{feature}_{name}" for name in ("center", "length", "curvature", "roll"))
+    values = tuple(getattr(type_, field, None) for field in fields)
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise EvaluationError(
+            f"{', '.join(fields)} must be all present or all absent"
+        )
+    center, length, curvature, roll = values
+    length_value = _finite(length, what=f"{feature} length")
+    if length_value <= 0.0:
+        raise EvaluationError(f"{feature} length must be positive")
+    return (
+        center,
+        length_value,
+        _finite(curvature, what=f"{feature} curvature"),
+        _finite(roll, what=f"{feature} roll"),
+    )
+
+
+def _type_path_values(type_: Any) -> tuple[float, float]:
+    """Return the optional mechanical path's curvature and roll.
+
+    A type without a shape still has its local centre frame.  Its local ``ts``
+    operations follow the straight tangent through that frame.
+    """
+
+    shape_value = getattr(type_, "shape", None)
+    if shape_value is None:
+        return 0.0, 0.0
+    _, shape = _shape_values(shape_value)
+    return shape["curvature"], shape["roll"]
+
+
 def _reference_kind_value(kind: Any) -> str:
     if hasattr(kind, "value"):
         kind = kind.value
@@ -918,42 +965,43 @@ class Resolver:
                 raise ValidationError(
                     "color must be a six-digit hexadecimal value", path=f"{base}.color"
                 )
-            try:
-                shape_kind, shape = _shape_values(getattr(type_, "shape", None))
-            except (EvaluationError, TypeError, ValueError) as exc:
-                raise ValidationError(str(exc), path=f"{base}.shape") from exc
-            dimensions = ("dx", "dy", "dz") if shape_kind == "box" else ("r", "dz")
-            for dimension in dimensions:
-                value = shape[dimension]
-                if not isfinite(value) or value <= 0.0:
-                    raise ValidationError(
-                        f"shape {dimension} must be positive and finite",
-                        path=f"{base}.shape",
-                    )
-            for field in ("curvature", "roll"):
-                if not isfinite(shape[field]):
-                    raise ValidationError(
-                        f"shape {field} must be finite", path=f"{base}.shape"
-                    )
-            magnetic_length = getattr(type_, "magnetic_length", None)
-            if (
-                magnetic_length is None
-                or not isfinite(float(magnetic_length))
-                or float(magnetic_length) <= 0.0
-            ):
-                raise ValidationError(
-                    "magnetic_length must be positive and finite",
-                    path=f"{base}.magnetic_length",
+            shape_value = getattr(type_, "shape", None)
+            if shape_value is not None:
+                try:
+                    shape_kind, shape = _shape_values(shape_value)
+                except (EvaluationError, TypeError, ValueError) as exc:
+                    raise ValidationError(str(exc), path=f"{base}.shape") from exc
+                dimensions = (
+                    ("dx", "dy", "dz") if shape_kind == "box" else ("r", "dz")
                 )
-            magnetic_center = getattr(type_, "magnetic_center", None)
-            if getattr(magnetic_center, "reference", None) is not None:
-                raise ValidationError(
-                    "type-local magnetic_center cannot have an explicit reference",
-                    path=f"{base}.magnetic_center.reference",
+                for dimension in dimensions:
+                    value = shape[dimension]
+                    if not isfinite(value) or value <= 0.0:
+                        raise ValidationError(
+                            f"shape {dimension} must be positive and finite",
+                            path=f"{base}.shape",
+                        )
+                for field in ("curvature", "roll"):
+                    if not isfinite(shape[field]):
+                        raise ValidationError(
+                            f"shape {field} must be finite", path=f"{base}.shape"
+                        )
+            for feature in ("magnetic", "beam"):
+                try:
+                    axis = _axis_feature_values(type_, feature)
+                except (EvaluationError, TypeError, ValueError) as exc:
+                    raise ValidationError(str(exc), path=f"{base}.{feature}_center") from exc
+                if axis is None:
+                    continue
+                center, _, _, _ = axis
+                if getattr(center, "reference", None) is not None:
+                    raise ValidationError(
+                        f"type-local {feature}_center cannot have an explicit reference",
+                        path=f"{base}.{feature}_center.reference",
+                    )
+                self._validation_operations(
+                    _operations(center), f"{base}.{feature}_center.transformation"
                 )
-            self._validation_operations(
-                _operations(magnetic_center), f"{base}.magnetic_center.transformation"
-            )
             for frame_name, frame in _mapping_items(getattr(type_, "frames", None)):
                 frame_path = f"{base}.frames.{frame_name}"
                 if not isinstance(frame_name, str) or not frame_name:
@@ -1385,29 +1433,51 @@ class Resolver:
 
         if frame == "center":
             return []
-        magnetic = [
-            _operation_parts(operation)
-            for operation in _operations(getattr(type_, "magnetic_center", None))
-        ]
-        if frame == "magnetic_center":
-            return magnetic
-        if frame in {"magnetic_entry", "magnetic_exit"}:
-            length = _finite(
-                getattr(type_, "magnetic_length", None), what="magnetic length"
-            )
-            sign = -0.5 if frame == "magnetic_entry" else 0.5
-            return magnetic + [("ts", sign * length)]
+        for feature in ("magnetic", "beam"):
+            if frame not in {
+                f"{feature}_center",
+                f"{feature}_entry",
+                f"{feature}_exit",
+            }:
+                continue
+            axis = _axis_feature_values(type_, feature)
+            if axis is None:
+                raise UnknownEntityError(f"type has no {feature} axis")
+            center, _, _, _ = axis
+            return [
+                _operation_parts(operation) for operation in _operations(center)
+            ]
         stored = _mapping_get(frames, frame)
         if stored is None:
             raise UnknownEntityError(f"unknown type frame {frame!r}")
         return [_operation_parts(operation) for operation in _operations(stored)]
 
     def _type_frame_matrix(self, type_: Any, frame: Any = "center") -> FloatMatrix:
-        _, shape = _shape_values(getattr(type_, "shape", None))
+        frame_name = frame
+        if not isinstance(frame_name, str):
+            frames = getattr(type_, "frames", None)
+            for name, candidate in _mapping_items(frames):
+                if candidate is frame_name:
+                    frame_name = name
+                    break
+        curvature, roll = _type_path_values(type_)
         operations = self._type_frame_operations(type_, frame)
-        return apply_type_operations(
-            identity_matrix(), operations, shape["curvature"], shape["roll"]
-        )
+        center = apply_type_operations(identity_matrix(), operations, curvature, roll)
+        for feature in ("magnetic", "beam"):
+            if frame_name not in {f"{feature}_entry", f"{feature}_exit"}:
+                continue
+            axis = _axis_feature_values(type_, feature)
+            if axis is None:  # _type_frame_operations already reports this clearly.
+                raise UnknownEntityError(f"type has no {feature} axis")
+            _, length, feature_curvature, feature_roll = axis
+            direction = -0.5 if frame_name == f"{feature}_entry" else 0.5
+            return advance(
+                center,
+                direction * length,
+                feature_curvature,
+                feature_roll,
+            )
+        return center
 
     def type_frame(self, type_: Type | str, frame: Any = "center") -> Pose:
         """Return a named or implicit frame in type-local coordinates."""

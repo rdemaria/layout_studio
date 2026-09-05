@@ -2,8 +2,8 @@
 
 `layout-studio` is the Python counterpart of Layout Studio: it describes
 piecewise circular reference curves, reusable curved component types, and
-objects positioned by aligning named frames. Matplotlib, VTK, and browser
-viewers provide interactive views of the same evaluated geometry.
+objects positioned by aligning named frames. The Layout Studio browser viewer
+provides the interactive view of the analytically evaluated geometry.
 
 Distances are in metres, rotations are in radians, and curvature is in
 metres⁻¹.  The homogeneous pose convention is `[x y tangent origin]`.
@@ -11,12 +11,11 @@ metres⁻¹.  The homogeneous pose convention is `[x y tangent origin]`.
 ## Install for development
 
 ```bash
-python -m pip install -e '.[plot2d,viewer,test]'
+python -m pip install -e '.[test]'
 ```
 
-Matplotlib and VTK are optional until a 2D or 3D view is requested. The
-geometric model, JSON round trips, and Python side of the web bridge need only
-NumPy. In a source checkout, build the bridge-enabled browser asset once with
+The geometric model, JSON round trips, and Python side of the web bridge need
+only NumPy. In a source checkout, build the bridge-enabled browser asset once with
 `make -C ../webapp standalone` (or `make -C webapp standalone` from the
 repository root). Generated web bundles are intentionally excluded from Python
 wheels; an installed package can instead use an explicitly trusted protocol-1
@@ -42,6 +41,12 @@ quadrupole = layout.new_type(
     color="#f0a84b",
     magnetic_center=Frame(),
     magnetic_length=1.4,
+    magnetic_curvature=0.22,
+    magnetic_roll=0.0,
+    beam_center=Frame(),
+    beam_length=1.4,
+    beam_curvature=0.22,
+    beam_roll=0.0,
 )
 quadrupole.new_frame("survey_mark").tx(0.4)
 
@@ -69,28 +74,11 @@ layout.validate()
 print(q2.get_frame("magnetic_exit"))
 layout.to_json(filename_or_url="layout.json")
 
-# plot2d() returns a Matplotlib-backed LayoutViewer2D.  Projection names are
-# ordered: the first letter is the horizontal axis and the second is vertical.
-view2d = layout.plot2d("xz", beam_frames=True, show=False)
-view2d.show()
-
-# Curve and object plots deliberately keep the visible scene local to the
-# entity; dependencies are resolved but not drawn.
-main.plot2d("xy")
-q1.plot2d("yz", beam_frames=True)
-
-# plot3d() returns a LayoutViewer; show=False builds without starting the
-# blocking native interactor.
-viewer = layout.plot3d(beam_frames=True, show=False)
-viewer.show()
-
-main.plot3d()
-q1.plot3d(beam_frames=True)
-
 # plot_web() returns immediately. Display it in a local notebook, call show(),
 # or pass show=True to open the system browser during construction.
 web = q1.plot_web(show=False)
 web.show()
+web.set_visibility(magnetic_axis=True, beam_axis=True)
 
 # Model edits are published explicitly, so a series of edits is serialized
 # only once.
@@ -119,6 +107,34 @@ use GET and writes use PUT. A location ending in `.gz` is decompressed or
 compressed automatically; gzip-compressed byte input is also accepted through
 `text=...`.
 
+## Optional type geometry and axes
+
+Every type and object always has an implicit `center` frame. All other physical
+features are optional:
+
+- `shape` is the mechanical swept geometry centered on `center`; its existing
+  `dz`, curvature, and roll define its mechanical axis.
+- A magnetic axis exists only when `magnetic_center`, `magnetic_length`,
+  `magnetic_curvature`, and `magnetic_roll` are all supplied.
+- A beam-interface axis exists only when `beam_center`, `beam_length`,
+  `beam_curvature`, and `beam_roll` are all supplied.
+
+Partial magnetic or beam groups are invalid. Canonical JSON omits absent fields
+rather than writing `null`. A present length is positive; curvature and roll
+are finite. Magnetic and beam entry/exit frames lie at half their respective
+lengths on their respective axes, so neither axis borrows the shape curvature
+or roll. The conditional implicit frames are `magnetic_center`,
+`magnetic_entry`, `magnetic_exit`, `beam_center`, `beam_entry`, and `beam_exit`.
+They resolve only when their feature is present. Those names and `center` are
+always reserved from `Type.frames`.
+
+`Type.set_shape()` and `remove_shape()` edit the mechanical geometry.
+`set_magnetic_axis()` / `remove_magnetic_axis()` and
+`set_beam_axis()` / `remove_beam_axis()` edit each complete feature atomically.
+Type-local `ts` follows the shape's mechanical path; without a shape it follows
+a straight path along the current tangent. A type with no shape, axes, or
+stored frames therefore gives each object only its center frame.
+
 ## Reference shorthand
 
 Generic references accept only unambiguous strings:
@@ -127,7 +143,8 @@ Generic references accept only unambiguous strings:
 | --- | --- |
 | `"world"` | World frame |
 | `"curve:main"` | Curve `main` |
-| `"Q1->magnetic_exit"` | `Q1` Beam-exit frame |
+| `"Q1->magnetic_exit"` | `Q1` magnetic-exit frame |
+| `"Q1->beam_exit"` | `Q1` beam-interface exit frame |
 
 Bare names are still accepted in namespace-specific fields such as
 `type="quadrupole"`, `target="magnetic_entry"`, and
@@ -161,8 +178,18 @@ the layout in browser memory, so only use a host you trust.
 `Layout.plot_web()` shows the complete scene. `Curve.plot_web()` and
 `Object.plot_web()` load the complete document so dependencies can still be
 resolved, but scene construction, picking, bounds, and fitting are limited to
-that entity (plus the object's enabled frames). This is a computational scope,
+that entity and its enabled axis/frame layers. This is a computational scope,
 not just selection or visibility; it does not reduce snapshot transfer size.
+
+The independent `magnetic_axis`, `beam_axis`, and `frames` visibility layers
+default off. A feature-axis layer includes its curved axis, with entry/exit
+frames shown as transverse planes. `frames` contains only the type's stored
+named frames.
+The curves and object-shape layers retain their own switches. For example:
+
+```python
+viewer.set_visibility(magnetic_axis=True, beam_axis=True, frames=True)
+```
 
 The returned `WebViewer` supports `select()`, `fit()`, `set_scope()`,
 `set_mode()` (including `"zoom-region"`), signed-axis `set_view()`,
@@ -210,92 +237,3 @@ The browser must be able to reach the kernel-side
 directly. Remote notebooks require an explicit port-forward/proxy; setting
 `viewer_url=` changes the embedded application only and does not expose the
 loopback data bridge.
-
-## 2D viewer controls
-
-`plot2d(projection="xy")` accepts the case-insensitive ordered projections
-`"xy"`, `"yx"`, `"xz"`, `"zx"`, `"yz"`, and `"zy"`. The first axis is
-horizontal, the second is vertical, coordinates are world coordinates in
-metres, and each plot axis scales independently to fill the available area.
-
-Use the Matplotlib toolbar for native pan and zoom. Hovering reports the entity
-and its pose; hovering a curve also snaps continuously along its nearest
-projected chord and reports the interpolated station.
-Left-click selects and highlights an entity, shows its local axes and pose, and
-snaps curve selection to a station. Clicking the same selection again clears
-it. Keyboard shortcuts control the layers and view:
-
-Stored-frame arrows and the active local-axis triad remain a bounded fraction
-of the viewport as the plot is zoomed or resized. Beam entry/exit planes retain
-their physical dimensions.
-
-| Key | Action |
-| --- | --- |
-| `c` | Reference curves |
-| `o` | Objects |
-| `b` | Beam entry/exit frames |
-| `g` | Grid |
-| `f` or `r` | Fit the scoped geometry |
-| `Escape` | Clear selection |
-
-`LayoutViewer2D` exposes its Matplotlib `figure`, `axes`/`ax`, and `canvas`,
-together with `set_curves_visible()`, `set_objects_visible()`,
-`set_beam_frames_visible()`, `set_frames_visible()`, `set_grid_visible()`,
-`fit()`, `reset_view()`/`reset_camera()`,
-`select()`, `clear_selection()`, `draw()`/`render()`, `show()`, `savefig()`,
-`screenshot()`, and `close()`. Passing `show=False` creates the complete figure
-without opening a GUI window, so it is suitable for notebooks, headless tests,
-and programmatic export. Pass an existing Matplotlib axes as `ax=...` to draw
-the projection inside a larger figure.
-
-Large scopes use an adaptive level of detail automatically. Straight objects
-keep their exact two-section extrusion, and scopes of 128 objects or more are
-drawn as one collection of projected silhouettes instead of thousands of
-per-object artists. Stored and Beam-frame layers are built lazily and default
-off for a large scope; passing `frames=True` or `beam_frames=True` still builds
-them in batched collections. `curve_resolution`, `object_resolution`, and
-`radial_resolution` override automatic tessellation. `batch_objects` and
-`batch_threshold` override automatic 2D batching, while `hover_interval`
-controls pointer throttling.
-
-On canvases that support it, hover labels, pose text, and local axes are
-updated with blitting instead of redrawing the full scene. Backends without
-working blit support fall back automatically. Repeated objects also share
-immutable type-edge topology, reducing both memory and Python work. Use
-`viewer.savefig()` rather than calling `viewer.figure.savefig()` directly when
-animated overlays must be included.
-
-## 3D viewer controls
-
-The VTK viewer uses trackball-camera navigation.  Left drag orbits, middle
-drag pans, and the wheel zooms.  Click an object or curve to highlight it and
-show its world pose; hover shows its name.  Keyboard shortcuts toggle the
-principal layers and restore the fitted camera:
-
-| Key | Action |
-| --- | --- |
-| `c` | Reference curves |
-| `o` | Objects |
-| `b` | Beam entry/exit frames |
-| `f` | Fit while preserving the current camera orientation |
-| `r` | Return to the canonical isometric home view and fit |
-| `Escape` | Clear selection |
-
-The `LayoutViewer` also exposes `set_curves_visible()`,
-`set_objects_visible()`, `set_frames_visible()`,
-`set_beam_frames_visible()`, `fit(entity=None, preserve_orientation=True)`,
-`home(entity=None)`, `select()`, `screenshot()`, and `close()` for interactive
-Python use. Large scopes automatically use exact low-detail straight
-extrusions, object actors capped at 4096 objects and a bounded memory budget,
-bulk NumPy-to-VTK topology conversion, cell-aware picking, a scene-wide
-tessellation budget, and lazy batched frame layers. Depth peeling is suspended
-during camera motion and restored when the interaction ends. The automatic
-choices can be overridden with
-`curve_resolution`, `object_resolution`, `radial_resolution`, `batch_objects`,
-and `object_batch_size`.
-
-`show()` enters the native VTK interaction loop. Closing that window terminates
-the loop, finalizes the render window, disconnects observers, and releases the
-scene even if IPython retains the returned viewer in `Out[...]`. For notebook
-construction or export without entering the loop, use `show=False` and call
-`close()` when finished; repeated calls to `close()` are harmless.

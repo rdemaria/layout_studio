@@ -1,9 +1,14 @@
 import {
+  BEAM_BOUNDARY_FRAME_NAMES,
+  hasBeamFeature,
+  hasMagneticFeature,
   MAGNETIC_BOUNDARY_FRAME_NAMES,
   shapePath,
 } from "./layout-data";
 import type {
+  BeamBoundaryFrameName,
   Frame,
+  FeatureBoundaryFrameName,
   LayoutData,
   LayoutObject,
   LayoutType,
@@ -91,13 +96,6 @@ function applyOperations(frame: Frame, operations: TransformOperation[]): Frame 
   return next;
 }
 
-function invertOperations(operations: TransformOperation[]): TransformOperation[] {
-  return operations
-    .slice()
-    .reverse()
-    .map(([name, value]) => [name, -value]);
-}
-
 function curvatureNormal(frame: Frame, roll: number): Vec3 {
   // A positive bend angle points toward local -x at zero roll. Positive roll
   // rotates that curvature direction from -x toward local -y.
@@ -133,43 +131,117 @@ function advanceFrame(
   };
 }
 
-function advanceTypePath(frame: Frame, distance: number, type: LayoutType): Frame {
+type LocalPath = { curvature: number; roll: number };
+
+function mechanicalPath(type: LayoutType): LocalPath {
   const { curvature, roll } = shapePath(type.shape);
-  return advanceFrame(frame, distance, curvature * distance, roll);
+  return { curvature, roll };
 }
 
-function applyTypeOperations(
+function advanceLocalPath(
+  frame: Frame,
+  distance: number,
+  path: LocalPath,
+): Frame {
+  return advanceFrame(
+    frame,
+    distance,
+    path.curvature * distance,
+    path.roll,
+  );
+}
+
+function applyLocalOperations(
   frame: Frame,
   operations: TransformOperation[],
-  type: LayoutType,
+  path: LocalPath,
 ): Frame {
   let next = cloneFrame(frame);
   for (const operation of operations) {
     next = operation[0] === "ts"
-      ? advanceTypePath(next, operation[1], type)
+      ? advanceLocalPath(next, operation[1], path)
       : applyOperations(next, [operation]);
   }
   return next;
 }
 
-function localOperationsForFrame(
+function transformVector(frame: Frame, vector: Vec3): Vec3 {
+  return add(
+    scale(frame.x, vector[0]),
+    add(scale(frame.y, vector[1]), scale(frame.s, vector[2])),
+  );
+}
+
+function composeFrames(parent: Frame, local: Frame): Frame {
+  return {
+    o: add(parent.o, transformVector(parent, local.o)),
+    x: normalize(transformVector(parent, local.x)),
+    y: normalize(transformVector(parent, local.y)),
+    s: normalize(transformVector(parent, local.s)),
+  };
+}
+
+function invertFrame(frame: Frame): Frame {
+  return {
+    o: [
+      -dot(frame.x, frame.o),
+      -dot(frame.y, frame.o),
+      -dot(frame.s, frame.o),
+    ],
+    x: [frame.x[0], frame.y[0], frame.s[0]],
+    y: [frame.x[1], frame.y[1], frame.s[1]],
+    s: [frame.x[2], frame.y[2], frame.s[2]],
+  };
+}
+
+function localFrameForName(
   type: LayoutType,
   frameName: string,
-): TransformOperation[] | undefined {
-  if (frameName === "center") return [];
-  const centerOperations = type.magnetic_center.transformation;
-  if (frameName === "magnetic_center") return centerOperations;
-  if (frameName === "magnetic_entry" || frameName === "magnetic_exit") {
+): Frame | undefined {
+  if (frameName === "center") return cloneFrame(IDENTITY);
+  const path = mechanicalPath(type);
+  if (
+    frameName === "magnetic_center" ||
+    frameName === "magnetic_entry" ||
+    frameName === "magnetic_exit"
+  ) {
+    if (!hasMagneticFeature(type)) return undefined;
+    const center = applyLocalOperations(
+      IDENTITY,
+      type.magnetic_center!.transformation,
+      path,
+    );
+    if (frameName === "magnetic_center") return center;
     const direction = frameName === "magnetic_entry" ? -1 : 1;
-    return [
-      ...centerOperations,
-      ["ts", direction * type.magnetic_length / 2],
-    ];
+    return advanceLocalPath(center, direction * type.magnetic_length! / 2, {
+      curvature: type.magnetic_curvature!,
+      roll: type.magnetic_roll!,
+    });
+  }
+  if (
+    frameName === "beam_center" ||
+    frameName === "beam_entry" ||
+    frameName === "beam_exit"
+  ) {
+    if (!hasBeamFeature(type)) return undefined;
+    const center = applyLocalOperations(
+      IDENTITY,
+      type.beam_center!.transformation,
+      path,
+    );
+    if (frameName === "beam_center") return center;
+    const direction = frameName === "beam_entry" ? -1 : 1;
+    return advanceLocalPath(center, direction * type.beam_length! / 2, {
+      curvature: type.beam_curvature!,
+      roll: type.beam_roll!,
+    });
   }
   const definition = Object.prototype.hasOwnProperty.call(type.frames, frameName)
     ? type.frames[frameName]
     : undefined;
-  return definition?.transformation;
+  return definition
+    ? applyLocalOperations(IDENTITY, definition.transformation, path)
+    : undefined;
 }
 
 function localToWorld(frame: Frame, local: Vec3): Vec3 {
@@ -230,18 +302,35 @@ export type NamedFrameGeometry = {
   typeName: string;
   frame: Frame;
 };
-export type MagneticFrameGeometry = {
+export type FeatureAxisGeometry = {
   object: string;
-  name: MagneticBoundaryFrameName;
   typeName: string;
+  kind: "magnetic" | "beam";
+  centerFrame: Frame;
+  samples: CurveSample[];
+};
+export type FeatureBoundaryFrameGeometry<
+  Name extends FeatureBoundaryFrameName = FeatureBoundaryFrameName,
+> = {
+  object: string;
+  name: Name;
+  typeName: string;
+  kind: "magnetic" | "beam";
   frame: Frame;
   vertices: Vec3[];
 };
+export type MagneticFrameGeometry =
+  FeatureBoundaryFrameGeometry<MagneticBoundaryFrameName>;
+export type BeamFrameGeometry =
+  FeatureBoundaryFrameGeometry<BeamBoundaryFrameName>;
 export type SceneGeometry = {
   curves: CurveGeometry[];
   objects: ObjectGeometry[];
   frames: NamedFrameGeometry[];
+  magneticAxes: FeatureAxisGeometry[];
   magneticFrames: MagneticFrameGeometry[];
+  beamAxes: FeatureAxisGeometry[];
+  beamFrames: BeamFrameGeometry[];
   bounds: { min: Vec3; max: Vec3 };
 };
 
@@ -876,6 +965,63 @@ function sweepTopology(
   return topology;
 }
 
+function featureStepCount(axisLength: number, curvature: number): number {
+  const totalAngle = Math.abs(axisLength * curvature);
+  if (totalAngle < 1e-10) return 1;
+  return Math.max(3, Math.min(48, Math.ceil(totalAngle / (Math.PI / 24))));
+}
+
+function buildFeatureAxisGeometry(
+  object: string,
+  typeName: string,
+  kind: "magnetic" | "beam",
+  centerFrame: Frame,
+  axisLength: number,
+  curvature: number,
+  roll: number,
+): FeatureAxisGeometry {
+  const steps = featureStepCount(axisLength, curvature);
+  const path = { curvature, roll };
+  const samples = Array.from({ length: steps + 1 }, (_, index): CurveSample => {
+    const station = -axisLength / 2 + axisLength * index / steps;
+    const frame = advanceLocalPath(centerFrame, station, path);
+    return { p: frame.o, frame, path: station };
+  });
+  return { object, typeName, kind, centerFrame, samples };
+}
+
+function featurePlaneVertices(
+  type: LayoutType,
+  frame: Frame,
+  axisLength: number,
+): Vec3[] {
+  const planeScale = 1.08;
+  let localVertices: Vec3[];
+  if (type.shape?.[0] === "box") {
+    localVertices = [
+      [-type.shape[1] * planeScale / 2, -type.shape[2] * planeScale / 2, 0],
+      [type.shape[1] * planeScale / 2, -type.shape[2] * planeScale / 2, 0],
+      [type.shape[1] * planeScale / 2, type.shape[2] * planeScale / 2, 0],
+      [-type.shape[1] * planeScale / 2, type.shape[2] * planeScale / 2, 0],
+    ];
+  } else if (type.shape?.[0] === "cylinder") {
+    localVertices = Array.from({ length: 24 }, (_, index): Vec3 => {
+      const angle = index / 24 * Math.PI * 2;
+      const radius = type.shape![1] * planeScale;
+      return [Math.cos(angle) * radius, Math.sin(angle) * radius, 0];
+    });
+  } else {
+    const halfExtent = Math.max(0.05, axisLength * 0.08);
+    localVertices = [
+      [-halfExtent, -halfExtent, 0],
+      [halfExtent, -halfExtent, 0],
+      [halfExtent, halfExtent, 0],
+      [-halfExtent, halfExtent, 0],
+    ];
+  }
+  return localVertices.map((vertex) => localToWorld(frame, vertex));
+}
+
 export function buildScene(
   layout: LayoutData,
   scope: SceneScope = { kind: "layout" },
@@ -1045,16 +1191,12 @@ export function buildScene(
       `Object ${name} position`,
     );
     const type = layout.types[object.type];
-    const targetOperations = localOperationsForFrame(
+    const targetLocalFrame = localFrameForName(
       type,
       object.position.target,
     );
-    const frame = targetOperations !== undefined
-      ? applyTypeOperations(
-          targetFrame,
-          invertOperations(targetOperations),
-          type,
-        )
+    const frame = targetLocalFrame !== undefined
+      ? composeFrames(targetFrame, invertFrame(targetLocalFrame))
       : targetFrame;
     objectCache.set(name, frame);
     return frame;
@@ -1072,12 +1214,11 @@ export function buildScene(
     const object = layout.objects[objectName];
     const type = layout.types[object?.type];
     if (!type) return resolveObject(objectName, stack);
-    const operations = localOperationsForFrame(type, frameName);
-    if (operations === undefined) return resolveObject(objectName, stack);
-    const frame = applyTypeOperations(
+    const localFrame = localFrameForName(type, frameName);
+    if (localFrame === undefined) return resolveObject(objectName, stack);
+    const frame = composeFrames(
       resolveObject(objectName, [...stack, `frame:${key}`]),
-      operations,
-      type,
+      localFrame,
     );
     namedFrameCache.set(key, frame);
     return frame;
@@ -1101,6 +1242,18 @@ export function buildScene(
     ([name, object]) => {
       const frame = resolveObject(name, []);
       const type = layout.types[object.type];
+      if (!type.shape) {
+        return {
+          name,
+          object,
+          typeName: object.type,
+          type,
+          frame,
+          vertices: [],
+          faces: [],
+          edges: [],
+        };
+      }
       const steps = sweepStepCount(type);
       if (type.shape[0] === "box") {
         const [, dx, dy, dz] = type.shape;
@@ -1113,7 +1266,11 @@ export function buildScene(
         const vertices: Vec3[] = [];
         for (let layer = 0; layer <= steps; layer += 1) {
           const path = -dz / 2 + (dz * layer) / steps;
-          const sectionFrame = advanceTypePath(frame, path, type);
+          const sectionFrame = advanceLocalPath(
+            frame,
+            path,
+            mechanicalPath(type),
+          );
           for (const [x, y] of crossSection) {
             vertices.push(localToWorld(sectionFrame, [x, y, 0]));
           }
@@ -1134,7 +1291,11 @@ export function buildScene(
       const vertices: Vec3[] = [];
       for (let layer = 0; layer <= steps; layer += 1) {
         const path = -dz / 2 + (dz * layer) / steps;
-        const sectionFrame = advanceTypePath(frame, path, type);
+        const sectionFrame = advanceLocalPath(
+          frame,
+          path,
+          mechanicalPath(type),
+        );
         for (let index = 0; index < sides; index += 1) {
           const angle = (index / sides) * Math.PI * 2;
           vertices.push(localToWorld(sectionFrame, [
@@ -1165,34 +1326,59 @@ export function buildScene(
     })),
   );
 
-  const magneticFrames: MagneticFrameGeometry[] = objectEntries.flatMap(
-    ([objectName, object]) => {
-      const type = layout.types[object.type];
-      const planeScale = 1.08;
-      return MAGNETIC_BOUNDARY_FRAME_NAMES.map((name) => {
+  const magneticAxes: FeatureAxisGeometry[] = [];
+  const magneticFrames: MagneticFrameGeometry[] = [];
+  const beamAxes: FeatureAxisGeometry[] = [];
+  const beamFrames: BeamFrameGeometry[] = [];
+  for (const [objectName, object] of objectEntries) {
+    const type = layout.types[object.type];
+    if (hasMagneticFeature(type)) {
+      const centerFrame = resolveFrame(objectName, "magnetic_center", []);
+      magneticAxes.push(buildFeatureAxisGeometry(
+        objectName,
+        object.type,
+        "magnetic",
+        centerFrame,
+        type.magnetic_length!,
+        type.magnetic_curvature!,
+        type.magnetic_roll!,
+      ));
+      for (const name of MAGNETIC_BOUNDARY_FRAME_NAMES) {
         const frame = resolveFrame(objectName, name, []);
-        const localVertices: Vec3[] = type.shape[0] === "box"
-          ? [
-              [-type.shape[1] * planeScale / 2, -type.shape[2] * planeScale / 2, 0],
-              [type.shape[1] * planeScale / 2, -type.shape[2] * planeScale / 2, 0],
-              [type.shape[1] * planeScale / 2, type.shape[2] * planeScale / 2, 0],
-              [-type.shape[1] * planeScale / 2, type.shape[2] * planeScale / 2, 0],
-            ]
-          : Array.from({ length: 24 }, (_, index): Vec3 => {
-              const angle = index / 24 * Math.PI * 2;
-              const radius = type.shape[1] * planeScale;
-              return [Math.cos(angle) * radius, Math.sin(angle) * radius, 0];
-            });
-        return {
+        magneticFrames.push({
           object: objectName,
           name,
           typeName: object.type,
+          kind: "magnetic",
           frame,
-          vertices: localVertices.map((vertex) => localToWorld(frame, vertex)),
-        };
-      });
-    },
-  );
+          vertices: featurePlaneVertices(type, frame, type.magnetic_length!),
+        });
+      }
+    }
+    if (hasBeamFeature(type)) {
+      const centerFrame = resolveFrame(objectName, "beam_center", []);
+      beamAxes.push(buildFeatureAxisGeometry(
+        objectName,
+        object.type,
+        "beam",
+        centerFrame,
+        type.beam_length!,
+        type.beam_curvature!,
+        type.beam_roll!,
+      ));
+      for (const name of BEAM_BOUNDARY_FRAME_NAMES) {
+        const frame = resolveFrame(objectName, name, []);
+        beamFrames.push({
+          object: objectName,
+          name,
+          typeName: object.type,
+          kind: "beam",
+          frame,
+          vertices: featurePlaneVertices(type, frame, type.beam_length!),
+        });
+      }
+    }
+  }
 
   let hasPosition = false;
   const min: Vec3 = [
@@ -1216,11 +1402,15 @@ export function buildScene(
     for (const sample of curve.samples) includePosition(sample.p);
   }
   for (const object of objects) {
+    includePosition(object.frame.o);
     for (const vertex of object.vertices) includePosition(vertex);
   }
   for (const frame of frames) includePosition(frame.frame.o);
-  for (const frame of magneticFrames) {
-    for (const vertex of frame.vertices) includePosition(vertex);
+  for (const axis of [...magneticAxes, ...beamAxes]) {
+    for (const sample of axis.samples) includePosition(sample.p);
+  }
+  for (const boundary of [...magneticFrames, ...beamFrames]) {
+    for (const vertex of boundary.vertices) includePosition(vertex);
   }
   if (!hasPosition) {
     min[0] = -1;
@@ -1230,5 +1420,14 @@ export function buildScene(
     max[1] = 1;
     max[2] = 1;
   }
-  return { curves, objects, frames, magneticFrames, bounds: { min, max } };
+  return {
+    curves,
+    objects,
+    frames,
+    magneticAxes,
+    magneticFrames,
+    beamAxes,
+    beamFrames,
+    bounds: { min, max },
+  };
 }

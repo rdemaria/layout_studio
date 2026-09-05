@@ -776,7 +776,9 @@ export default function Home() {
   );
   const curve = layout.reference_curves[selectedCurve];
   const typeDefinition = layout.types[selectedType];
-  const typePath = typeDefinition ? shapePath(typeDefinition.shape) : null;
+  const typePath = typeDefinition?.shape
+    ? shapePath(typeDefinition.shape)
+    : null;
   const object = layout.objects[selectedObject];
   const frameNames = Object.keys(typeDefinition?.frames ?? {});
   const frameDefinition = typeDefinition?.frames[selectedTypeFrame];
@@ -993,10 +995,7 @@ export default function Home() {
     const name = uniqueName("type", typeNames);
     update((draft) => {
       draft.types[name] = {
-        shape: ["box", 1, 1, 1, 0, 0],
         color: "#f0a84b",
-        magnetic_center: { transformation: [] },
-        magnetic_length: 1,
         frames: {},
       };
     });
@@ -1235,10 +1234,11 @@ export default function Home() {
                       <div>
                         <dt>Types</dt>
                         <dd>
-                          Reusable definitions containing shape, color, centerline curvature
-                          and roll, a magnetic center and length, and named local frames.
-                          Every instance also has implicit center, magnetic center, Beam entry
-                          and Beam exit frames.
+                          Reusable definitions with a color and optional mechanical geometry,
+                          magnetic axis, Beam interface and named local frames. Mechanical,
+                          magnetic and Beam paths have independent lengths, curvatures and
+                          rolls. Every instance has a center frame; feature-specific center,
+                          entry and exit frames exist only while that feature is defined.
                         </dd>
                       </div>
                       <div>
@@ -1264,9 +1264,10 @@ export default function Home() {
                     <p>
                       <code>ts</code> is a path coordinate. With a curve reference, all ts
                       values are summed to select the curve frame before the remaining
-                      operations run. In a type-local frame, ts follows the type&apos;s curved
-                      centerline and updates its tangent. <code>tt</code> never follows a
-                      curve.
+                      operations run. In a type-local frame, ts follows the mechanical axis
+                      when present and a straight local axis otherwise. <code>tt</code> never
+                      follows a curve. Magnetic and Beam entry/exit frames follow their own
+                      axes from their respective center frames.
                     </p>
                   </section>
                   <section>
@@ -1660,7 +1661,7 @@ export default function Home() {
                   <span className="main-card-count">{typeNames.length}</span>
                 </CardTitle>
                 <CardDescription>
-                  Shared curved shape, magnetic axis and object-local named frames.
+                  Optional mechanical, magnetic and Beam geometry with local frames.
                 </CardDescription>
                 <CardAction className="main-card-actions">
                   <Button type="button" variant="outline" size="sm" onClick={addType}>
@@ -1759,145 +1760,330 @@ export default function Home() {
 
                     <div className="subsection">
                       <div className="subsection-title">
-                        <h3>Shape</h3><span>s = 0 at every object center</span>
+                        <div className="subsection-title-copy">
+                          <h3>Mechanical geometry</h3>
+                          <span>shape and axis centered on the object center</span>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={() =>
+                            update((draft) => {
+                              if (draft.types[selectedType].shape) {
+                                delete draft.types[selectedType].shape;
+                              } else {
+                                draft.types[selectedType].shape = ["box", 1, 1, 1, 0, 0];
+                              }
+                            })
+                          }
+                        >
+                          {typeDefinition.shape ? <Trash2 /> : <Plus />}
+                          {typeDefinition.shape ? "Remove" : "Add geometry"}
+                        </Button>
                       </div>
-                      <div className="shape-row">
-                        <Field label="Primitive">
-                          <NativeSelect
-                            value={typeDefinition.shape[0]}
-                            onChange={(event) =>
-                              update((draft) => {
-                                const current = draft.types[selectedType].shape;
-                                const { curvature, roll } = shapePath(current);
-                                draft.types[selectedType].shape =
-                                  event.target.value === "box"
-                                    ? ["box", 1, 1, 1, curvature, roll]
-                                    : ["cylinder", 0.5, 1, curvature, roll];
-                              })
-                            }
-                          >
-                            <NativeSelectOption value="box">Box</NativeSelectOption>
-                            <NativeSelectOption value="cylinder">Cylinder</NativeSelectOption>
-                          </NativeSelect>
-                        </Field>
-                        {typeDefinition.shape[0] === "box" ? (
-                          <>
-                            {([1, 2, 3] as const).map((axis) => (
-                              <Field key={axis} label={`${["", "dx", "dy", "dz"][axis]} [m]`}>
-                                <NumberInput
-                                  value={(typeDefinition.shape as BoxShape)[axis]}
-                                  min={0}
-                                  step={0.1}
-                                  label={`Box ${["", "dx", "dy", "dz"][axis]}`}
-                                  onChange={(value) =>
-                                    update((draft) => {
-                                      (draft.types[selectedType].shape as BoxShape)[axis] =
-                                        Math.max(0.000001, value);
-                                    })
-                                  }
-                                />
-                              </Field>
-                            ))}
-                          </>
-                        ) : (
-                          <>
-                            {([1, 2] as const).map((axis) => (
-                              <Field key={axis} label={`${axis === 1 ? "r" : "dz"} [m]`}>
-                                <NumberInput
-                                  value={(typeDefinition.shape as CylinderShape)[axis]}
-                                  min={0}
-                                  step={0.1}
-                                  label={axis === 1 ? "Cylinder radius" : "Cylinder dz"}
-                                  onChange={(value) =>
-                                    update((draft) => {
-                                      (draft.types[selectedType].shape as CylinderShape)[axis] =
-                                        Math.max(0.000001, value);
-                                    })
-                                  }
-                                />
-                              </Field>
-                            ))}
-                          </>
-                        )}
+                      {typeDefinition.shape ? (
+                        <>
+                          <div className="shape-row">
+                            <Field label="Primitive">
+                              <NativeSelect
+                                value={typeDefinition.shape[0]}
+                                onChange={(event) =>
+                                  update((draft) => {
+                                    const current = draft.types[selectedType].shape;
+                                    if (!current) return;
+                                    const { curvature, roll } = shapePath(current);
+                                    draft.types[selectedType].shape =
+                                      event.target.value === "box"
+                                        ? ["box", 1, 1, 1, curvature, roll]
+                                        : ["cylinder", 0.5, 1, curvature, roll];
+                                  })
+                                }
+                              >
+                                <NativeSelectOption value="box">Box</NativeSelectOption>
+                                <NativeSelectOption value="cylinder">Cylinder</NativeSelectOption>
+                              </NativeSelect>
+                            </Field>
+                            {typeDefinition.shape[0] === "box" ? (
+                              <>
+                                {([1, 2, 3] as const).map((axis) => (
+                                  <Field key={axis} label={`${["", "dx", "dy", "dz"][axis]} [m]`}>
+                                    <NumberInput
+                                      value={(typeDefinition.shape as BoxShape)[axis]}
+                                      min={0}
+                                      step={0.1}
+                                      label={`Box ${["", "dx", "dy", "dz"][axis]}`}
+                                      onChange={(value) =>
+                                        update((draft) => {
+                                          const shape = draft.types[selectedType].shape;
+                                          if (shape?.[0] === "box") {
+                                            shape[axis] = Math.max(0.000001, value);
+                                          }
+                                        })
+                                      }
+                                    />
+                                  </Field>
+                                ))}
+                              </>
+                            ) : (
+                              <>
+                                {([1, 2] as const).map((axis) => (
+                                  <Field key={axis} label={`${axis === 1 ? "r" : "dz"} [m]`}>
+                                    <NumberInput
+                                      value={(typeDefinition.shape as CylinderShape)[axis]}
+                                      min={0}
+                                      step={0.1}
+                                      label={axis === 1 ? "Cylinder radius" : "Cylinder dz"}
+                                      onChange={(value) =>
+                                        update((draft) => {
+                                          const shape = draft.types[selectedType].shape;
+                                          if (shape?.[0] === "cylinder") {
+                                            shape[axis] = Math.max(0.000001, value);
+                                          }
+                                        })
+                                      }
+                                    />
+                                  </Field>
+                                ))}
+                              </>
+                            )}
+                          </div>
+                          {typePath && (
+                            <>
+                              <div className="shape-path-row">
+                                <Field label="Curvature [1/m]">
+                                  <NumberInput
+                                    value={typePath.curvature}
+                                    step={0.01}
+                                    label="Mechanical curvature"
+                                    onChange={(value) =>
+                                      update((draft) => {
+                                        const shape = draft.types[selectedType].shape;
+                                        if (!shape) return;
+                                        if (shape[0] === "box") shape[4] = value;
+                                        else shape[3] = value;
+                                      })
+                                    }
+                                  />
+                                </Field>
+                                <Field label="Roll [degree]">
+                                  <NumberInput
+                                    value={typePath.roll * 180 / Math.PI}
+                                    step={5}
+                                    label="Mechanical roll in degrees"
+                                    onChange={(value) =>
+                                      update((draft) => {
+                                        const shape = draft.types[selectedType].shape;
+                                        if (!shape) return;
+                                        const radians = value * Math.PI / 180;
+                                        if (shape[0] === "box") shape[5] = radians;
+                                        else shape[4] = radians;
+                                      })
+                                    }
+                                  />
+                                </Field>
+                              </div>
+                              <p className="shape-help">
+                                dz is the mechanical centerline length. Positive curvature
+                                at roll 0° bends toward −x; positive roll rotates the bend
+                                toward −y.
+                              </p>
+                            </>
+                          )}
+                        </>
+                      ) : (
+                        <p className="inline-empty">
+                          No mechanical shape. Instances remain selectable at their center.
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="subsection">
+                      <div className="subsection-title">
+                        <div className="subsection-title-copy">
+                          <h3>Magnetic axis</h3>
+                          <span>magnetic center, entry and exit</span>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={() =>
+                            updateValidated((draft) => {
+                              const type = draft.types[selectedType];
+                              if (type.magnetic_center) {
+                                delete type.magnetic_center;
+                                delete type.magnetic_length;
+                                delete type.magnetic_curvature;
+                                delete type.magnetic_roll;
+                              } else {
+                                type.magnetic_center = { transformation: [] };
+                                type.magnetic_length = 1;
+                                type.magnetic_curvature = 0;
+                                type.magnetic_roll = 0;
+                              }
+                            })
+                          }
+                        >
+                          {typeDefinition.magnetic_center ? <Trash2 /> : <Plus />}
+                          {typeDefinition.magnetic_center ? "Remove" : "Add axis"}
+                        </Button>
                       </div>
-                      {typePath && (
+                      {typeDefinition.magnetic_center ? (
                         <>
                           <div className="shape-path-row">
-                            <Field label="Curvature [1/m]">
+                            <Field label="Length [m]">
                               <NumberInput
-                                value={typePath.curvature}
-                                step={0.01}
-                                label="Shape curvature"
+                                value={typeDefinition.magnetic_length ?? 1}
+                                min={0}
+                                step={0.1}
+                                label="Magnetic length"
                                 onChange={(value) =>
                                   update((draft) => {
-                                    const shape = draft.types[selectedType].shape;
-                                    if (shape[0] === "box") shape[4] = value;
-                                    else shape[3] = value;
+                                    draft.types[selectedType].magnetic_length =
+                                      Math.max(0.000001, value);
+                                  })
+                                }
+                              />
+                            </Field>
+                            <Field label="Curvature [1/m]">
+                              <NumberInput
+                                value={typeDefinition.magnetic_curvature ?? 0}
+                                step={0.01}
+                                label="Magnetic curvature"
+                                onChange={(value) =>
+                                  update((draft) => {
+                                    draft.types[selectedType].magnetic_curvature = value;
                                   })
                                 }
                               />
                             </Field>
                             <Field label="Roll [degree]">
                               <NumberInput
-                                value={typePath.roll * 180 / Math.PI}
+                                value={(typeDefinition.magnetic_roll ?? 0) * 180 / Math.PI}
                                 step={5}
-                                label="Shape roll in degrees"
+                                label="Magnetic roll in degrees"
                                 onChange={(value) =>
                                   update((draft) => {
-                                    const shape = draft.types[selectedType].shape;
-                                    const radians = value * Math.PI / 180;
-                                    if (shape[0] === "box") shape[5] = radians;
-                                    else shape[4] = radians;
+                                    draft.types[selectedType].magnetic_roll =
+                                      value * Math.PI / 180;
                                   })
                                 }
                               />
                             </Field>
                           </div>
-                          <p className="shape-help">
-                            dz is centerline arc length. Positive curvature at roll 0° bends
-                            toward −x; positive roll rotates the bend toward −y.
-                          </p>
+                          <div className="implicit-reference">
+                            magnetic_center is relative to object center. Entry and exit
+                            are derived at −Lmag/2 and +Lmag/2 along the magnetic axis.
+                          </div>
+                          <OperationsEditor
+                            value={typeDefinition.magnetic_center.transformation}
+                            allowedNames={LOCAL_TRANSFORM_NAMES}
+                            onChange={(transformation) =>
+                              update((draft) => {
+                                const center = draft.types[selectedType].magnetic_center;
+                                if (center) center.transformation = transformation;
+                              })
+                            }
+                          />
                         </>
+                      ) : (
+                        <p className="inline-empty">No magnetic axis or magnetic frames.</p>
                       )}
                     </div>
 
                     <div className="subsection">
                       <div className="subsection-title">
-                        <h3>Magnetic axis</h3>
-                        <span>Beam entry / exit</span>
+                        <div className="subsection-title-copy">
+                          <h3>Beam interface</h3>
+                          <span>beam center, entry and exit</span>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={() =>
+                            updateValidated((draft) => {
+                              const type = draft.types[selectedType];
+                              if (type.beam_center) {
+                                delete type.beam_center;
+                                delete type.beam_length;
+                                delete type.beam_curvature;
+                                delete type.beam_roll;
+                              } else {
+                                type.beam_center = { transformation: [] };
+                                type.beam_length = 1;
+                                type.beam_curvature = 0;
+                                type.beam_roll = 0;
+                              }
+                            })
+                          }
+                        >
+                          {typeDefinition.beam_center ? <Trash2 /> : <Plus />}
+                          {typeDefinition.beam_center ? "Remove" : "Add interface"}
+                        </Button>
                       </div>
-                      <div className="magnetic-axis-row">
-                        <Field label="Magnetic length [m]">
-                          <NumberInput
-                            value={typeDefinition.magnetic_length}
-                            min={0}
-                            step={0.1}
-                            label="Magnetic length"
-                            onChange={(value) =>
+                      {typeDefinition.beam_center ? (
+                        <>
+                          <div className="shape-path-row">
+                            <Field label="Length [m]">
+                              <NumberInput
+                                value={typeDefinition.beam_length ?? 1}
+                                min={0}
+                                step={0.1}
+                                label="Beam-interface length"
+                                onChange={(value) =>
+                                  update((draft) => {
+                                    draft.types[selectedType].beam_length =
+                                      Math.max(0.000001, value);
+                                  })
+                                }
+                              />
+                            </Field>
+                            <Field label="Curvature [1/m]">
+                              <NumberInput
+                                value={typeDefinition.beam_curvature ?? 0}
+                                step={0.01}
+                                label="Beam-interface curvature"
+                                onChange={(value) =>
+                                  update((draft) => {
+                                    draft.types[selectedType].beam_curvature = value;
+                                  })
+                                }
+                              />
+                            </Field>
+                            <Field label="Roll [degree]">
+                              <NumberInput
+                                value={(typeDefinition.beam_roll ?? 0) * 180 / Math.PI}
+                                step={5}
+                                label="Beam-interface roll in degrees"
+                                onChange={(value) =>
+                                  update((draft) => {
+                                    draft.types[selectedType].beam_roll =
+                                      value * Math.PI / 180;
+                                  })
+                                }
+                              />
+                            </Field>
+                          </div>
+                          <div className="implicit-reference">
+                            beam_center is relative to object center. Beam entry and exit
+                            are derived at −Lbeam/2 and +Lbeam/2 along the Beam axis.
+                          </div>
+                          <OperationsEditor
+                            value={typeDefinition.beam_center.transformation}
+                            allowedNames={LOCAL_TRANSFORM_NAMES}
+                            onChange={(transformation) =>
                               update((draft) => {
-                                draft.types[selectedType].magnetic_length =
-                                  Math.max(0.000001, value);
+                                const center = draft.types[selectedType].beam_center;
+                                if (center) center.transformation = transformation;
                               })
                             }
                           />
-                        </Field>
-                      </div>
-                      <div className="implicit-reference">
-                        Magnetic center frame relative to the object center · ts
-                        follows the curved type axis · entry and exit are derived at
-                        −Lmag/2 and +Lmag/2 with planes normal to the tangent
-                      </div>
-                      <OperationsEditor
-                        value={typeDefinition.magnetic_center.transformation}
-                        allowedNames={LOCAL_TRANSFORM_NAMES}
-                        onChange={(transformation) =>
-                          update((draft) => {
-                            draft.types[
-                              selectedType
-                            ].magnetic_center.transformation = transformation;
-                          })
-                        }
-                      />
+                        </>
+                      ) : (
+                        <p className="inline-empty">No Beam interface or Beam frames.</p>
+                      )}
                     </div>
 
                     <Collapsible

@@ -32,6 +32,11 @@ python conversion/ldb_machine_to_layout.py \
 Use `--indent 0` for compact JSON. Pickle files must be treated as trusted
 project data even though the converter uses a restricted class allow-list.
 
+Converted LDB optic data is emitted as a complete magnetic-axis feature,
+including explicit length, curvature, roll, and center transformation. The
+current conversion gives the mechanical shape the same path parameters, while
+the Layout Studio model itself keeps those two axes independent.
+
 ## Root and machine-length resolution
 
 The LDB machine name is not always the name of the external frame used by the

@@ -23,6 +23,12 @@ def populated_layout():
         color="#445566",
         magnetic_center=Frame(),
         magnetic_length=0.8,
+        magnetic_curvature=0.0,
+        magnetic_roll=0.0,
+        beam_center=Frame(),
+        beam_length=0.6,
+        beam_curvature=0.0,
+        beam_roll=0.0,
     )
     object_ = layout.new_object(
         "Q1",
@@ -70,7 +76,8 @@ def test_layout_plot_web_forwards_browser_controls(web_viewer_spy):
         "visibility": {
             "curves": True,
             "objects": True,
-            "beam_frames": False,
+            "magnetic_axis": False,
+            "beam_axis": False,
             "frames": False,
         },
         "show": False,
@@ -96,7 +103,35 @@ def test_curve_and_object_plot_web_use_strict_scope(web_viewer_spy):
     assert object_viewer.kwargs["visibility"] == {
         "curves": False,
         "objects": True,
-        "beam_frames": True,
+        "magnetic_axis": False,
+        "beam_axis": False,
+        "frames": False,
+    }
+
+
+def test_plot_web_forwards_each_optional_type_layer_independently(web_viewer_spy):
+    layout, _curve, object_ = populated_layout()
+
+    layout.plot_web(
+        show=False,
+        magnetic_axis=True,
+        beam_axis=False,
+        frames=True,
+    )
+    assert web_viewer_spy[-1].kwargs["visibility"] == {
+        "curves": True,
+        "objects": True,
+        "magnetic_axis": True,
+        "beam_axis": False,
+        "frames": True,
+    }
+
+    object_.plot_web(show=False, magnetic_axis=False, beam_axis=True, frames=False)
+    assert web_viewer_spy[-1].kwargs["visibility"] == {
+        "curves": False,
+        "objects": True,
+        "magnetic_axis": False,
+        "beam_axis": True,
         "frames": False,
     }
 
@@ -116,6 +151,14 @@ def test_plot_web_has_no_camel_case_alias():
     for entity in (layout, curve, object_):
         assert callable(entity.plot_web)
         assert not hasattr(entity, "plotWeb")
+
+
+def test_native_plotting_methods_are_not_part_of_the_python_api():
+    layout, curve, object_ = populated_layout()
+
+    for entity in (layout, curve, object_):
+        assert not hasattr(entity, "plot2d")
+        assert not hasattr(entity, "plot3d")
 
 
 def test_object_plot_web_constructs_a_real_scoped_viewer(tmp_path: Path):
@@ -140,7 +183,8 @@ def test_object_plot_web_constructs_a_real_scoped_viewer(tmp_path: Path):
         assert command["visibility"] == {
             "curves": False,
             "objects": True,
-            "beam_frames": True,
+            "magnetic_axis": False,
+            "beam_axis": False,
             "frames": False,
         }
     finally:

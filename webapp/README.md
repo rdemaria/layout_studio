@@ -83,6 +83,9 @@ editor keeps working when it is absent.
 The viewer toolbar supports orbit, pan, selection, whole-layout fit, signed
 canonical views (`+X`, `-X`, `+Y`, `-Y`, `+Z`, `-Z`), and rectangle zoom. Rectangle
 zoom reframes the selected screen region without changing the current orientation.
+Curves and mechanical object shapes are visible initially. Named frames, the
+magnetic axis with its entry/exit frames, and the Beam-interface axis with its
+entry/exit frames are independent layers and start hidden.
 
 ## Python bridge
 
@@ -110,3 +113,10 @@ are ordered `[operation, value]` pairs; translations are metres and rotations ar
 radians. Named local coordinate systems are called frames. The application validates
 references, resolves curve/object dependency chains, and evaluates world poses before
 rendering or export.
+
+A type always defines the implicit `center` frame. Its mechanical shape is optional;
+when present, the shape tuple contains its centerline length, curvature, and roll.
+Magnetic and Beam-interface features are separate optional groups. Each group contains
+a local center transformation plus its own length, curvature, and roll, and derives
+its corresponding entry/exit frames. Omitting all three features leaves a center-only
+object, which remains selectable in the viewer.

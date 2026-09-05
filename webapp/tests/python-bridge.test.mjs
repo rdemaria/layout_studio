@@ -178,12 +178,22 @@ test("validates the versioned command schema without DOM or URL escape hatches",
       ...envelope,
       id: "3",
       command: "set_visibility",
-      visibility: { curves: false, frames: false, beam_frames: true },
+      visibility: {
+        curves: false,
+        frames: false,
+        magnetic_axis: true,
+        beam_axis: true,
+      },
     }),
     {
       id: "3",
       command: "set_visibility",
-      visibility: { curves: false, frames: false, beam_frames: true },
+      visibility: {
+        curves: false,
+        frames: false,
+        magnetic_axis: true,
+        beam_axis: true,
+      },
     },
   );
   assert.deepEqual(
@@ -243,6 +253,16 @@ test("validates the versioned command schema without DOM or URL escape hatches",
     }),
     /visibility\.objects must be boolean/,
   );
+  assert.throws(
+    () => parsePythonBridgeCommand({
+      ...envelope,
+      id: "load-4",
+      command: "set_layout",
+      layout,
+      visibility: { beam_frames: true },
+    }),
+    /visibility contains unsupported fields: beam_frames/,
+  );
 });
 
 test("scopes emitted geometry while resolving against the full layout", async () => {
@@ -265,7 +285,14 @@ test("scopes emitted geometry while resolving against the full layout", async ()
   const detectorPoints = [
     ...detector.objects.flatMap((item) => item.vertices),
     ...detector.frames.map((item) => item.frame.o),
+    ...detector.magneticAxes.flatMap((item) =>
+      item.samples.map((sample) => sample.p)
+    ),
     ...detector.magneticFrames.flatMap((item) => item.vertices),
+    ...detector.beamAxes.flatMap((item) =>
+      item.samples.map((sample) => sample.p)
+    ),
+    ...detector.beamFrames.flatMap((item) => item.vertices),
   ];
   assert.deepEqual(detector.bounds, {
     min: [0, 1, 2].map((axis) =>
@@ -278,7 +305,10 @@ test("scopes emitted geometry while resolving against the full layout", async ()
   assert.deepEqual(ring.curves.map((item) => item.name), ["ring"]);
   assert.deepEqual(ring.objects, []);
   assert.deepEqual(ring.frames, []);
+  assert.deepEqual(ring.magneticAxes, []);
   assert.deepEqual(ring.magneticFrames, []);
+  assert.deepEqual(ring.beamAxes, []);
+  assert.deepEqual(ring.beamFrames, []);
   assert.throws(
     () => buildScene(layout, { kind: "object", name: "toString" }),
     /Unknown object/,

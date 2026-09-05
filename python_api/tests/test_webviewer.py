@@ -698,7 +698,13 @@ def test_public_controls_are_ordered_and_nonblocking(web_viewer):
     assert web_viewer.set_mode("pan") == "4"
     assert web_viewer.set_view("-z") == "5"
     assert (
-        web_viewer.set_visibility(curves=False, beam_frames=True, frames=False) == "6"
+        web_viewer.set_visibility(
+            curves=False,
+            magnetic_axis=True,
+            beam_axis=False,
+            frames=False,
+        )
+        == "6"
     )
     assert web_viewer.select(frame) == "7"
     assert web_viewer.select("Q1->magnetic_entry") == "8"
@@ -726,7 +732,8 @@ def test_public_controls_are_ordered_and_nonblocking(web_viewer):
     assert commands[3]["view"] == "-z"
     assert commands[4]["visibility"] == {
         "curves": False,
-        "beam_frames": True,
+        "magnetic_axis": True,
+        "beam_axis": False,
         "frames": False,
     }
     assert commands[5]["selection"] == {
@@ -757,6 +764,8 @@ def test_invalid_visibility_and_targets_are_rejected(web_viewer):
         web_viewer.set_visibility()
     with pytest.raises(TypeError):
         web_viewer.set_visibility(objects=1)
+    with pytest.raises(TypeError):
+        web_viewer.set_visibility(beam_frames=True)
     web_viewer.set_scope("curve:main")
     with pytest.raises(ValueError, match="outside"):
         web_viewer.select("Q1")
@@ -777,6 +786,27 @@ def test_invalid_visibility_and_targets_are_rejected(web_viewer):
         web_viewer.set_scope("missing")
     with pytest.raises(ValueError):
         web_viewer.set_view("top")
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "magnetic_center",
+        "magnetic_entry",
+        "magnetic_exit",
+        "beam_center",
+        "beam_entry",
+        "beam_exit",
+    ],
+)
+def test_configured_optional_axis_frames_are_selectable(web_viewer, name):
+    assert web_viewer.select(f"Q1->{name}") == "2"
+    command = _commands(web_viewer, after=1)[0]
+    assert command["selection"] == {
+        "kind": "frame",
+        "object": "Q1",
+        "name": name,
+    }
 
 
 @pytest.mark.parametrize(

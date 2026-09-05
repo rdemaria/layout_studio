@@ -49,15 +49,11 @@ from .model import (
     Type,
     WorldReference,
 )
-from .viewer import LayoutViewer
-
-Projection2D: TypeAlias = Literal["xy", "yx", "xz", "zx", "yz", "zy"]
 ViewerMode: TypeAlias = Literal["orbit", "pan", "select", "zoom-region"]
 ViewerDirection: TypeAlias = Literal["+x", "-x", "+y", "-y", "+z", "-z"]
 
 if TYPE_CHECKING:
     from .resolver import Resolver
-    from .viewer2d import LayoutViewer2D
     from .webviewer import (
         WebViewer,
         WebViewerAssetError,
@@ -71,10 +67,6 @@ def __getattr__(name: str) -> Any:
         from .resolver import Resolver
 
         return Resolver
-    if name == "LayoutViewer2D":
-        from .viewer2d import LayoutViewer2D
-
-        return LayoutViewer2D
     if name in {
         "WebViewer",
         "WebViewerAssetError",
@@ -115,8 +107,6 @@ __all__ = [
     "JsonValue",
     "Layout",
     "LayoutError",
-    "LayoutViewer",
-    "LayoutViewer2D",
     "ManagedSequence",
     "NameConflictError",
     "NoStationSolutionError",
@@ -127,7 +117,6 @@ __all__ = [
     "OwnedValue",
     "Pose",
     "Position",
-    "Projection2D",
     "Reference",
     "ReferenceCycleError",
     "ReferenceInUseError",

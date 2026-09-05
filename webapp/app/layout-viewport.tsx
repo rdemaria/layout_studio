@@ -32,9 +32,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type {
+  FeatureBoundaryFrameName,
   Frame,
   LayoutData,
-  MagneticBoundaryFrameName,
   SelectedEntity,
   Vec3,
 } from "./layout-data";
@@ -55,7 +55,8 @@ import {
   transverseCurvePathsForPoint,
   type CurveGeometry,
   type CurveSample,
-  type MagneticFrameGeometry,
+  type FeatureAxisGeometry,
+  type FeatureBoundaryFrameGeometry,
   type SceneGeometry,
   type SceneScope,
 } from "./layout-geometry";
@@ -96,7 +97,8 @@ export type ViewportCommand =
         curves?: boolean;
         objects?: boolean;
         frames?: boolean;
-        beam_frames?: boolean;
+        magnetic_axis?: boolean;
+        beam_axis?: boolean;
       };
     };
 
@@ -137,13 +139,22 @@ type HoverTarget =
     }
   | { kind: "frame"; object: string; name: string; x: number; y: number }
   | {
-      kind: "magnetic_frame";
+      kind: "feature_frame";
+      feature: "magnetic" | "beam";
       object: string;
-      name: MagneticBoundaryFrameName;
+      name: FeatureBoundaryFrameName;
       frame: Frame;
       x: number;
       y: number;
       polygon: { x: number; y: number }[];
+    }
+  | {
+      kind: "feature_axis";
+      feature: "magnetic" | "beam";
+      object: string;
+      sample: CurveSample;
+      x: number;
+      y: number;
     }
   | null;
 type CurveHitTarget = {
@@ -159,20 +170,33 @@ type CurveHitTarget = {
   endPath: number;
   segmentIndex: number;
 };
+type FeatureAxisHitTarget = {
+  kind: "feature_axis_hit";
+  feature: "magnetic" | "beam";
+  object: string;
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+  startSample: CurveSample;
+  endSample: CurveSample;
+};
 type HitTarget = Exclude<
   Exclude<HoverTarget, null>,
-  { kind: "curve" }
-> | CurveHitTarget;
+  { kind: "curve" | "feature_axis" }
+> | CurveHitTarget | FeatureAxisHitTarget;
 type FrameHitTarget = Extract<HitTarget, { kind: "frame" }>;
-type MagneticHitTarget = Extract<HitTarget, { kind: "magnetic_frame" }>;
+type FeatureFrameHitTarget = Extract<HitTarget, { kind: "feature_frame" }>;
+type ObjectHitTarget = Extract<HitTarget, { kind: "object" }>;
 
 type PoseReadout = { label: string; frame: Frame };
 type CurveStationSource =
   | { kind: "frame"; object: string; name: string; label: string }
   | {
       kind: "plane";
+      feature: "magnetic" | "beam";
       object: string;
-      name: MagneticBoundaryFrameName;
+      name: FeatureBoundaryFrameName;
       label: string;
     }
   | { kind: "surface"; object: string; name: "shape"; label: string }
@@ -266,7 +290,10 @@ const EMPTY_SCENE: SceneGeometry = {
   curves: [],
   objects: [],
   frames: [],
+  magneticAxes: [],
   magneticFrames: [],
+  beamAxes: [],
+  beamFrames: [],
   bounds: { min: [-1, -1, -1], max: [1, 1, 1] },
 };
 
@@ -276,7 +303,8 @@ export function sceneBoundsForVisibility(
     curves: boolean;
     objects: boolean;
     frames: boolean;
-    beamFrames: boolean;
+    magneticAxis: boolean;
+    beamAxis: boolean;
   },
 ): { min: Vec3; max: Vec3 } | null {
   let min: Vec3 | null = null;
@@ -301,14 +329,28 @@ export function sceneBoundsForVisibility(
   }
   if (visibility.objects) {
     for (const object of scene.objects) {
-      for (const vertex of object.vertices) include(vertex);
-    }
-    if (visibility.beamFrames) {
-      for (const frame of scene.magneticFrames) {
-        for (const vertex of frame.vertices) include(vertex);
+      if (object.vertices.length) {
+        for (const vertex of object.vertices) include(vertex);
+      } else {
+        include(object.frame.o);
       }
     }
   }
+  const includeFeature = (
+    axes: FeatureAxisGeometry[],
+    frames: FeatureBoundaryFrameGeometry[],
+  ) => {
+    for (const axis of axes) {
+      for (const sample of axis.samples) include(sample.p);
+    }
+    for (const frame of frames) {
+      for (const vertex of frame.vertices) include(vertex);
+    }
+  };
+  if (visibility.magneticAxis) {
+    includeFeature(scene.magneticAxes, scene.magneticFrames);
+  }
+  if (visibility.beamAxis) includeFeature(scene.beamAxes, scene.beamFrames);
   if (visibility.frames) {
     for (const frame of scene.frames) include(frame.frame.o);
   }
@@ -327,8 +369,12 @@ function sameHoverTarget(a: HoverTarget, b: HoverTarget): boolean {
       a.sample.path === b.sample.path &&
       a.snappedTo === b.snappedTo;
   }
-  if (a.kind === "magnetic_frame" && b.kind === "magnetic_frame") {
-    return a.object === b.object && a.name === b.name;
+  if (a.kind === "feature_frame" && b.kind === "feature_frame") {
+    return a.feature === b.feature && a.object === b.object && a.name === b.name;
+  }
+  if (a.kind === "feature_axis" && b.kind === "feature_axis") {
+    return a.feature === b.feature && a.object === b.object &&
+      a.sample.path === b.sample.path;
   }
   return a.kind === "object" && b.kind === "object" && a.name === b.name;
 }
@@ -411,18 +457,18 @@ function distanceToPolygon(
   return closest;
 }
 
-function pointInsideMagneticPlane(
+function pointInsideFeaturePlane(
   point: Vec3,
-  magneticFrame: MagneticFrameGeometry,
+  featureFrame: FeatureBoundaryFrameGeometry,
 ): boolean {
-  const localPoint = sub(point, magneticFrame.frame.o);
-  const x = dot(localPoint, magneticFrame.frame.x);
-  const y = dot(localPoint, magneticFrame.frame.y);
-  const polygon = magneticFrame.vertices.map((vertex) => {
-    const local = sub(vertex, magneticFrame.frame.o);
+  const localPoint = sub(point, featureFrame.frame.o);
+  const x = dot(localPoint, featureFrame.frame.x);
+  const y = dot(localPoint, featureFrame.frame.y);
+  const polygon = featureFrame.vertices.map((vertex) => {
+    const local = sub(vertex, featureFrame.frame.o);
     return {
-      x: dot(local, magneticFrame.frame.x),
-      y: dot(local, magneticFrame.frame.y),
+      x: dot(local, featureFrame.frame.x),
+      y: dot(local, featureFrame.frame.y),
     };
   });
   const extent = Math.max(
@@ -802,8 +848,9 @@ export function LayoutViewport({
   const [hovered, setHovered] = useState<HoverTarget>(null);
   const [showCurves, setShowCurves] = useState(true);
   const [showObjects, setShowObjects] = useState(true);
-  const [showFrames, setShowFrames] = useState(true);
-  const [showBeamFrames, setShowBeamFrames] = useState(true);
+  const [showFrames, setShowFrames] = useState(false);
+  const [showMagneticAxis, setShowMagneticAxis] = useState(false);
+  const [showBeamAxis, setShowBeamAxis] = useState(false);
   const [curveProbe, setCurveProbe] = useState<CurveProbe | null>(null);
   const [zoomRectangle, setZoomRectangle] =
     useState<ScreenRectangle | null>(null);
@@ -829,6 +876,8 @@ export function LayoutViewport({
     ? ""
     : hovered.kind === "curve" || hovered.kind === "object"
       ? `${hovered.kind}:${hovered.name}`
+      : hovered.kind === "feature_axis"
+        ? `${hovered.kind}:${hovered.feature}:${hovered.object}`
       : `${hovered.kind}:${hovered.object}:${hovered.name}`;
 
   const selectedCurve = useMemo<CurveGeometry | null>(() => {
@@ -938,11 +987,17 @@ export function LayoutViewport({
           });
         }
       }
-      if (showBeamFrames) for (const magneticFrame of scene.magneticFrames) {
+    }
+
+    const addFeaturePlaneStations = (
+      feature: "magnetic" | "beam",
+      featureFrames: FeatureBoundaryFrameGeometry[],
+    ) => {
+      for (const featureFrame of featureFrames) {
         if (
           objectCurveAffiliation(
             layout,
-            magneticFrame.object,
+            featureFrame.object,
             affiliationCache,
           ) !== selectedCurve.name
         ) {
@@ -950,32 +1005,37 @@ export function LayoutViewport({
         }
         const intersections = curvePlaneIntersectionPaths(
           selectedCurve,
-          magneticFrame.frame,
+          featureFrame.frame,
         );
         if (intersections.kind === "none" || intersections.kind === "infinite") {
           continue;
         }
         const paths = intersections.paths.filter((path) => {
           const curveFrame = frameAtCurvePath(selectedCurve, path);
-          return pointInsideMagneticPlane(curveFrame.o, magneticFrame) &&
+          return pointInsideFeaturePlane(curveFrame.o, featureFrame) &&
             length(cross(
-              normalize(magneticFrame.frame.s),
+              normalize(featureFrame.frame.s),
               normalize(curveFrame.s),
             )) <= 1e-6;
         });
         if (paths.length === 1) {
-          const boundary = magneticFrame.name === "magnetic_entry"
+          const boundary = featureFrame.name.endsWith("_entry")
             ? "entry"
             : "exit";
           addStation(paths[0], {
             kind: "plane",
-            object: magneticFrame.object,
-            name: magneticFrame.name,
-            label: `${magneticFrame.object} Beam ${boundary} plane`,
+            feature,
+            object: featureFrame.object,
+            name: featureFrame.name,
+            label: `${featureFrame.object} ${feature === "magnetic" ? "magnetic" : "beam"} ${boundary} plane`,
           });
         }
       }
+    };
+    if (showMagneticAxis) {
+      addFeaturePlaneStations("magnetic", scene.magneticFrames);
     }
+    if (showBeamAxis) addFeaturePlaneStations("beam", scene.beamFrames);
 
     stations.sort((a, b) => a.path - b.path);
     const grouped: CurveStation[] = [];
@@ -1001,8 +1061,9 @@ export function LayoutViewport({
     layout,
     scene,
     selectedCurve,
-    showBeamFrames,
+    showBeamAxis,
     showFrames,
+    showMagneticAxis,
     showObjects,
   ]);
 
@@ -1039,9 +1100,17 @@ export function LayoutViewport({
       curves: showCurves,
       objects: showObjects,
       frames: showFrames,
-      beamFrames: showBeamFrames,
+      magneticAxis: showMagneticAxis,
+      beamAxis: showBeamAxis,
     }),
-    [scene, showBeamFrames, showCurves, showFrames, showObjects],
+    [
+      scene,
+      showBeamAxis,
+      showCurves,
+      showFrames,
+      showMagneticAxis,
+      showObjects,
+    ],
   );
 
   const fit = useCallback(() => {
@@ -1089,7 +1158,7 @@ export function LayoutViewport({
       (candidate) => candidate.name === fitRequest.name,
     );
     if (!object) return;
-    fitPoints(object.vertices);
+    fitPoints(object.vertices.length ? object.vertices : [object.frame.o]);
   }, [fitPoints, fitRequest, geometryError, scene.curves, scene.objects]);
 
   useEffect(() => {
@@ -1235,45 +1304,93 @@ export function LayoutViewport({
     }
 
     const hits: HitTarget[] = [];
-    if (showObjects && showBeamFrames) for (const magneticFrame of scene.magneticFrames) {
-      const polygon = magneticFrame.vertices.map(project).filter(Boolean) as Projection[];
-      if (polygon.length !== magneticFrame.vertices.length) continue;
-      const active =
-        selection?.kind === "object" && selection.name === magneticFrame.object;
-      const hovering = hoverStyleKey ===
-        `magnetic_frame:${magneticFrame.object}:${magneticFrame.name}`;
-      const color = magneticFrame.name === "magnetic_entry" ? "#66c7ff" : "#ff9b78";
-      context.beginPath();
-      context.moveTo(polygon[0].x, polygon[0].y);
-      for (const point of polygon.slice(1)) context.lineTo(point.x, point.y);
-      context.closePath();
-      context.fillStyle = rgba(color, hovering ? 0.28 : active ? 0.2 : 0.14);
-      context.fill();
-      context.save();
-      context.setLineDash([5, 4]);
-      context.lineWidth = hovering ? 2.2 : 1.25;
-      context.strokeStyle = rgba(color, hovering ? 1 : 0.82);
-      context.stroke();
-      context.restore();
-      const x = polygon.reduce((sum, point) => sum + point.x, 0) / polygon.length;
-      const y = polygon.reduce((sum, point) => sum + point.y, 0) / polygon.length;
-      context.font = "650 9px ui-monospace, SFMono-Regular, monospace";
-      context.fillStyle = rgba(color, 0.95);
-      context.fillText(
-        magneticFrame.name === "magnetic_entry" ? "IN" : "OUT",
-        x + 5,
-        y - 5,
-      );
-      hits.push({
-        kind: "magnetic_frame",
-        object: magneticFrame.object,
-        name: magneticFrame.name,
-        frame: magneticFrame.frame,
-        x,
-        y,
-        polygon,
-      });
+    const drawFeature = (
+      feature: "magnetic" | "beam",
+      axes: FeatureAxisGeometry[],
+      boundaryFrames: FeatureBoundaryFrameGeometry[],
+    ) => {
+      const axisColor = feature === "magnetic" ? "#ffd166" : "#66c7ff";
+      for (const axis of axes) {
+        const projected = axis.samples.map((sample) => project(sample.p));
+        const active = selection?.kind === "object" && selection.name === axis.object;
+        const hovering = hoverStyleKey ===
+          `feature_axis:${feature}:${axis.object}`;
+        context.save();
+        context.setLineDash(feature === "magnetic" ? [8, 4] : [3, 3]);
+        context.lineCap = "round";
+        context.lineJoin = "round";
+        context.beginPath();
+        traceProjectedPolyline(context, projected);
+        context.lineWidth = hovering ? 4.2 : active ? 3.6 : 2.6;
+        context.strokeStyle = rgba(axisColor, hovering ? 1 : active ? 0.95 : 0.86);
+        context.stroke();
+        context.restore();
+        for (let index = 1; index < projected.length; index += 1) {
+          const a = projected[index - 1];
+          const b = projected[index];
+          if (!a || !b) continue;
+          hits.push({
+            kind: "feature_axis_hit",
+            feature,
+            object: axis.object,
+            ax: a.x,
+            ay: a.y,
+            bx: b.x,
+            by: b.y,
+            startSample: axis.samples[index - 1],
+            endSample: axis.samples[index],
+          });
+        }
+      }
+
+      for (const featureFrame of boundaryFrames) {
+        const polygon = featureFrame.vertices
+          .map(project)
+          .filter(Boolean) as Projection[];
+        if (polygon.length !== featureFrame.vertices.length) continue;
+        const active = selection?.kind === "object" &&
+          selection.name === featureFrame.object;
+        const hovering = hoverStyleKey ===
+          `feature_frame:${featureFrame.object}:${featureFrame.name}`;
+        const isEntry = featureFrame.name.endsWith("_entry");
+        const color = feature === "magnetic"
+          ? (isEntry ? "#ffe29a" : "#f5a742")
+          : (isEntry ? "#7ee7ff" : "#659cff");
+        context.beginPath();
+        context.moveTo(polygon[0].x, polygon[0].y);
+        for (const point of polygon.slice(1)) context.lineTo(point.x, point.y);
+        context.closePath();
+        context.fillStyle = rgba(color, hovering ? 0.28 : active ? 0.2 : 0.14);
+        context.fill();
+        context.save();
+        context.setLineDash(feature === "magnetic" ? [7, 4] : [3, 3]);
+        context.lineWidth = hovering ? 2.2 : 1.25;
+        context.strokeStyle = rgba(color, hovering ? 1 : 0.82);
+        context.stroke();
+        context.restore();
+        const x = polygon.reduce((sum, point) => sum + point.x, 0) /
+          polygon.length;
+        const y = polygon.reduce((sum, point) => sum + point.y, 0) /
+          polygon.length;
+        context.font = "650 9px ui-monospace, SFMono-Regular, monospace";
+        context.fillStyle = rgba(color, 0.95);
+        context.fillText(isEntry ? "IN" : "OUT", x + 5, y - 5);
+        hits.push({
+          kind: "feature_frame",
+          feature,
+          object: featureFrame.object,
+          name: featureFrame.name,
+          frame: featureFrame.frame,
+          x,
+          y,
+          polygon,
+        });
+      }
+    };
+    if (showMagneticAxis) {
+      drawFeature("magnetic", scene.magneticAxes, scene.magneticFrames);
     }
+    if (showBeamAxis) drawFeature("beam", scene.beamAxes, scene.beamFrames);
 
     if (showCurves) for (const curve of scene.curves) {
       const projected = curve.samples.map((sample) => project(sample.p));
@@ -1351,7 +1468,8 @@ export function LayoutViewport({
         (selection?.kind === "object" && selection.name === object.name) ||
         (selection?.kind === "frame" && selection.object === object.name);
       const hovering = hoverStyleKey === `object:${object.name}` ||
-        hoverStyleKey.startsWith(`magnetic_frame:${object.name}:`);
+        hoverStyleKey.startsWith(`feature_frame:${object.name}:`) ||
+        hoverStyleKey.endsWith(`:${object.name}`);
       context.lineWidth = active ? 2.5 : hovering ? 2.1 : 1.25;
       context.strokeStyle =
         active || hovering
@@ -1368,7 +1486,34 @@ export function LayoutViewport({
         hasVisibleEdge = true;
       }
       if (hasVisibleEdge) context.stroke();
-      const ringSize = object.type.shape[0] === "box" ? 4 : 18;
+      if (!projected.length) {
+        const center = project(object.frame.o);
+        if (center) {
+          const radius = active || hovering ? 6 : 4.5;
+          context.beginPath();
+          context.moveTo(center.x, center.y - radius);
+          context.lineTo(center.x + radius, center.y);
+          context.lineTo(center.x, center.y + radius);
+          context.lineTo(center.x - radius, center.y);
+          context.closePath();
+          context.fillStyle = rgba(object.type.color, active ? 0.92 : 0.72);
+          context.fill();
+          context.stroke();
+          hits.push({
+            kind: "object",
+            name: object.name,
+            x: center.x,
+            y: center.y,
+            ax: center.x,
+            ay: center.y,
+            bx: center.x,
+            by: center.y,
+            radius: radius + 3,
+          });
+        }
+        continue;
+      }
+      const ringSize = object.type.shape?.[0] === "box" ? 4 : 18;
       const rings: ({ x: number; y: number; radius: number } | null)[] = [];
       for (let offset = 0; offset < projected.length; offset += ringSize) {
         const visible = projected.slice(offset, offset + ringSize).filter(Boolean) as Projection[];
@@ -1470,9 +1615,10 @@ export function LayoutViewport({
     selectedCurve,
     selectedCurveStations,
     selection,
-    showBeamFrames,
+    showBeamAxis,
     showCurves,
     showFrames,
+    showMagneticAxis,
     showObjects,
     size,
   ]);
@@ -1491,7 +1637,11 @@ export function LayoutViewport({
     const hoveredFrame =
       hovered?.kind === "curve" && showCurves
         ? hovered.sample.frame
-        : hovered?.kind === "magnetic_frame" && showObjects && showBeamFrames
+        : hovered?.kind === "feature_axis" &&
+            (hovered.feature === "magnetic" ? showMagneticAxis : showBeamAxis)
+          ? hovered.sample.frame
+        : hovered?.kind === "feature_frame" &&
+            (hovered.feature === "magnetic" ? showMagneticAxis : showBeamAxis)
           ? hovered.frame
         : hovered?.kind === "frame" && showFrames
           ? scene.frames.find(
@@ -1574,9 +1724,10 @@ export function LayoutViewport({
     hovered,
     scene.frames,
     selection,
-    showBeamFrames,
+    showBeamAxis,
     showCurves,
     showFrames,
+    showMagneticAxis,
     showObjects,
     size,
     zoomRectangle,
@@ -1594,23 +1745,78 @@ export function LayoutViewport({
     }
     if (closestFrame) return closestFrame.target;
 
-    let closestMagnetic: {
+    let closestFeatureFrame: {
       distance: number;
-      target: MagneticHitTarget;
+      target: FeatureFrameHitTarget;
     } | null = null;
     for (const target of hitTargetsRef.current) {
-      if (target.kind !== "magnetic_frame") continue;
-      if (!showObjects || !showBeamFrames) continue;
+      if (target.kind !== "feature_frame") continue;
+      if (target.feature === "magnetic" ? !showMagneticAxis : !showBeamAxis) {
+        continue;
+      }
       const distance = distanceToPolygon(x, y, target.polygon);
-      if (distance <= 7 && (!closestMagnetic || distance < closestMagnetic.distance)) {
-        closestMagnetic = { distance, target };
+      if (
+        distance <= 7 &&
+        (!closestFeatureFrame || distance < closestFeatureFrame.distance)
+      ) {
+        closestFeatureFrame = { distance, target };
       }
     }
-    if (closestMagnetic) return closestMagnetic.target;
+    if (closestFeatureFrame) return closestFeatureFrame.target;
 
-    let best: { distance: number; target: HitTarget } | null = null;
+    let closestFeatureAxis: {
+      distance: number;
+      target: FeatureAxisHitTarget;
+      fraction: number;
+      x: number;
+      y: number;
+    } | null = null;
     for (const target of hitTargetsRef.current) {
-      if (target.kind === "frame" || target.kind === "magnetic_frame") continue;
+      if (target.kind !== "feature_axis_hit") continue;
+      if (target.feature === "magnetic" ? !showMagneticAxis : !showBeamAxis) {
+        continue;
+      }
+      const closest = closestPointOnSegment(
+        x,
+        y,
+        target.ax,
+        target.ay,
+        target.bx,
+        target.by,
+      );
+      if (
+        closest.distance <= 9 &&
+        (!closestFeatureAxis || closest.distance < closestFeatureAxis.distance)
+      ) {
+        closestFeatureAxis = {
+          distance: closest.distance,
+          target,
+          fraction: closest.fraction,
+          x: closest.x,
+          y: closest.y,
+        };
+      }
+    }
+    if (closestFeatureAxis) {
+      const sample = closestFeatureAxis.fraction < 0.5
+        ? closestFeatureAxis.target.startSample
+        : closestFeatureAxis.target.endSample;
+      return {
+        kind: "feature_axis",
+        feature: closestFeatureAxis.target.feature,
+        object: closestFeatureAxis.target.object,
+        sample,
+        x: closestFeatureAxis.x,
+        y: closestFeatureAxis.y,
+      };
+    }
+
+    let best: {
+      distance: number;
+      target: CurveHitTarget | ObjectHitTarget;
+    } | null = null;
+    for (const target of hitTargetsRef.current) {
+      if (target.kind !== "curve_hit" && target.kind !== "object") continue;
       if (target.kind === "curve_hit" && !showCurves) continue;
       if (target.kind === "object" && !showObjects) continue;
       const distance = distanceToSegment(
@@ -1656,7 +1862,14 @@ export function LayoutViewport({
       x: closest.x,
       y: closest.y,
     };
-  }, [scene.curves, showBeamFrames, showCurves, showFrames, showObjects]);
+  }, [
+    scene.curves,
+    showBeamAxis,
+    showCurves,
+    showFrames,
+    showMagneticAxis,
+    showObjects,
+  ]);
 
   const curveProbeAtPointer = useCallback((
     x: number,
@@ -1678,8 +1891,9 @@ export function LayoutViewport({
                 source.object === hover.object &&
                 source.name === hover.name;
             }
-            if (hover.kind === "magnetic_frame") {
+            if (hover.kind === "feature_frame") {
               return source.kind === "plane" &&
+                source.feature === hover.feature &&
                 source.object === hover.object &&
                 source.name === hover.name;
             }
@@ -1926,7 +2140,10 @@ export function LayoutViewport({
         onSelect({ kind: "object", name: target.name });
       } else if (target?.kind === "frame") {
         onSelect({ kind: "frame", object: target.object, name: target.name });
-      } else if (target?.kind === "magnetic_frame") {
+      } else if (
+        target?.kind === "feature_frame" ||
+        target?.kind === "feature_axis"
+      ) {
         onSelect({ kind: "object", name: target.object });
       } else {
         onSelect(null);
@@ -1946,8 +2163,10 @@ export function LayoutViewport({
   }, []);
 
   const hoverLabel =
-    hovered?.kind === "frame" || hovered?.kind === "magnetic_frame"
+    hovered?.kind === "frame" || hovered?.kind === "feature_frame"
       ? `${hovered.object}.${hovered.name}`
+      : hovered?.kind === "feature_axis"
+        ? `${hovered.object} ${hovered.feature} axis`
       : hovered?.name;
 
   const poseReadout = useMemo<PoseReadout | null>(() => {
@@ -1979,10 +2198,22 @@ export function LayoutViewport({
           }
         : null;
     }
-    if (hovered?.kind === "magnetic_frame" && showObjects && showBeamFrames) {
+    if (
+      hovered?.kind === "feature_frame" &&
+      (hovered.feature === "magnetic" ? showMagneticAxis : showBeamAxis)
+    ) {
       return {
-        label: `Beam ${hovered.name === "magnetic_entry" ? "entry" : "exit"} frame · ${hovered.object}`,
+        label: `${hovered.feature === "magnetic" ? "Magnetic" : "Beam"} ${hovered.name.endsWith("_entry") ? "entry" : "exit"} frame · ${hovered.object}`,
         frame: hovered.frame,
+      };
+    }
+    if (
+      hovered?.kind === "feature_axis" &&
+      (hovered.feature === "magnetic" ? showMagneticAxis : showBeamAxis)
+    ) {
+      return {
+        label: `${hovered.feature === "magnetic" ? "Magnetic" : "Beam"} axis · ${hovered.object}`,
+        frame: hovered.sample.frame,
       };
     }
     if (hovered?.kind === "curve" && showCurves) {
@@ -2020,15 +2251,16 @@ export function LayoutViewport({
     hovered,
     scene,
     selection,
-    showBeamFrames,
+    showBeamAxis,
     showCurves,
     showFrames,
+    showMagneticAxis,
     showObjects,
   ]);
 
   const poseText = useMemo(() => {
     if (geometryError) return geometryError;
-    if (!poseReadout) return "Hover a named frame, Beam frame, object, or curve to inspect its world pose.";
+    if (!poseReadout) return "Hover a named frame, feature axis or boundary frame, object, or curve to inspect its world pose.";
     const { frame } = poseReadout;
     const angles = frameToMadxAngles(frame);
     const degrees = 180 / Math.PI;
@@ -2069,10 +2301,10 @@ export function LayoutViewport({
     setShowObjects(checked);
     if (!checked) {
       hitTargetsRef.current = hitTargetsRef.current.filter(
-        (target) => target.kind === "curve_hit",
+        (target) => target.kind !== "object",
       );
       setHovered((current) =>
-        current && current.kind !== "curve" ? null : current
+        current?.kind === "object" ? null : current
       );
     }
   }, []);
@@ -2087,17 +2319,39 @@ export function LayoutViewport({
     }
   }, []);
 
-  const setBeamFramesVisible = useCallback((checked: boolean) => {
-    setShowBeamFrames(checked);
+  const setFeatureLayerVisible = useCallback((
+    feature: "magnetic" | "beam",
+    checked: boolean,
+  ) => {
+    if (feature === "magnetic") setShowMagneticAxis(checked);
+    else setShowBeamAxis(checked);
     if (!checked) {
       hitTargetsRef.current = hitTargetsRef.current.filter(
-        (target) => target.kind !== "magnetic_frame",
+        (target) =>
+          !(
+            (target.kind === "feature_frame" ||
+              target.kind === "feature_axis_hit") &&
+            target.feature === feature
+          ),
       );
       setHovered((current) =>
-        current?.kind === "magnetic_frame" ? null : current
+        current &&
+          (current.kind === "feature_frame" ||
+            current.kind === "feature_axis") &&
+          current.feature === feature
+          ? null
+          : current
       );
     }
   }, []);
+
+  const setMagneticAxisVisible = useCallback((checked: boolean) => {
+    setFeatureLayerVisible("magnetic", checked);
+  }, [setFeatureLayerVisible]);
+
+  const setBeamAxisVisible = useCallback((checked: boolean) => {
+    setFeatureLayerVisible("beam", checked);
+  }, [setFeatureLayerVisible]);
 
   useEffect(() => {
     if (!command || command.id <= handledCommandRef.current) return;
@@ -2127,8 +2381,11 @@ export function LayoutViewport({
       if (command.visibility.frames !== undefined) {
         setFrameLayerVisible(command.visibility.frames);
       }
-      if (command.visibility.beam_frames !== undefined) {
-        setBeamFramesVisible(command.visibility.beam_frames);
+      if (command.visibility.magnetic_axis !== undefined) {
+        setMagneticAxisVisible(command.visibility.magnetic_axis);
+      }
+      if (command.visibility.beam_axis !== undefined) {
+        setBeamAxisVisible(command.visibility.beam_axis);
       }
       finish(viewportCommandRenderError(command, geometryError));
       return;
@@ -2163,7 +2420,7 @@ export function LayoutViewport({
       finish(`Cannot fit object "${objectName}": target is not in the current scene.`);
       return;
     }
-    fitPoints(object.vertices);
+    fitPoints(object.vertices.length ? object.vertices : [object.frame.o]);
     finish();
   }, [
     command,
@@ -2173,9 +2430,10 @@ export function LayoutViewport({
     scene.curves,
     scene.objects,
     selectNavigationMode,
-    setBeamFramesVisible,
+    setBeamAxisVisible,
     setCurveLayerVisible,
     setFrameLayerVisible,
+    setMagneticAxisVisible,
     setObjectLayerVisible,
   ]);
 
@@ -2301,6 +2559,26 @@ export function LayoutViewport({
           </div>
           <div className="viewport-layer-toggle">
             <Switch
+              aria-label="Show magnetic axis and entry and exit frames"
+              checked={showMagneticAxis}
+              id="viewer-magnetic-axis-visible"
+              onCheckedChange={setMagneticAxisVisible}
+              size="sm"
+            />
+            <label htmlFor="viewer-magnetic-axis-visible">Magnetic axis</label>
+          </div>
+          <div className="viewport-layer-toggle">
+            <Switch
+              aria-label="Show beam interface axis and entry and exit frames"
+              checked={showBeamAxis}
+              id="viewer-beam-axis-visible"
+              onCheckedChange={setBeamAxisVisible}
+              size="sm"
+            />
+            <label htmlFor="viewer-beam-axis-visible">Beam interface</label>
+          </div>
+          <div className="viewport-layer-toggle">
+            <Switch
               aria-label="Show named frames"
               checked={showFrames}
               id="viewer-frames-visible"
@@ -2308,16 +2586,6 @@ export function LayoutViewport({
               size="sm"
             />
             <label htmlFor="viewer-frames-visible">Named frames</label>
-          </div>
-          <div className="viewport-layer-toggle">
-            <Switch
-              aria-label="Show Beam entry and exit frames"
-              checked={showBeamFrames}
-              id="viewer-beam-frames-visible"
-              onCheckedChange={setBeamFramesVisible}
-              size="sm"
-            />
-            <label htmlFor="viewer-beam-frames-visible">Beam entry/exit</label>
           </div>
         </div>
         <svg
