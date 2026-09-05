@@ -80,6 +80,13 @@ editor keeps working when it is absent.
 
 ## Viewer navigation
 
+Numeric fields underline the digit adjusted by their up/down buttons, the keyboard
+Up/Down keys, or the mouse wheel while the field has focus. The left/right buttons
+beside the spinner select a coarser/finer decimal place (also Alt+Left/Alt+Right).
+Extra zeros expose places beyond the displayed digits without changing the value.
+Each adjustment adds or subtracts one unit of the selected place and preserves
+the finer digits. Direct typing and pasted scientific notation remain supported.
+
 The viewer toolbar supports orbit, pan, selection, whole-layout fit, signed
 canonical views (`+X`, `-X`, `+Y`, `-Y`, `+Z`, `-Z`), and rectangle zoom. Rectangle
 zoom reframes the selected screen region without changing the current orientation.

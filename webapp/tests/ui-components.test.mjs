@@ -35,6 +35,70 @@ async function readCssTree(directory) {
   return contents.join("\n");
 }
 
+test("numeric controls select and underline decimal places", async () => {
+  const { NumberInput } = await vite.ssrLoadModule("/app/number-input.tsx");
+  const { numberAtPlace, digitIndexInDraft, initialDigitPlace } =
+    await vite.ssrLoadModule("/app/number-input-value.ts");
+
+  for (const [value, place, text, index] of [
+    [12.345, -2, "12.345", 4],
+    [-12.345, 1, "-12.345", 1],
+    [12, -3, "12.000", 5],
+    [12.345, 3, "0012.345", 0],
+    [0, -2, "0.00", 3],
+    [1.2e-7, -8, "0.00000012", 9],
+    [1e21, 20, "1000000000000000000000", 1],
+  ]) {
+    assert.deepEqual(numberAtPlace(value, place), { text, digitIndex: index });
+    assert.equal(digitIndexInDraft(text, place), index);
+  }
+  assert.equal(digitIndexInDraft("-1.20e-7", -9), 4);
+  assert.equal(digitIndexInDraft("1e-", 0), -1);
+  assert.equal(digitIndexInDraft("12", -1), -1);
+  assert.equal(initialDigitPlace(5), 0);
+  assert.equal(initialDigitPlace(0.1), -1);
+  assert.equal(initialDigitPlace("any"), 0);
+
+  const html = renderToStaticMarkup(React.createElement(NumberInput, {
+    value: -12.34, step: 0.01, min: -100, label: "Position", onChange() {},
+  }));
+  assert.match(html, /role="spinbutton"/);
+  assert.match(html, /aria-valuenow="-12.34"/);
+  assert.match(html, /aria-valuemin="-100"/);
+  assert.match(html, /number-input-digit">4<\/span>/);
+  assert.match(html, /Increase Position by 0.01/);
+  assert.match(html, /Decrease Position by 0.01/);
+  assert.match(html, /Select digit to the left for Position/);
+  assert.match(html, /Select digit to the right for Position/);
+});
+
+test("numeric stepping preserves fine digits, decimal arithmetic, and minimums", async () => {
+  const { parseNumberDraft, stepNumberAtPlace } =
+    await vite.ssrLoadModule("/app/number-input-value.ts");
+  for (const [value, place, direction, expected] of [
+    [12.345, -1, 1, 12.445],
+    [12.345, 1, -1, 2.345],
+    [-12.345, -2, 1, -12.335],
+    [0.2, -1, 1, 0.3],
+    [0.1, -1, -1, 0],
+    [0, -3, -1, -0.001],
+    [9.99, -2, 1, 10],
+    [100, 0, -1, 99],
+    [1.2e-7, -8, 1, 1.3e-7],
+    [1e21, 20, -1, 9e20],
+    [Number.MAX_VALUE, 308, 1, Number.MAX_VALUE],
+  ]) assert.equal(stepNumberAtPlace(value, place, direction), expected);
+  let value = 0;
+  for (let index = 0; index < 100; index++) value = stepNumberAtPlace(value, -2, 1);
+  assert.equal(value, 1);
+  assert.equal(stepNumberAtPlace(0.04, -1, -1, 0), 0);
+  assert.equal(stepNumberAtPlace(0.25, -1, 1, 0.05), 0.35);
+  for (const draft of ["", "-", ".", "1e-", "Infinity", "0x10", "1,2"])
+    assert.equal(parseNumberDraft(draft), null);
+  assert.equal(parseNumberDraft("-1.25e-7"), -1.25e-7);
+  assert.equal(parseNumberDraft(".005"), 0.005);
+});
+
 test("emits the catalog's animation and scrolling utilities", async () => {
   const css = await readCssTree(path.join(root, "dist"));
 
