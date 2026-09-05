@@ -591,7 +591,7 @@ def _shape_values(shape: Any) -> tuple[str, dict[str, float]]:
 def _axis_feature_values(
     type_: Any, feature: str
 ) -> tuple[Any, float, float, float] | None:
-    """Return one optional type axis as ``(center, length, curvature, roll)``."""
+    """Return one optional axis definition as ``(center, length, curvature, roll)``."""
 
     fields = tuple(f"{feature}_{name}" for name in ("center", "length", "curvature", "roll"))
     values = tuple(getattr(type_, field, None) for field in fields)
@@ -923,9 +923,8 @@ class Resolver:
             entity = self._resolve_curve(entity, path=f"{path}.curve", reference=True)
         elif kind == "object_frame":
             entity = self._resolve_object(entity, path=f"{path}.object", reference=True)
-            type_ = self._object_type(entity, path=f"{path}.object")
             try:
-                self._type_frame_operations(type_, frame)
+                self._object_frame_operations(entity, frame)
             except UnknownEntityError as exc:
                 raise DanglingReferenceError(str(exc), path=f"{path}.frame") from exc
         elif kind != "world":
@@ -986,7 +985,7 @@ class Resolver:
                         raise ValidationError(
                             f"shape {field} must be finite", path=f"{base}.shape"
                         )
-            for feature in ("magnetic", "beam"):
+            for feature in ("magnetic",):
                 try:
                     axis = _axis_feature_values(type_, feature)
                 except (EvaluationError, TypeError, ValueError) as exc:
@@ -1076,16 +1075,25 @@ class Resolver:
         for object_name, object_ in _mapping_items(self._objects):
             base = f"objects.{object_name}"
             self._object_type(object_, path=f"{base}.type")
+            try:
+                beam = _axis_feature_values(object_, "beam")
+            except (EvaluationError, TypeError, ValueError) as exc:
+                raise ValidationError(str(exc), path=f"{base}.beam_center") from exc
+            if beam is not None:
+                center = beam[0]
+                if getattr(center, "reference", None) is not None:
+                    raise ValidationError(
+                        "object-local beam_center cannot have an explicit reference",
+                        path=f"{base}.beam_center.reference",
+                    )
+                self._validation_operations(_operations(center), f"{base}.beam_center.transformation")
             position = getattr(object_, "position", None)
             if position is None:
                 raise ValidationError(
                     "object requires a position", path=f"{base}.position"
                 )
             try:
-                self._type_frame_operations(
-                    self._object_type(object_, path=f"{base}.type"),
-                    getattr(position, "target", "center"),
-                )
+                self._object_frame_operations(object_, getattr(position, "target", "center"))
             except UnknownEntityError as exc:
                 raise DanglingReferenceError(
                     str(exc), path=f"{base}.position.target"
@@ -1433,7 +1441,7 @@ class Resolver:
 
         if frame == "center":
             return []
-        for feature in ("magnetic", "beam"):
+        for feature in ("magnetic",):
             if frame not in {
                 f"{feature}_center",
                 f"{feature}_entry",
@@ -1463,7 +1471,7 @@ class Resolver:
         curvature, roll = _type_path_values(type_)
         operations = self._type_frame_operations(type_, frame)
         center = apply_type_operations(identity_matrix(), operations, curvature, roll)
-        for feature in ("magnetic", "beam"):
+        for feature in ("magnetic",):
             if frame_name not in {f"{feature}_entry", f"{feature}_exit"}:
                 continue
             axis = _axis_feature_values(type_, feature)
@@ -1486,6 +1494,31 @@ class Resolver:
             resolved = self._resolve_type(type_)
             return _make_pose(self._type_frame_matrix(resolved, frame), "type_local")
 
+    def _object_beam_values(self, object_: Any) -> tuple[Any, float, float, float] | None:
+        explicit = _axis_feature_values(object_, "beam")
+        return explicit if explicit is not None else _axis_feature_values(self._object_type(object_), "magnetic")
+
+    def _object_frame_operations(self, object_: Any, frame: Any) -> list[tuple[str, float]]:
+        if isinstance(frame, str) and frame in {"beam_center", "beam_entry", "beam_exit"}:
+            axis = self._object_beam_values(object_)
+            if axis is None:
+                raise UnknownEntityError("object has no beam interface or magnetic axis to inherit")
+            return [_operation_parts(operation) for operation in _operations(axis[0])]
+        return self._type_frame_operations(self._object_type(object_), frame)
+
+    def _object_local_frame_matrix(self, object_: Any, frame: Any) -> FloatMatrix:
+        type_ = self._object_type(object_)
+        if isinstance(frame, str) and frame in {"beam_center", "beam_entry", "beam_exit"}:
+            operations = self._object_frame_operations(object_, frame)
+            curvature, roll = _type_path_values(type_)
+            center = apply_type_operations(identity_matrix(), operations, curvature, roll)
+            if frame == "beam_center":
+                return center
+            _, length, beam_curvature, beam_roll = self._object_beam_values(object_)
+            return advance(center, (-0.5 if frame == "beam_entry" else 0.5) * length,
+                           beam_curvature, beam_roll)
+        return self._type_frame_matrix(type_, frame)
+
     def _object_center_matrix(self, object_: Any) -> FloatMatrix:
         cached = self._object_centers.get(id(object_))
         if cached is not None:
@@ -1493,7 +1526,7 @@ class Resolver:
         name = self._name_for("object", object_)
         path = f"objects.{name}.position"
         with self._resolving(("object", name), path=path):
-            type_ = self._object_type(object_, path=f"objects.{name}.type")
+            self._object_type(object_, path=f"objects.{name}.type")
             position = getattr(object_, "position", None)
             if position is None:
                 raise EvaluationError("object has no position", path=path)
@@ -1504,7 +1537,7 @@ class Resolver:
                 path=path,
             )
             target = getattr(position, "target", "center")
-            target_local = self._type_frame_matrix(type_, target)
+            target_local = self._object_local_frame_matrix(object_, target)
             center = desired @ _rigid_inverse(target_local)
         self._object_centers[id(object_)] = center
         return center
@@ -1515,10 +1548,7 @@ class Resolver:
         center = self._object_center_matrix(object_)
         if frame is None or frame == "center":
             return center.copy()
-        type_ = self._object_type(
-            object_, path=f"objects.{self._name_for('object', object_)}.type"
-        )
-        return center @ self._type_frame_matrix(type_, frame)
+        return center @ self._object_local_frame_matrix(object_, frame)
 
     def object_frame(self, object_: Object | str, frame: Any = "center") -> Pose:
         """Return an object's world center or another named/implicit frame."""

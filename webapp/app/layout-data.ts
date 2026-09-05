@@ -49,14 +49,14 @@ export type LayoutType = {
   magnetic_length?: number;
   magnetic_curvature?: number;
   magnetic_roll?: number;
-  beam_center?: LocalTransformation;
-  beam_length?: number;
-  beam_curvature?: number;
-  beam_roll?: number;
   frames: Record<string, LocalTransformation>;
 };
 
 export type LayoutObject = {
+  beam_center?: LocalTransformation;
+  beam_length?: number;
+  beam_curvature?: number;
+  beam_roll?: number;
   type: string;
   position: ObjectPosition;
 };
@@ -132,8 +132,8 @@ export const NON_CURVE_TRANSFORM_NAMES: NonCurveTransformName[] = [
 ];
 
 // Center is present for every object. The magnetic and beam frames are derived
-// only when their complete optional feature is present. None of these names may
-// be stored in the frames mapping, even on a type that omits the feature.
+// when defined explicitly or (for objects) inherited from the magnetic axis. These names may not
+// be stored in the type frames mapping, even when the corresponding axis is absent.
 export const IMPLICIT_TYPE_FRAME_NAMES = [
   "center",
   "magnetic_center",
@@ -185,10 +185,6 @@ export const SAMPLE_LAYOUT: LayoutData = {
       magnetic_length: 1.4,
       magnetic_curvature: 0.22,
       magnetic_roll: 0,
-      beam_center: { transformation: [] },
-      beam_length: 1.4,
-      beam_curvature: 0.22,
-      beam_roll: 0,
       frames: {
         survey_mark: {
           transformation: [["tx", 0.45], ["ty", 0.35]],
@@ -202,10 +198,6 @@ export const SAMPLE_LAYOUT: LayoutData = {
       magnetic_length: 0.5,
       magnetic_curvature: 0,
       magnetic_roll: 0,
-      beam_center: { transformation: [] },
-      beam_length: 0.5,
-      beam_curvature: 0,
-      beam_roll: 0,
       frames: {},
     },
     detector: {
@@ -225,6 +217,10 @@ export const SAMPLE_LAYOUT: LayoutData = {
   objects: {
     QF1: {
       type: "quadrupole",
+      beam_center: { transformation: [] },
+      beam_length: 1.4,
+      beam_curvature: 0.22,
+      beam_roll: 0,
       position: {
         target: "center",
         reference: { kind: "curve", curve: "ring" },
@@ -299,11 +295,23 @@ export function hasMagneticFeature(type: LayoutType): boolean {
     type.magnetic_roll !== undefined;
 }
 
-export function hasBeamFeature(type: LayoutType): boolean {
-  return type.beam_center !== undefined &&
-    type.beam_length !== undefined &&
-    type.beam_curvature !== undefined &&
-    type.beam_roll !== undefined;
+export function hasBeamFeature(object: LayoutObject): boolean {
+  return object.beam_center !== undefined &&
+    object.beam_length !== undefined &&
+    object.beam_curvature !== undefined &&
+    object.beam_roll !== undefined;
+}
+
+export function effectiveBeamFeature(type: LayoutType, object: LayoutObject) {
+  if (hasBeamFeature(object)) return {
+    center: object.beam_center!, length: object.beam_length!,
+    curvature: object.beam_curvature!, roll: object.beam_roll!,
+  };
+  if (hasMagneticFeature(type)) return {
+    center: type.magnetic_center!, length: type.magnetic_length!,
+    curvature: type.magnetic_curvature!, roll: type.magnetic_roll!,
+  };
+  return undefined;
 }
 
 export function typeFrameNames(type: LayoutType): string[] {
@@ -311,10 +319,15 @@ export function typeFrameNames(type: LayoutType): string[] {
   if (hasMagneticFeature(type)) {
     implicit.push("magnetic_center", ...MAGNETIC_BOUNDARY_FRAME_NAMES);
   }
-  if (hasBeamFeature(type)) {
-    implicit.push("beam_center", ...BEAM_BOUNDARY_FRAME_NAMES);
-  }
   return [...implicit, ...Object.keys(type.frames)];
+}
+
+export function objectFrameNames(type: LayoutType, object: LayoutObject): string[] {
+  const names = typeFrameNames(type);
+  if (effectiveBeamFeature(type, object)) {
+    names.splice(hasMagneticFeature(type) ? 4 : 1, 0, "beam_center", ...BEAM_BOUNDARY_FRAME_NAMES);
+  }
+  return names;
 }
 
 export function hasTypeFrame(type: LayoutType, name: string): boolean {
@@ -706,15 +719,10 @@ export function parseLayout(value: unknown): LayoutData {
       "magnetic_length",
       "magnetic_curvature",
       "magnetic_roll",
-      "beam_center",
-      "beam_length",
-      "beam_curvature",
-      "beam_roll",
       "frames",
     ]);
     const label = `types.${name}`;
     const magnetic = parseOptionalAxisFeature(raw, label, "magnetic");
-    const beam = parseOptionalAxisFeature(raw, label, "beam");
     const frames: Record<string, LocalTransformation> = {};
     if (!isRecord(raw.frames)) {
       throw new Error(`types.${name}.frames must be an object`);
@@ -746,14 +754,6 @@ export function parseLayout(value: unknown): LayoutData {
             magnetic_roll: magnetic.roll,
           }
         : {}),
-      ...(beam
-        ? {
-            beam_center: beam.center,
-            beam_length: beam.length,
-            beam_curvature: beam.curvature,
-            beam_roll: beam.roll,
-          }
-        : {}),
       frames,
     });
   }
@@ -763,12 +763,21 @@ export function parseLayout(value: unknown): LayoutData {
     if (!name || !isRecord(raw) || typeof raw.type !== "string" || !raw.type) {
       throw new Error(`Invalid object ${name || "<unnamed>"}`);
     }
-    assertOnlyKeys(raw, `objects.${name}`, ["type", "position"]);
+    assertOnlyKeys(raw, `objects.${name}`, ["type", "position", "beam_center", "beam_length", "beam_curvature", "beam_roll"]);
+    const beam = parseOptionalAxisFeature(raw, `objects.${name}`, "beam");
     if (!hasOwn(types, raw.type)) {
       throw new Error(`objects.${name} references unknown type ${raw.type}`);
     }
     defineDictionaryEntry(objects, name, {
       type: raw.type,
+      ...(beam
+        ? {
+            beam_center: beam.center,
+            beam_length: beam.length,
+            beam_curvature: beam.curvature,
+            beam_roll: beam.roll,
+          }
+        : {}),
       position: parseObjectPosition(raw.position, `objects.${name}.position`),
     });
   }
@@ -776,7 +785,7 @@ export function parseLayout(value: unknown): LayoutData {
 
   for (const [name, object] of Object.entries(objects)) {
     const target = object.position.target;
-    if (!hasTypeFrame(types[object.type], target)) {
+    if (!objectFrameNames(types[object.type], object).includes(target)) {
       throw new Error(
         `objects.${name}.position.target references unknown frame ${object.type}.${target}`,
       );
@@ -798,7 +807,7 @@ export function parseLayout(value: unknown): LayoutData {
       }
       const targetType = types[objects[reference.object].type];
       if (
-        !hasTypeFrame(targetType, reference.frame)
+        !objectFrameNames(targetType, objects[reference.object]).includes(reference.frame)
       ) {
         throw new Error(`${label} references unknown frame ${reference.object}.${reference.frame}`);
       }

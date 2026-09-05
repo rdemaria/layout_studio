@@ -35,12 +35,6 @@ def canonical_layout_dict() -> dict[str, object]:
                 "magnetic_length": 1.5,
                 "magnetic_curvature": 0.2,
                 "magnetic_roll": 0.15,
-                "beam_center": {
-                    "transformation": [["ty", -0.1], ["ts", 0.2]],
-                },
-                "beam_length": 1.2,
-                "beam_curvature": -0.1,
-                "beam_roll": -0.25,
                 "frames": {
                     "survey": {
                         "transformation": [["ts", 0.25], ["rx", 0.1]],
@@ -51,6 +45,12 @@ def canonical_layout_dict() -> dict[str, object]:
         "objects": {
             "Q1": {
                 "type": "magnet",
+                "beam_center": {
+                    "transformation": [["ty", -0.1], ["ts", 0.2]],
+                },
+                "beam_length": 1.2,
+                "beam_curvature": -0.1,
+                "beam_roll": -0.25,
                 "position": {
                     "target": "center",
                     "reference": {"kind": "curve", "curve": "main"},

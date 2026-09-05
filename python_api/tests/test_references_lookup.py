@@ -232,22 +232,22 @@ def test_optional_axis_removal_is_rejected_while_used_as_a_target():
     type_ = layout.new_type(
         "beam_type",
         color="#445566",
+    )
+    object_ = layout.new_object(
+        "B1",
+        type=type_,
+        position=Position("world", target="beam_entry"),
         beam_center=Frame(),
         beam_length=1.0,
         beam_curvature=0.0,
         beam_roll=0.0,
     )
-    layout.new_object(
-        "B1",
-        type=type_,
-        position=Position("world", target="beam_entry"),
-    )
 
     with pytest.raises(ReferenceInUseError):
-        type_.remove_beam_axis()
+        object_.remove_beam_axis()
 
-    assert "beam_entry" in type_.implicit_frames
-    assert type_.beam_center is not None
+    assert "beam_entry" in object_.implicit_frames
+    assert object_.beam_center is not None
 
 
 def test_foreign_layout_instances_are_rejected():

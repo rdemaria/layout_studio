@@ -326,9 +326,8 @@ def test_implicit_axis_frames_exist_only_for_configured_features():
         magnetic_curvature=0.0,
         magnetic_roll=0.0,
     )
-    beam = layout.new_type(
-        "beam",
-        color="#334455",
+    beam = layout.new_object(
+        "beam", type=bare, position=Position("world"),
         beam_center=Frame().ty(0.3),
         beam_length=1.5,
         beam_curvature=0.0,
@@ -381,12 +380,14 @@ def test_magnetic_and_beam_boundaries_follow_their_own_axes():
         magnetic_length=math.pi,
         magnetic_curvature=1.0,
         magnetic_roll=0.0,
+    )
+
+    object_ = layout.new_object("A", type=type_, position=Position("world"),
         beam_center=Frame().ty(0.3),
         beam_length=math.pi,
         beam_curvature=1.0,
         beam_roll=math.pi / 2.0,
     )
-
     assert_pose(
         type_.get_frame("magnetic_entry"),
         origin=[-0.8, 0.0, -1.0],
@@ -398,12 +399,12 @@ def test_magnetic_and_beam_boundaries_follow_their_own_axes():
         tangent=[-1.0, 0.0, 0.0],
     )
     assert_pose(
-        type_.get_frame("beam_entry"),
+        object_.get_frame("beam_entry"),
         origin=[0.0, -0.7, -1.0],
         tangent=[0.0, 1.0, 0.0],
     )
     assert_pose(
-        type_.get_frame("beam_exit"),
+        object_.get_frame("beam_exit"),
         origin=[0.0, -0.7, 1.0],
         tangent=[0.0, -1.0, 0.0],
     )

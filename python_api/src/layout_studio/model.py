@@ -1694,10 +1694,6 @@ class Type(OwnedValue):
         magnetic_length: float | None = None,
         magnetic_curvature: float | None = None,
         magnetic_roll: float | None = None,
-        beam_center: Frame | None = None,
-        beam_length: float | None = None,
-        beam_curvature: float | None = None,
-        beam_roll: float | None = None,
         frames: Mapping[str, Frame] | None = None,
     ) -> None:
         super().__init__()
@@ -1710,13 +1706,6 @@ class Type(OwnedValue):
             magnetic_curvature,
             magnetic_roll,
         )
-        beam = self._prepare_axis_feature(
-            "beam",
-            beam_center,
-            beam_length,
-            beam_curvature,
-            beam_roll,
-        )
         if frames is not None and not isinstance(frames, Mapping):
             raise TypeError("frames must be a mapping of names to Frame instances")
         frame_values = list((frames or {}).items())
@@ -1724,7 +1713,7 @@ class Type(OwnedValue):
             self._check_frame_name(frame_name)
             self._prepare_local_frame(frame, f"frame {frame_name!r}")
         all_frames = [
-            *(center for center in (magnetic[0], beam[0]) if center is not None),
+            *(center for center in (magnetic[0],) if center is not None),
             *(frame for _, frame in frame_values),
         ]
         if len({id(frame) for frame in all_frames}) != len(all_frames):
@@ -1733,8 +1722,6 @@ class Type(OwnedValue):
             )
         if magnetic[0] is not None:
             magnetic[0]._attach(self)
-        if beam[0] is not None:
-            beam[0]._attach(self)
         self._shape = shape_value
         self._color = color_value
         (
@@ -1743,12 +1730,6 @@ class Type(OwnedValue):
             self._magnetic_curvature,
             self._magnetic_roll,
         ) = magnetic
-        (
-            self._beam_center,
-            self._beam_length,
-            self._beam_curvature,
-            self._beam_roll,
-        ) = beam
         self._frames: EntityMap[Frame] = EntityMap(self, "frame")
         for frame_name, frame in frame_values:
             frame._attach(self, frame_name)
@@ -1761,7 +1742,7 @@ class Type(OwnedValue):
         if value.is_owned:
             raise AttachmentError(f"{label} already has an owner")
         if value.reference is not None:
-            raise _fail(f"{label} is type-local and cannot have an explicit reference")
+            raise _fail(f"{label} is local and cannot have an explicit reference")
         return value
 
     @classmethod
@@ -1804,8 +1785,6 @@ class Type(OwnedValue):
         result = {"center"}
         if self.magnetic_center is not None:
             result.update(("magnetic_center", "magnetic_entry", "magnetic_exit"))
-        if self.beam_center is not None:
-            result.update(("beam_center", "beam_entry", "beam_exit"))
         return frozenset(result)
 
     @property
@@ -1857,38 +1836,6 @@ class Type(OwnedValue):
         self.set(magnetic_roll=value)
 
     @property
-    def beam_center(self) -> Frame | None:
-        return self._beam_center
-
-    @beam_center.setter
-    def beam_center(self, value: Frame | None) -> None:
-        self.set(beam_center=value)
-
-    @property
-    def beam_length(self) -> float | None:
-        return self._beam_length
-
-    @beam_length.setter
-    def beam_length(self, value: float | None) -> None:
-        self.set(beam_length=value)
-
-    @property
-    def beam_curvature(self) -> float | None:
-        return self._beam_curvature
-
-    @beam_curvature.setter
-    def beam_curvature(self, value: float | None) -> None:
-        self.set(beam_curvature=value)
-
-    @property
-    def beam_roll(self) -> float | None:
-        return self._beam_roll
-
-    @beam_roll.setter
-    def beam_roll(self, value: float | None) -> None:
-        self.set(beam_roll=value)
-
-    @property
     def frames(self) -> EntityMap[Frame]:
         return self._frames
 
@@ -1903,17 +1850,13 @@ class Type(OwnedValue):
                 "magnetic_length",
                 "magnetic_curvature",
                 "magnetic_roll",
-                "beam_center",
-                "beam_length",
-                "beam_curvature",
-                "beam_roll",
             ),
         )
         frames = mapping["frames"]
         if not isinstance(frames, Mapping):
             raise _fail("frames must be a JSON object")
 
-        for feature in ("magnetic", "beam"):
+        for feature in ("magnetic",):
             keys = tuple(
                 f"{feature}_{field}"
                 for field in ("center", "length", "curvature", "roll")
@@ -1941,14 +1884,6 @@ class Type(OwnedValue):
             magnetic_length=mapping.get("magnetic_length"),  # type: ignore[arg-type]
             magnetic_curvature=mapping.get("magnetic_curvature"),  # type: ignore[arg-type]
             magnetic_roll=mapping.get("magnetic_roll"),  # type: ignore[arg-type]
-            beam_center=(
-                Frame.from_dict(mapping["beam_center"])
-                if "beam_center" in mapping
-                else None
-            ),
-            beam_length=mapping.get("beam_length"),  # type: ignore[arg-type]
-            beam_curvature=mapping.get("beam_curvature"),  # type: ignore[arg-type]
-            beam_roll=mapping.get("beam_roll"),  # type: ignore[arg-type]
             frames={
                 _name(frame_name, "frame name"): Frame.from_dict(frame_value)
                 for frame_name, frame_value in frames.items()
@@ -1971,15 +1906,6 @@ class Type(OwnedValue):
                     "magnetic_roll": self.magnetic_roll,
                 }
             )
-        if self.beam_center is not None:
-            result.update(
-                {
-                    "beam_center": self.beam_center.to_dict(),
-                    "beam_length": self.beam_length,
-                    "beam_curvature": self.beam_curvature,
-                    "beam_roll": self.beam_roll,
-                }
-            )
         return result
 
     def set(self, **changes: object) -> Type:
@@ -1990,10 +1916,6 @@ class Type(OwnedValue):
             "magnetic_length",
             "magnetic_curvature",
             "magnetic_roll",
-            "beam_center",
-            "beam_length",
-            "beam_curvature",
-            "beam_roll",
         }
         unexpected = set(changes) - allowed
         if unexpected:
@@ -2014,16 +1936,8 @@ class Type(OwnedValue):
             changes.get("magnetic_roll", self.magnetic_roll),
             current_center=self.magnetic_center,
         )
-        beam = self._prepare_axis_feature(
-            "beam",
-            changes.get("beam_center", self.beam_center),
-            changes.get("beam_length", self.beam_length),
-            changes.get("beam_curvature", self.beam_curvature),
-            changes.get("beam_roll", self.beam_roll),
-            current_center=self.beam_center,
-        )
         all_frames = [
-            *(center for center in (magnetic[0], beam[0]) if center is not None),
+            *(center for center in (magnetic[0],) if center is not None),
             *self.frames.values(),
         ]
         if len({id(frame) for frame in all_frames}) != len(all_frames):
@@ -2034,12 +1948,8 @@ class Type(OwnedValue):
             if self.magnetic_center is not None and magnetic[0] is None:
                 layout._ensure_implicit_frames_not_in_use(
                     self,
-                    {"magnetic_center", "magnetic_entry", "magnetic_exit"},
-                )
-            if self.beam_center is not None and beam[0] is None:
-                layout._ensure_implicit_frames_not_in_use(
-                    self,
-                    {"beam_center", "beam_entry", "beam_exit"},
+                    {"magnetic_center", "magnetic_entry", "magnetic_exit",
+                     "beam_center", "beam_entry", "beam_exit"},
                 )
 
         if magnetic[0] is not self.magnetic_center:
@@ -2047,11 +1957,6 @@ class Type(OwnedValue):
                 self.magnetic_center._detach(self)
             if magnetic[0] is not None:
                 magnetic[0]._attach(self)
-        if beam[0] is not self.beam_center:
-            if self.beam_center is not None:
-                self.beam_center._detach(self)
-            if beam[0] is not None:
-                beam[0]._attach(self)
         self._shape = shape
         self._color = color
         (
@@ -2060,12 +1965,6 @@ class Type(OwnedValue):
             self._magnetic_curvature,
             self._magnetic_roll,
         ) = magnetic
-        (
-            self._beam_center,
-            self._beam_length,
-            self._beam_curvature,
-            self._beam_roll,
-        ) = beam
         return self
 
     def set_shape(self, shape: Box | Cylinder | None) -> Type:
@@ -2117,49 +2016,6 @@ class Type(OwnedValue):
             magnetic_length=None,
             magnetic_curvature=None,
             magnetic_roll=None,
-        )
-
-    def set_beam_axis(
-        self,
-        *,
-        center: Frame | None = None,
-        length: float | None = None,
-        curvature: float | None = None,
-        roll: float | None = None,
-    ) -> Type:
-        if self.beam_center is None and length is None:
-            raise TypeError("length is required when creating a beam axis")
-        return self.set(
-            beam_center=(
-                center
-                if center is not None
-                else self.beam_center
-                if self.beam_center is not None
-                else Frame()
-            ),
-            beam_length=length if length is not None else self.beam_length,
-            beam_curvature=(
-                curvature
-                if curvature is not None
-                else self.beam_curvature
-                if self.beam_curvature is not None
-                else 0.0
-            ),
-            beam_roll=(
-                roll
-                if roll is not None
-                else self.beam_roll
-                if self.beam_roll is not None
-                else 0.0
-            ),
-        )
-
-    def remove_beam_axis(self) -> Type:
-        return self.set(
-            beam_center=None,
-            beam_length=None,
-            beam_curvature=None,
-            beam_roll=None,
         )
 
     def new_frame(
@@ -2254,10 +2110,6 @@ class Type(OwnedValue):
             magnetic_length=self.magnetic_length,
             magnetic_curvature=self.magnetic_curvature,
             magnetic_roll=self.magnetic_roll,
-            beam_center=None if self.beam_center is None else self.beam_center.clone(),
-            beam_length=self.beam_length,
-            beam_curvature=self.beam_curvature,
-            beam_roll=self.beam_roll,
             frames={name: frame.clone() for name, frame in self.frames.items()},
         )
 
@@ -2275,14 +2127,28 @@ class Type(OwnedValue):
 class Object(OwnedValue):
     """One positioned instance of a reusable :class:`Type`."""
 
-    def __init__(self, *, type: str | Type, position: Position) -> None:
+    def __init__(
+        self, *, type: str | Type, position: Position,
+        beam_center: Frame | None = None,
+        beam_length: float | None = None,
+        beam_curvature: float | None = None,
+        beam_roll: float | None = None,
+    ) -> None:
         super().__init__()
         type_value = self._prepare_type(type)
         if not isinstance(position, Position):
             raise TypeError("position must be a Position")
         if position.is_owned:
             raise AttachmentError("position already has an owner")
+        beam = Type._prepare_axis_feature(
+            "beam", beam_center, beam_length, beam_curvature, beam_roll,
+        )
+        if beam[0] is position.reference:
+            raise AttachmentError("beam_center and position reference must be distinct")
         position._attach(self)
+        if beam[0] is not None:
+            beam[0]._attach(self)
+        self._beam_center, self._beam_length, self._beam_curvature, self._beam_roll = beam
         self._type = type_value
         self._position = position
 
@@ -2311,6 +2177,61 @@ class Object(OwnedValue):
         return _link_name(self._type)
 
     @property
+    def beam_center(self) -> Frame | None:
+        return self._beam_center
+
+    @beam_center.setter
+    def beam_center(self, value: Frame | None) -> None:
+        self.set(beam_center=value)
+
+    @property
+    def beam_length(self) -> float | None:
+        return self._beam_length
+
+    @beam_length.setter
+    def beam_length(self, value: float | None) -> None:
+        self.set(beam_length=value)
+
+    @property
+    def beam_curvature(self) -> float | None:
+        return self._beam_curvature
+
+    @beam_curvature.setter
+    def beam_curvature(self, value: float | None) -> None:
+        self.set(beam_curvature=value)
+
+    @property
+    def beam_roll(self) -> float | None:
+        return self._beam_roll
+
+    @beam_roll.setter
+    def beam_roll(self, value: float | None) -> None:
+        self.set(beam_roll=value)
+
+    @property
+    def effective_beam_axis(self) -> tuple[Frame, float, float, float] | None:
+        """Resolved beam definition; omission follows the current magnetic axis.
+
+        The beam_* properties store only explicit object overrides. The fallback
+        retains the type's center Frame without copying or reparenting it.
+        """
+        source = self if self.beam_center is not None else self.type
+        prefix = "beam" if source is self else "magnetic"
+        center = getattr(source, f"{prefix}_center", None)
+        if center is None:
+            return None
+        return (center, getattr(source, f"{prefix}_length"),
+                getattr(source, f"{prefix}_curvature"), getattr(source, f"{prefix}_roll"))
+
+    @property
+    def implicit_frames(self) -> frozenset[str]:
+        type_value = self.type
+        result = set(type_value.implicit_frames) if isinstance(type_value, Type) else {"center"}
+        if self.effective_beam_axis is not None:
+            result.update(("beam_center", "beam_entry", "beam_exit"))
+        return frozenset(result)
+
+    @property
     def position(self) -> Position:
         return self._position
 
@@ -2320,10 +2241,22 @@ class Object(OwnedValue):
 
     @classmethod
     def from_dict(cls, dct: object) -> Object:
-        mapping = _mapping(dct, required=("type", "position"))
+        mapping = _mapping(dct, required=("type", "position"), optional=(
+            "beam_center", "beam_length", "beam_curvature", "beam_roll",
+        ))
+        keys = ("beam_center", "beam_length", "beam_curvature", "beam_roll")
+        present = [key in mapping for key in keys]
+        if any(present) and not all(present):
+            raise _fail(f"{', '.join(keys)} must be all present or all absent")
+        if all(present) and any(mapping[key] is None for key in keys):
+            raise _fail("beam axis fields cannot be null")
         return cls(
             type=_name(mapping["type"], "type name"),
             position=Position.from_dict(mapping["position"]),
+            beam_center=Frame.from_dict(mapping["beam_center"]) if "beam_center" in mapping else None,
+            beam_length=mapping.get("beam_length"),  # type: ignore[arg-type]
+            beam_curvature=mapping.get("beam_curvature"),  # type: ignore[arg-type]
+            beam_roll=mapping.get("beam_roll"),  # type: ignore[arg-type]
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -2332,10 +2265,18 @@ class Object(OwnedValue):
             raise DanglingReferenceError(
                 "an unnamed type reference cannot be serialized"
             )
-        return {"type": type_name, "position": self.position.to_dict()}
+        result = {"type": type_name, "position": self.position.to_dict()}
+        if self.beam_center is not None:
+            result.update({
+                "beam_center": self.beam_center.to_dict(),
+                "beam_length": self.beam_length,
+                "beam_curvature": self.beam_curvature,
+                "beam_roll": self.beam_roll,
+            })
+        return result
 
     def set(self, **changes: object) -> Object:
-        allowed = {"type", "position"}
+        allowed = {"type", "position", "beam_center", "beam_length", "beam_curvature", "beam_roll"}
         unexpected = set(changes) - allowed
         if unexpected:
             raise TypeError(
@@ -2351,7 +2292,28 @@ class Object(OwnedValue):
             raise TypeError("position must be a Position")
         if position is not self.position and position.is_owned:
             raise AttachmentError("position already has an owner")
+        beam = Type._prepare_axis_feature(
+            "beam", changes.get("beam_center", self.beam_center),
+            changes.get("beam_length", self.beam_length),
+            changes.get("beam_curvature", self.beam_curvature),
+            changes.get("beam_roll", self.beam_roll), current_center=self.beam_center,
+        )
         _check_link_for_owner(type_value, self)
+        if self.layout is not None:
+            self.layout._check_foreign_links(position)
+            candidate_type = self.layout.types.get(type_value) if isinstance(type_value, str) else type_value
+            if (self.effective_beam_axis is not None and beam[0] is None
+                    and getattr(candidate_type, "magnetic_center", None) is None):
+                self.layout._ensure_implicit_frames_not_in_use(
+                    self, {"beam_center", "beam_entry", "beam_exit"},
+                    replacement_position=position,
+                )
+        if beam[0] is not self.beam_center:
+            if self.beam_center is not None:
+                self.beam_center._detach(self)
+            if beam[0] is not None:
+                beam[0]._attach(self)
+        self._beam_center, self._beam_length, self._beam_curvature, self._beam_roll = beam
         if position is not self.position:
             if self.layout is not None:
                 self.layout._check_foreign_links(position)
@@ -2360,6 +2322,36 @@ class Object(OwnedValue):
             self._position = position
         self._type = type_value
         return self
+
+    def set_beam_axis(
+        self,
+        *,
+        center: Frame | None = None,
+        length: float | None = None,
+        curvature: float | None = None,
+        roll: float | None = None,
+    ) -> Object:
+        inherited = self.effective_beam_axis
+        if inherited is None and length is None:
+            raise TypeError("length is required when creating a beam axis")
+        base_center, base_length, base_curvature, base_roll = inherited or (None, None, 0.0, 0.0)
+        return self.set(
+            beam_center=(center if center is not None else self.beam_center
+                         if self.beam_center is not None else base_center.clone()
+                         if base_center is not None else Frame()),
+            beam_length=length if length is not None else base_length,
+            beam_curvature=curvature if curvature is not None else base_curvature,
+            beam_roll=roll if roll is not None else base_roll,
+        )
+
+    def remove_beam_axis(self) -> Object:
+        """Clear the object override, restoring magnetic-axis inheritance."""
+        return self.set(
+            beam_center=None,
+            beam_length=None,
+            beam_curvature=None,
+            beam_roll=None,
+        )
 
     def set_type(self, type: str | Type) -> Object:
         return self.set(type=type)
@@ -2421,6 +2413,10 @@ class Object(OwnedValue):
         return Object(
             type=_clone_link(self._type),  # type: ignore[arg-type]
             position=self.position.clone(),
+            beam_center=self.beam_center.clone() if self.beam_center is not None else None,
+            beam_length=self.beam_length,
+            beam_curvature=self.beam_curvature,
+            beam_roll=self.beam_roll,
         )
 
     def __repr__(self) -> str:
@@ -2563,9 +2559,11 @@ class Layout(JsonValue):
         self._add_root("type", name, type_)
         return type_
 
-    def new_object(self, name: str, type: str | Type, position: Position) -> Object:
+    def new_object(
+        self, name: str, type: str | Type, position: Position, **attributes: object,
+    ) -> Object:
         name = self._require_available_name("object", name)
-        return self.add_object(name, Object(type=type, position=position))
+        return self.add_object(name, Object(type=type, position=position, **attributes))  # type: ignore[arg-type]
 
     def add_object(self, name: str, object_: Object) -> Object:
         self._add_root("object", name, object_)
@@ -2834,7 +2832,7 @@ class Layout(JsonValue):
     ) -> str | Frame:
         type_value = self._resolve_type(obj._type, f"objects.{obj.name}.type")
         if isinstance(value, str):
-            if value in type_value.implicit_frames:
+            if value in obj.implicit_frames:
                 return value
             if value not in type_value.frames:
                 raise DanglingReferenceError(
@@ -2874,7 +2872,7 @@ class Layout(JsonValue):
         if type_local:
             if frame.reference is not None:
                 raise ValidationError(
-                    "type-local frame cannot have a reference", path=f"{path}.reference"
+                    "local frame cannot have a reference", path=f"{path}.reference"
                 )
             return None
         if frame.reference is None:
@@ -2918,17 +2916,8 @@ class Layout(JsonValue):
                 type_value.magnetic_roll,
                 current_center=type_value.magnetic_center,
             )
-            Type._prepare_axis_feature(
-                "beam",
-                type_value.beam_center,
-                type_value.beam_length,
-                type_value.beam_curvature,
-                type_value.beam_roll,
-                current_center=type_value.beam_center,
-            )
             for feature, center in (
                 ("magnetic", type_value.magnetic_center),
-                ("beam", type_value.beam_center),
             ):
                 if center is not None:
                     self._validate_frame(
@@ -2946,6 +2935,16 @@ class Layout(JsonValue):
                     type_local=True,
                 )
         for object_name, object_value in self.objects.items():
+            Type._prepare_axis_feature(
+                "beam", object_value.beam_center, object_value.beam_length,
+                object_value.beam_curvature, object_value.beam_roll,
+                current_center=object_value.beam_center,
+            )
+            if object_value.beam_center is not None:
+                self._validate_frame(
+                    object_value.beam_center, f"objects.{object_name}.beam_center",
+                    require_reference=False, type_local=True,
+                )
             node = ("object", object_name)
             dependencies[node] = []
             type_value = self._resolve_type(
@@ -2981,7 +2980,7 @@ class Layout(JsonValue):
                         path=f"objects.{object_name}.position.target",
                     )
             elif (
-                target_name not in type_value.implicit_frames
+                target_name not in object_value.implicit_frames
                 and target_name not in type_value.frames
             ):
                 raise DanglingReferenceError(
@@ -3041,12 +3040,12 @@ class Layout(JsonValue):
         for type_value in self.types.values():
             if type_value.magnetic_center is not None:
                 yield type_value, type_value.magnetic_center
-            if type_value.beam_center is not None:
-                yield type_value, type_value.beam_center
             for frame in type_value.frames.values():
                 yield type_value, frame
         for object_value in self.objects.values():
             yield object_value, object_value.position.reference
+            if object_value.beam_center is not None:
+                yield object_value, object_value.beam_center
 
     def _check_foreign_links(self, value: object) -> None:
         def check_link(link: object) -> None:
@@ -3071,11 +3070,11 @@ class Layout(JsonValue):
         elif isinstance(value, Object):
             check_link(value._type)
             self._check_foreign_links(value.position)
+            if value.beam_center is not None:
+                self._check_foreign_links(value.beam_center)
         elif isinstance(value, Type):
             if value.magnetic_center is not None:
                 self._check_foreign_links(value.magnetic_center)
-            if value.beam_center is not None:
-                self._check_foreign_links(value.beam_center)
             for frame in value.frames.values():
                 self._check_foreign_links(frame)
         else:
@@ -3151,35 +3150,41 @@ class Layout(JsonValue):
                 )
 
     def _ensure_implicit_frames_not_in_use(
-        self, type_value: Type, frame_names: set[str]
+        self, owner: Type | Object, frame_names: set[str], *,
+        replacement_position: Position | None = None,
     ) -> None:
-        for structural_root, candidate in self._iter_frames():
+        def affected(obj: Object, name: str) -> bool:
+            if name not in frame_names:
+                return False
+            if isinstance(owner, Object):
+                return obj is owner
+            try:
+                if self._resolve_type(obj._type, "object.type") is not owner:
+                    return False
+            except (DanglingReferenceError, ForeignLayoutError):
+                return False
+            # Removing a type's magnetic axis only removes inherited beam frames.
+            return not (name.startswith("beam_") and obj.beam_center is not None)
+
+        for _, candidate in self._iter_frames():
             reference = candidate.reference
             if not isinstance(reference, ObjectReference):
                 continue
+            if isinstance(owner, Object) and replacement_position is not None and candidate is owner.position.reference:
+                reference = replacement_position.reference.reference
+                if not isinstance(reference, ObjectReference):
+                    continue
             try:
                 obj = self._resolve_object(reference._object, "reference.object")
-                obj_type = self._resolve_type(obj._type, f"objects.{obj.name}.type")
             except (DanglingReferenceError, ForeignLayoutError):
                 continue
-            if (
-                obj_type is type_value
-                and isinstance(reference._frame, str)
-                and reference._frame in frame_names
-            ):
-                raise ReferenceInUseError(
-                    f"frame {reference._frame!r} is still referenced"
-                )
+            if isinstance(reference._frame, str) and affected(obj, reference._frame):
+                raise ReferenceInUseError(f"frame {reference._frame!r} is still referenced")
         for object_value in self.objects.values():
-            try:
-                obj_type = self._resolve_type(object_value._type, "object.type")
-            except (DanglingReferenceError, ForeignLayoutError):
-                continue
-            target = object_value.position._target
-            if obj_type is type_value and isinstance(target, str) and target in frame_names:
-                raise ReferenceInUseError(
-                    f"frame {target!r} is used as a position target"
-                )
+            position = replacement_position if object_value is owner and replacement_position is not None else object_value.position
+            target = position._target
+            if isinstance(target, str) and affected(object_value, target):
+                raise ReferenceInUseError(f"frame {target!r} is used as a position target")
 
     def _rewrite_root_name(
         self,

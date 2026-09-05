@@ -25,15 +25,15 @@ def populated_layout():
         magnetic_length=0.8,
         magnetic_curvature=0.0,
         magnetic_roll=0.0,
-        beam_center=Frame(),
-        beam_length=0.6,
-        beam_curvature=0.0,
-        beam_roll=0.0,
     )
     object_ = layout.new_object(
         "Q1",
         type=type_,
         position=Position(curve).ts(2.0),
+        beam_center=Frame(),
+        beam_length=0.6,
+        beam_curvature=0.0,
+        beam_roll=0.0,
     )
     return layout, curve, object_
 

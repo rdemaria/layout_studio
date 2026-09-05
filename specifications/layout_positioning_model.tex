@@ -77,9 +77,10 @@ The model separates three concerns:
   \item A \emph{reference curve} supplies a stable spatial path and a frame at
         every path coordinate.
   \item A \emph{type} owns optional reusable mechanical geometry, optional
-        magnetic and beam-interface axes, and named local frames.
-  \item An \emph{object} is an instance of a type.  It owns only its type name
-        and a positioning rule.
+        magnetic geometry, and named local frames.
+  \item An \emph{object} is an instance of a type.  It owns its type name,
+        a positioning rule, and an optional beam-interface definition.
+        Without an explicit beam interface it uses the type's magnetic axis.
 \end{itemize}
 
 This separation permits many physical instances to share one type while being
@@ -283,10 +284,6 @@ A type is a reusable definition:
   "magnetic_length": <optional positive number>,
   "magnetic_curvature": <optional finite number>,
   "magnetic_roll": <optional finite number>,
-  "beam_center": <optional local transformation>,
-  "beam_length": <optional positive number>,
-  "beam_curvature": <optional finite number>,
-  "beam_roll": <optional finite number>,
   "frames": {
     "name": {"transformation": [...]}
   }
@@ -303,13 +300,12 @@ bend-plane roll.  The type's center frame is at local path coordinate zero, so
 the physical shape spans $[-d_z/2,d_z/2]$ along its curved centerline.
 
 The four magnetic fields form one optional group: either all four are present
-or all four are absent.  The four beam fields form a second independent
-optional group with the same all-or-none rule.  The transformations in
-\texttt{magnetic\_center}, \texttt{beam\_center}, and \texttt{frames} have no
-explicit reference: their implicit reference is the type center.  An absent
-group contributes no implicit frames.  An absent shape or feature group is
-represented by omitted JSON members; explicit \texttt{null} values are
-invalid.
+or all four are absent. The transformations in \texttt{magnetic\_center} and
+\texttt{frames} have no explicit reference: their implicit reference is the
+type center. An absent magnetic group contributes no magnetic frames. An
+absent shape or feature group is represented by omitted JSON members;
+explicit \texttt{null} values are invalid. Beam-interface fields are not
+permitted on types.
 
 Stored frame names may not use any reserved implicit frame name, whether or
 not the corresponding optional group is present:
@@ -326,21 +322,47 @@ not the corresponding optional group is present:
 \end{equation}
 The frame \texttt{center} always exists.  The three \texttt{magnetic\_*}
 frames exist exactly when the magnetic group is present; the three
-\texttt{beam\_*} frames exist exactly when the beam group is present.
+\texttt{beam\_*} frames belong to objects and exist when an explicit object
+beam group or an inherited magnetic axis is available. A type-level frame
+query has no beam frames.
 
 \subsection{Objects}
 
-An object contains only a type name and an object position:
+An object contains a type name, an object position, and an optional beam
+interface:
 \begin{lstlisting}
 {
   "type": "typeName",
-  "position": <object position>
+  "position": <object position>,
+  "beam_center": <optional local transformation>,
+  "beam_length": <optional positive number>,
+  "beam_curvature": <optional finite number>,
+  "beam_roll": <optional finite number>
 }
 \end{lstlisting}
-Shape, color, magnetic and beam-interface data, and named local frames belong
-to the type, not to the instance.  Any number of objects may instantiate the
-same type.  A type with no shape, no magnetic group, no beam group, and no
-stored frames gives each instance only its implicit \texttt{center} frame.
+The four beam fields must be supplied together or omitted together; explicit
+\texttt{null} values and partial groups are invalid. The beam-center
+transformation has no explicit reference: it starts at the object's center.
+Its local \texttt{ts} operations use the type's mechanical path, just as for
+other local center transformations.
+
+If all four beam fields are omitted, the object's effective beam interface
+is the type's magnetic axis: its center transformation, length, curvature,
+and roll are identical. This is a dynamic default, not a copied definition;
+changing the magnetic axis also changes every inheriting object's interface.
+Serialization preserves the omission. An explicit object group completely
+overrides this default, and removing it restores inheritance. If both the
+object beam group and the type magnetic group are absent, no beam axis or
+beam frames exist.
+
+Shape, color, magnetic data, and stored named frames remain properties of the
+type. Objects sharing one type may have distinct beam interfaces. An object
+with no beam override whose type has no optional geometry or stored frames
+has only its implicit \texttt{center} frame.
+
+To migrate an older document with beam fields on a type, move the complete
+group to each object using that type and remove it from the type. The updated
+canonical format rejects beam fields on types.
 
 \section{Reference-curve geometry}
 \label{sec:curve-geometry}
@@ -450,7 +472,7 @@ The starting frame of a curve is obtained using the same rules.  It may refer
 to world, another curve, or a frame on an object.  Consequently, curves need
 not be rooted directly in world coordinates.
 
-\section{Type-local geometry, axes, and frames}
+\section{Local geometry, axes, and frames}
 \label{sec:type-local}
 
 \subsection{The mechanical path operator}
@@ -536,17 +558,18 @@ type center.  Its local frame is
 The reserved local center frame is
 $\Frame_{T.\mathrm{center}}=\identity$.
 
-For either optional feature $j\in\{m,b\}$, denoting magnetic and beam
-interface respectively, define its independent path operator by
+For feature $j\in\{m,b\}$, denoting the type magnetic axis and an object's
+effective beam interface respectively, define its path operator by
 \begin{equation}
-  \Path_{T,j}(\Frame,d)
+  \Path_j(\Frame,d)
   =\operatorname{Advance}(\Frame,d,\kappa_j d,\omega_j),
   \label{eq:feature-path}
 \end{equation}
-where $\ell_j>0$, $\kappa_j$, and $\omega_j$ are the feature's stored length,
-curvature, and roll.  These values are independent of the optional shape's
+where $\ell_j>0$, $\kappa_j$, and $\omega_j$ are the feature's effective
+length, curvature, and roll. Magnetic values belong to $T$; beam values belong
+to $O$ or are inherited from $T$.  These values are independent of the optional shape's
 mechanical path.  The finite feature axis is the locus of frame origins
-$\operatorname{origin}(\Path_{T,j}(\Frame_j,u))$ for
+$\operatorname{origin}(\Path_j(\Frame_j,u))$ for
 $-\ell_j/2\le u\le\ell_j/2$.
 
 Let $\ops_m$ be the magnetic-center transformation.  When the magnetic group
@@ -555,27 +578,36 @@ is present, its local frames are
   \Frame_{T.\mathrm{magnetic\_center}}
     &=\Apply_T(\identity,\ops_m),\\
   \Frame_{T.\mathrm{magnetic\_entry}}
-    &=\Path_{T,m}\!\left(
+    &=\Path_m\!\left(
        \Frame_{T.\mathrm{magnetic\_center}},-\ell_m/2\right),\\
   \Frame_{T.\mathrm{magnetic\_exit}}
-    &=\Path_{T,m}\!\left(
+    &=\Path_m\!\left(
        \Frame_{T.\mathrm{magnetic\_center}},+\ell_m/2\right).
   \label{eq:magnetic-frames}
 \end{align}
 
-Likewise, if $\ops_b$ is the beam-center transformation and the beam group is
-present,
+For object $O$ of type $T$, let $\ops_b$ be its effective beam-center
+transformation. Its beam frames, in object-local coordinates, are
 \begin{align}
-  \Frame_{T.\mathrm{beam\_center}}
+  \Frame_{O.\mathrm{beam\_center}}^{L}
     &=\Apply_T(\identity,\ops_b),\\
-  \Frame_{T.\mathrm{beam\_entry}}
-    &=\Path_{T,b}\!\left(
-       \Frame_{T.\mathrm{beam\_center}},-\ell_b/2\right),\\
-  \Frame_{T.\mathrm{beam\_exit}}
-    &=\Path_{T,b}\!\left(
-       \Frame_{T.\mathrm{beam\_center}},+\ell_b/2\right).
+  \Frame_{O.\mathrm{beam\_entry}}^{L}
+    &=\Path_b\!\left(
+       \Frame_{O.\mathrm{beam\_center}}^{L},-\ell_b/2\right),\\
+  \Frame_{O.\mathrm{beam\_exit}}^{L}
+    &=\Path_b\!\left(
+       \Frame_{O.\mathrm{beam\_center}}^{L},+\ell_b/2\right).
   \label{eq:beam-frames}
 \end{align}
+
+When the object beam group is omitted and the magnetic group exists,
+$\ops_b=\ops_m$ and $(\ell_b,\kappa_b,\omega_b)=(\ell_m,\kappa_m,\omega_m)$.
+Consequently, for $q\in\{\mathrm{center},\mathrm{entry},\mathrm{exit}\}$,
+\begin{equation}
+  \Frame_{O.\mathrm{beam\_}q}^{L}
+  =\Frame_{T.\mathrm{magnetic\_}q}.
+  \label{eq:beam-inheritance}
+\end{equation}
 
 The center transformations in these equations use $\Apply_T$ and therefore
 follow the mechanical type path for any \texttt{ts}, with the straight fallback
@@ -588,28 +620,31 @@ Each entry or exit plane passes through the corresponding origin and is
 spanned by its local $\mathbf{x}$ and $\mathbf{y}$ axes; its normal is the
 local tangent $\mathbf{t}$.  Neither feature length is required to equal or
 fit within the physical shape length.  The feature-center transformations may
-include offsets and rotations.  If a feature group is absent, none of its
-three frames or its finite axis exists.
+include offsets and rotations. An absent magnetic group removes its three
+magnetic frames. Beam frames and their finite axis exist exactly when the
+object has an explicit beam group or can inherit a magnetic group.
 
 \section{Object positioning by target alignment}
 \label{sec:object-alignment}
 
 Let object $O$ instantiate type $T$, and let its requested target frame be
-$a$ (for example \texttt{center}, \texttt{magnetic\_entry}, or a stored named
+$a$ (for example \texttt{center}, \texttt{magnetic\_entry}, \texttt{beam\_entry}, or a stored named
 frame).  First resolve the object's position specification to a desired world
-target frame $\Frame_D^W$.  Then obtain the target's complete type-local frame
-$\Frame_{T.a}$ using Section~\ref{sec:type-local}.  A conditional implicit
-frame is a valid target only when its feature group is present.
+target frame $\Frame_D^W$. Then obtain the target's complete object-local
+frame $\Frame_{O.a}^{L}$ using Section~\ref{sec:type-local}. For stored and
+magnetic frames this equals $\Frame_{T.a}$; beam frames use the object's
+effective interface. A conditional implicit frame is a valid target only
+when it exists, including through magnetic inheritance.
 
 The object center world frame is the unique frame satisfying, in homogeneous
 notation,
 \begin{equation}
-  [\Frame_O^W][\Frame_{T.a}]=[\Frame_D^W].
+  [\Frame_O^W][\Frame_{O.a}^{L}]=[\Frame_D^W].
   \label{eq:target-constraint}
 \end{equation}
 It is computed as
 \begin{equation}
-  \boxed{[\Frame_O^W]=[\Frame_D^W][\Frame_{T.a}]^{-1}}
+  \boxed{[\Frame_O^W]=[\Frame_D^W][\Frame_{O.a}^{L}]^{-1}}
   \label{eq:object-frame}
 \end{equation}
 This is the formal meaning of a statement such as ``place \texttt{B.start} at
@@ -619,10 +654,10 @@ determines the center of object $B$.
 
 Once the object center is known, the world frame of any local frame $f$ is
 \begin{equation}
-  \boxed{[\Frame_{O.f}^W]=[\Frame_O^W][\Frame_{T.f}]}
+  \boxed{[\Frame_{O.f}^W]=[\Frame_O^W][\Frame_{O.f}^{L}]}
   \label{eq:frame-world-frame}
 \end{equation}
-For a stored frame, $\Frame_{T.f}$ is given by
+For a stored frame, $\Frame_{O.f}^{L}=\Frame_{T.f}$ is given by
 Equation~\eqref{eq:named-local-frame}; for a feature frame it is given by
 Equation~\eqref{eq:magnetic-frames} or~\eqref{eq:beam-frames}.  If a shape is
 present, all its points follow from Equations~\eqref{eq:box-sweep} or
@@ -771,9 +806,9 @@ The following algorithm is normative at the semantic level.
 The following identities summarize the output of the algorithm:
 \begin{align}
   \text{object centre:}\quad
-  [\Frame_O^W]&=[\Frame_D^W][\Frame_{T.a}]^{-1},\\
+  [\Frame_O^W]&=[\Frame_D^W][\Frame_{O.a}^{L}]^{-1},\\
   \text{named frame:}\quad
-  [\Frame_{O.f}^W]&=[\Frame_O^W][\Frame_{T.f}],\\
+  [\Frame_{O.f}^W]&=[\Frame_O^W][\Frame_{O.f}^{L}],\\
   \text{world shape point:}\quad
   \begin{bmatrix}\mathbf{p}_W\\1\end{bmatrix}
   &=[\Frame_O^W]
@@ -795,7 +830,7 @@ A conforming reader rejects a layout when any of the following holds:
           &[\texttt{"cylinder"},r,d_z,\kappa,\omega];
         \end{align*}
   \item a color is not a six-digit hexadecimal color;
-  \item only some fields of the magnetic group or only some fields of the beam
+  \item only some fields of a type magnetic group or only some fields of an object beam
         group are present;
   \item a present shape, magnetic, or beam curvature or roll is not finite;
   \item a type, curve, object, stored frame, applicable implicit frame, or
@@ -846,7 +881,8 @@ authoritative pose.
 
 The following layout places \texttt{Q1.center} at $s=10$ m on a straight
 reference curve.  The reusable type has a mechanical shape, independent
-magnetic and beam-interface axes, and two stored local frames.  All three axes
+a magnetic axis and two stored local frames. The object inherits the magnetic
+axis as its beam interface. All three axes
 are straight in this compact example.
 
 \begin{lstlisting}
@@ -869,10 +905,6 @@ are straight in this compact example.
       "magnetic_length": 2.0,
       "magnetic_curvature": 0.0,
       "magnetic_roll": 0.0,
-      "beam_center": {"transformation": []},
-      "beam_length": 2.0,
-      "beam_curvature": 0.0,
-      "beam_roll": 0.0,
       "frames": {
         "start": {"transformation": [["ts", -1.0]]},
         "end":   {"transformation": [["ts",  1.0]]}

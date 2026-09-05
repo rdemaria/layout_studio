@@ -1,4 +1,4 @@
-# Layout Python API — contract revision 0.5
+# Layout Python API — contract revision 0.6
 
 Status: implemented public-interface contract. Geometry is evaluated
 analytically and interactive views use the Layout Studio browser application.
@@ -9,8 +9,8 @@ independently from the installable package.
 ## Conventions
 
 - Canonical JSON contains `reference_curves`, `types`, `objects`, type-local
-  `frames`, and `{kind: "object_frame", object, frame}`. Type shape, magnetic
-  axis, and beam-interface axis features are optional.
+  `frames`, and `{kind: "object_frame", object, frame}`. Type shape and magnetic
+  axis are optional; each object's beam interface defaults to its magnetic axis.
 - Python exposes `Layout.curves` as the shorter name for `reference_curves`.
 - Distances are in metres, rotations in radians, and curvature in m⁻¹.
 - `Frame` means an editable symbolic transformation. `Pose` means an immutable
@@ -176,7 +176,7 @@ class Layout(JsonValue):
     new_type(self, name: str, **attributes) -> Type
     add_type(self, name: str, type_: Type) -> Type
     new_object(
-        self, name: str, type: str | Type, position: Position
+        self, name: str, type: str | Type, position: Position, **attributes
     ) -> Object
     add_object(self, name: str, object_: Object) -> Object
     rename(
@@ -248,10 +248,6 @@ class Type(OwnedValue):
     magnetic_length: float | None
     magnetic_curvature: float | None
     magnetic_roll: float | None
-    beam_center: Frame | None
-    beam_length: float | None
-    beam_curvature: float | None
-    beam_roll: float | None
     implicit_frames: frozenset[str]          # center plus present feature frames
     frames: EntityMap[Frame]                 # stored named frames only
 
@@ -264,10 +260,6 @@ class Type(OwnedValue):
         magnetic_length=None,
         magnetic_curvature=None,
         magnetic_roll=None,
-        beam_center=None,
-        beam_length=None,
-        beam_curvature=None,
-        beam_roll=None,
         frames=None,
     )
     set(self, **changes) -> Self
@@ -278,11 +270,6 @@ class Type(OwnedValue):
         curvature: float | None = None, roll: float | None = None
     ) -> Self
     remove_magnetic_axis(self) -> Self
-    set_beam_axis(
-        self, *, center: Frame | None = None, length: float | None = None,
-        curvature: float | None = None, roll: float | None = None
-    ) -> Self
-    remove_beam_axis(self) -> Self
     new_frame(
         self,
         name: str,
@@ -300,9 +287,21 @@ class Object(OwnedValue):
     type: str | Type
     type_name: str | None                    # read-only serialized name
     position: Position
+    beam_center: Frame | None
+    beam_length: float | None
+    beam_curvature: float | None
+    beam_roll: float | None
+    effective_beam_axis: tuple[Frame, float, float, float] | None
+    implicit_frames: frozenset[str]          # includes inherited beam frames
 
-    __init__(self, *, type: str | Type, position: Position)
+    __init__(self, *, type: str | Type, position: Position,
+             beam_center=None, beam_length=None, beam_curvature=None, beam_roll=None)
     set(self, **changes) -> Self
+    set_beam_axis(
+        self, *, center: Frame | None = None, length: float | None = None,
+        curvature: float | None = None, roll: float | None = None
+    ) -> Self
+    remove_beam_axis(self) -> Self
     set_type(self, type: str | Type) -> Self
     set_position(self, position: Position) -> Self
     ref(self, frame: str | Frame = "center") -> ObjectReference
@@ -446,8 +445,8 @@ not encoded in strings, so forms such as `"curve:main@3.1"` are unsupported.
 7. A frame-instance `Position.target` must belong to the positioned object's
    type. A frame instance in `ObjectReference` must belong to the referenced
    object's type. Implicit frames are supplied by reserved string name, but a
-   magnetic or beam-interface name resolves only when that object's type has
-   the corresponding feature.
+   magnetic name requires the type's magnetic feature, while a beam-interface
+   name requires an object override or an inherited magnetic feature.
 8. Deserializing a `Layout` creates a bound graph. Deserializing an individual
    entity creates a detached value. An entity's `to_dict()` omits its registry
    name; `Layout.to_dict()` supplies the name-indexed canonical dictionaries.
@@ -488,23 +487,32 @@ snapshot or share one active resolver across threads.
 - `shape` is optional. When present, its `dz`, curvature, and roll define the
   mechanical swept geometry centered on `center`; without it the type has no
   rendered surface.
-- Magnetic and beam-interface axes are independent optional four-field groups:
-  center, positive length, finite curvature, and finite roll must be supplied
-  together or omitted together. Their entry and exit frames are evaluated at
-  `−length/2` and `+length/2` along their own axes, never along the mechanical
-  path.
-- The seven reserved implicit type-frame names are `center`,
-  `magnetic_center`, `magnetic_entry`, `magnetic_exit`, `beam_center`,
-  `beam_entry`, and `beam_exit`. `center` always resolves. Each other triplet
-  resolves only when its feature is present. All seven names remain forbidden
-  in `Type.frames`, even when the corresponding feature is absent.
-- `set_magnetic_axis()` and `set_beam_axis()` update an existing feature
-  partially. When creating an absent feature, `length` is required while the
-  center defaults to `Frame()` and curvature and roll default to zero. The
-  matching `remove_*_axis()` method removes the entire group atomically.
-- Canonical JSON omits `shape` when mechanical geometry is absent and omits all
-  four fields of an absent magnetic or beam group. It does not serialize these
-  fields as `null`. JSON containing only part of a group is rejected.
+- The magnetic axis is an optional type-level four-field group. The beam
+  interface is an optional object-level four-field group: center, positive
+  length, finite curvature, and finite roll are supplied or omitted together.
+  If the object omits its group, all four effective values follow the type's
+  magnetic axis dynamically. Without either group, beam frames do not exist.
+- Entry and exit are evaluated at `−length/2` and `+length/2` along the effective
+  feature axis. Center transformations use local mechanical-path `ts` semantics.
+- `Type.implicit_frames` contains `center` and the present magnetic triplet.
+  `Object.implicit_frames` additionally contains `beam_center`, `beam_entry`,
+  and `beam_exit` when explicit or inherited. All seven names remain forbidden
+  in `Type.frames`. Type-level queries do not resolve beam frames.
+- `Type.set_magnetic_axis()` updates the magnetic definition;
+  `Object.set_beam_axis()` creates or updates an explicit interface. Creating an
+  override from an inherited axis starts with a detached clone of that center
+  and the inherited numbers, then applies the supplied changes. With no axis
+  to inherit, `length` is required; center defaults to `Frame()`, curvature and
+  roll to zero. `Object.remove_beam_axis()` clears the override and restores the
+  magnetic fallback. Removing a last available frame is rejected while in use.
+- `Object.beam_*` stores the explicit values (`None` when omitted), while
+  `Object.effective_beam_axis` returns `(center, length, curvature, roll)` using
+  the current fallback, or `None` if neither axis exists. A fallback frame
+  retains its type owner; it is never reparented to an object.
+- Canonical JSON omits absent fields; no partial groups or explicit `null` values
+  are accepted. Inherited beam values are not materialized on serialization.
+  Older beam groups under `types` must be moved to their objects and removed
+  from the type. Readers reject the old placement of these fields.
 - Draft 0.1 deliberately omits `tz` and `rz`: `ts` is a path operation, `tt` is
   tangent translation, and longitudinal rotation is `rs`; a `tz` alias would
   hide this distinction.
@@ -540,10 +548,6 @@ quad = layout.new_type(
     magnetic_length=1.4,
     magnetic_curvature=0.22,
     magnetic_roll=0.0,
-    beam_center=Frame(),
-    beam_length=1.4,
-    beam_curvature=0.22,
-    beam_roll=0.0,
 )
 quad.new_frame("survey_mark").tx(0.4)
 

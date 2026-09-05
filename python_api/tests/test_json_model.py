@@ -13,6 +13,7 @@ from layout_studio import (
     Cylinder,
     Frame,
     Layout,
+    Object,
     Position,
     Segment,
     Type,
@@ -153,10 +154,6 @@ def test_type_without_optional_geometry_has_minimal_canonical_json():
     assert type_.magnetic_length is None
     assert type_.magnetic_curvature is None
     assert type_.magnetic_roll is None
-    assert type_.beam_center is None
-    assert type_.beam_length is None
-    assert type_.beam_curvature is None
-    assert type_.beam_roll is None
     assert type_.to_dict() == {"color": "#112233", "frames": {}}
     assert Type.from_dict(type_.to_dict()).to_dict() == type_.to_dict()
 
@@ -176,7 +173,7 @@ def test_type_without_optional_geometry_has_minimal_canonical_json():
 )
 def test_axis_features_are_flat_all_or_none_in_json(canonical_copy, missing):
     document = canonical_copy()
-    document["types"]["magnet"].pop(missing)
+    (document["objects"]["Q1"] if missing.startswith("beam_") else document["types"]["magnet"]).pop(missing)
 
     with pytest.raises(ValidationError, match="all|together|complete"):
         Layout.from_dict(document)
@@ -185,7 +182,7 @@ def test_axis_features_are_flat_all_or_none_in_json(canonical_copy, missing):
 @pytest.mark.parametrize("field", ["magnetic_roll", "beam_center"])
 def test_present_axis_feature_fields_cannot_be_null(canonical_copy, field):
     document = canonical_copy()
-    document["types"]["magnet"][field] = None
+    (document["objects"]["Q1"] if field.startswith("beam_") else document["types"]["magnet"])[field] = None
 
     with pytest.raises(ValidationError, match="null|all present"):
         Layout.from_dict(document)
@@ -207,7 +204,10 @@ def test_present_axis_feature_fields_cannot_be_null(canonical_copy, field):
 )
 def test_axis_features_are_flat_all_or_none_in_python(partial):
     with pytest.raises(ValidationError, match="all|together|complete"):
-        Type(color="#112233", **partial)
+        if next(iter(partial)).startswith("beam_"):
+            Object(type="magnet", position=Position("world"), **partial)
+        else:
+            Type(color="#112233", **partial)
 
 
 @pytest.mark.parametrize(
@@ -227,8 +227,8 @@ def test_axis_features_are_flat_all_or_none_in_python(partial):
             magnetic_curvature=0.0,
             magnetic_roll=0.0,
         ),
-        lambda: Type(
-            color="#112233",
+        lambda: Object(
+            type="magnet", position=Position("world"),
             beam_center=Frame(),
             beam_length=1.0,
             beam_curvature=math.nan,

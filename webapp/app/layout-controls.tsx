@@ -36,7 +36,7 @@ import type {
 import {
   NON_CURVE_TRANSFORM_NAMES,
   TRANSFORM_NAMES,
-  typeFrameNames,
+  objectFrameNames,
 } from "./layout-data";
 
 import { NumberInput } from "./number-input";
@@ -416,7 +416,7 @@ export function ReferenceEditor({
   );
   const frameNamesForObject = (objectName: string) => {
     const type = layout.types[layout.objects[objectName]?.type];
-    return type ? typeFrameNames(type) : ["center"];
+    return type ? objectFrameNames(type, layout.objects[objectName]) : ["center"];
   };
   const reference = value.reference;
   const referenceCurve = owner.kind === "object" ? value.reference_curve : undefined;

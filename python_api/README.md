@@ -43,10 +43,6 @@ quadrupole = layout.new_type(
     magnetic_length=1.4,
     magnetic_curvature=0.22,
     magnetic_roll=0.0,
-    beam_center=Frame(),
-    beam_length=1.4,
-    beam_curvature=0.22,
-    beam_roll=0.0,
 )
 quadrupole.new_frame("survey_mark").tx(0.4)
 
@@ -107,7 +103,7 @@ use GET and writes use PUT. A location ending in `.gz` is decompressed or
 compressed automatically; gzip-compressed byte input is also accepted through
 `text=...`.
 
-## Optional type geometry and axes
+## Optional geometry and object beam interfaces
 
 Every type and object always has an implicit `center` frame. All other physical
 features are optional:
@@ -116,24 +112,37 @@ features are optional:
   `dz`, curvature, and roll define its mechanical axis.
 - A magnetic axis exists only when `magnetic_center`, `magnetic_length`,
   `magnetic_curvature`, and `magnetic_roll` are all supplied.
-- A beam-interface axis exists only when `beam_center`, `beam_length`,
-  `beam_curvature`, and `beam_roll` are all supplied.
+- Each object may define `beam_center`, `beam_length`, `beam_curvature`, and
+  `beam_roll` together. If omitted, the beam interface follows all four magnetic
+  values dynamically. With neither an override nor a magnetic axis, beam frames
+  do not exist. Objects sharing a type can have different beam interfaces.
 
-Partial magnetic or beam groups are invalid. Canonical JSON omits absent fields
-rather than writing `null`. A present length is positive; curvature and roll
-are finite. Magnetic and beam entry/exit frames lie at half their respective
-lengths on their respective axes, so neither axis borrows the shape curvature
-or roll. The conditional implicit frames are `magnetic_center`,
-`magnetic_entry`, `magnetic_exit`, `beam_center`, `beam_entry`, and `beam_exit`.
-They resolve only when their feature is present. Those names and `center` are
-always reserved from `Type.frames`.
+Partial groups and JSON `null` values are invalid. Lengths are positive;
+curvature and roll are finite. Entry and exit lie at half the effective length
+along the corresponding axis. Local center transformations use the mechanical
+path for `ts` (straight when no shape exists).
 
-`Type.set_shape()` and `remove_shape()` edit the mechanical geometry.
-`set_magnetic_axis()` / `remove_magnetic_axis()` and
-`set_beam_axis()` / `remove_beam_axis()` edit each complete feature atomically.
-Type-local `ts` follows the shape's mechanical path; without a shape it follows
-a straight path along the current tangent. A type with no shape, axes, or
-stored frames therefore gives each object only its center frame.
+`Type.set_magnetic_axis()` / `remove_magnetic_axis()` edit the magnetic group.
+`Object.set_beam_axis()` creates or edits an override, starting from inherited
+values when available. `Object.remove_beam_axis()` clears the override and
+restores inheritance. For example:
+
+```python
+# Initially q1 and q2 both inherit quadrupole's magnetic axis.
+q1.set_beam_axis(length=1.2, center=Frame().tx(0.001))
+assert q2.beam_center is None  # still inherited
+q1.remove_beam_axis()         # follows magnetic edits again
+print(q1.effective_beam_axis) # (center Frame, length, curvature, roll)
+```
+
+`Object.beam_*` properties contain explicit values or `None`; the effective
+axis is available through `effective_beam_axis` and `get_frame("beam_entry")`,
+`get_frame("beam_center")`, or `get_frame("beam_exit")`. Inheritance is preserved
+in JSON by omitting the beam fields. All seven implicit names are reserved
+from `Type.frames`, but beam frames resolve only on objects.
+
+Older beam definitions under a type must be moved to each object using that
+type and removed from the type. The reader rejects type-level beam fields.
 
 ## Reference shorthand
 

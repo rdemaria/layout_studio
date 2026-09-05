@@ -671,7 +671,7 @@ test("uses named-frame terminology throughout the editor", async () => {
   assert.doesNotMatch(html, /Named points|Object point|Target point|Point name/);
 });
 
-test("edits mechanical, magnetic, and Beam features independently", async () => {
+test("edits type geometry and each object's beam interface independently", async () => {
   const { default: Home } = await vite.ssrLoadModule("/app/page.tsx");
   const html = renderToStaticMarkup(React.createElement(Home));
   const source = await readFile(path.join(root, "app/page.tsx"), "utf8");
@@ -686,8 +686,14 @@ test("edits mechanical, magnetic, and Beam features independently", async () => 
   assert.match(html, /aria-label="Mechanical curvature"/);
   assert.match(html, /aria-label="Magnetic curvature"/);
   assert.match(html, /aria-label="Beam-interface curvature"/);
+  const objectsCardStart = html.indexOf('id="objects-card"');
+  const typesCard = html.slice(html.indexOf('id="types-card"'), objectsCardStart);
+  const objectsCard = html.slice(objectsCardStart);
+  assert.doesNotMatch(typesCard, /Beam interface|Beam-interface curvature/);
+  assert.match(objectsCard, /Beam interface/);
+  assert.match(objectsCard, /Use magnetic axis/);
   assert.match(source, /delete type\.magnetic_center;[\s\S]*delete type\.magnetic_roll;/);
-  assert.match(source, /delete type\.beam_center;[\s\S]*delete type\.beam_roll;/);
+  assert.match(source, /delete object\.beam_center;[\s\S]*delete object\.beam_roll;/);
   assert.match(source, /No mechanical shape\. Instances remain selectable at their center\./);
 });
 

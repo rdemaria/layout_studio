@@ -19,6 +19,8 @@ after(async () => {
 
 const {
   createEmptyLayout,
+  objectFrameNames,
+  typeFrameNames,
   getLayoutDependencyGraph,
   parseLayout,
   SAMPLE_LAYOUT,
@@ -460,7 +462,7 @@ test("accepts absent optional features and rejects partial axis features", () =>
   }
 
   const partialBeam = canonicalLayout();
-  partialBeam.types.magnet.beam_center = { transformation: [] };
+  partialBeam.objects.Q1.beam_center = { transformation: [] };
   assert.throws(
     () => parseLayout(partialBeam),
     /complete beam feature; missing beam_length, beam_curvature, beam_roll/,
@@ -469,13 +471,13 @@ test("accepts absent optional features and rejects partial axis features", () =>
 
 test("validates complete magnetic and beam feature values", () => {
   const complete = canonicalLayout();
-  Object.assign(complete.types.magnet, {
+  Object.assign(complete.objects.Q1, {
     beam_center: { transformation: [["tx", 0.1]] },
     beam_length: 1.7,
     beam_curvature: -0.2,
     beam_roll: 0.3,
   });
-  assert.deepEqual(parseLayout(complete).types.magnet.beam_center, {
+  assert.deepEqual(parseLayout(complete).objects.Q1.beam_center, {
     transformation: [["tx", 0.1]],
   });
 
@@ -620,7 +622,7 @@ test("accepts the implicit center as an object-frame reference for every type", 
 
 test("exposes only the implicit frames supplied by optional features", () => {
   const withBeam = canonicalLayout();
-  Object.assign(withBeam.types.magnet, {
+  Object.assign(withBeam.objects.Q1, {
     beam_center: { transformation: [] },
     beam_length: 4,
     beam_curvature: 0,
@@ -1113,8 +1115,8 @@ test("derives curved magnetic entry and exit frames and aligns magnetic targets"
 
   assert.equal(scene.magneticFrames.length, 4);
   assert.equal(scene.magneticAxes.length, 2);
-  assert.equal(scene.beamAxes.length, 0);
-  assert.equal(scene.beamFrames.length, 0);
+  assert.equal(scene.beamAxes.length, 2);
+  assert.equal(scene.beamFrames.length, 4);
   assert.equal(frames["A.magnetic_entry"].vertices.length, 4);
   for (const magneticFrame of scene.magneticFrames) {
     for (const vertex of magneticFrame.vertices) {
@@ -1148,10 +1150,6 @@ test("keeps mechanical, magnetic and beam paths independent", () => {
         magnetic_length: 2,
         magnetic_curvature: 0,
         magnetic_roll: 0.4,
-        beam_center: { transformation: [["tx", 1]] },
-        beam_length: 4,
-        beam_curvature: 0,
-        beam_roll: -0.3,
         frames: {
           mechanical_station: { transformation: [["ts", Math.PI / 2]] },
         },
@@ -1160,6 +1158,10 @@ test("keeps mechanical, magnetic and beam paths independent", () => {
     objects: {
       A: {
         type: "combined",
+        beam_center: { transformation: [["tx", 1]] },
+        beam_length: 4,
+        beam_curvature: 0,
+        beam_roll: -0.3,
         position: {
           target: "center",
           reference: { kind: "world" },
@@ -1168,6 +1170,10 @@ test("keeps mechanical, magnetic and beam paths independent", () => {
       },
       B: {
         type: "combined",
+        beam_center: { transformation: [["tx", 1]] },
+        beam_length: 4,
+        beam_curvature: 0,
+        beam_roll: -0.3,
         position: {
           target: "beam_entry",
           reference: {
@@ -1225,6 +1231,78 @@ test("keeps mechanical, magnetic and beam paths independent", () => {
     scene.beamAxes[0].samples.at(-1).p,
     beam.beam_exit.o,
   );
+});
+
+test("object beam interfaces inherit magnetic geometry and retain per-object overrides", () => {
+  const input = canonicalLayout();
+  input.types.magnet.magnetic_center.transformation = [["tx", 0.3], ["ts", 0.2], ["rs", 0.4]];
+  input.types.magnet.magnetic_curvature = 0.7;
+  input.types.magnet.magnetic_roll = -0.2;
+  const matchesMagnetic = (scene, object) => {
+    for (const suffix of ["entry", "exit"]) {
+      const beam = scene.beamFrames.find((frame) => frame.object === object && frame.name === `beam_${suffix}`);
+      const magnetic = scene.magneticFrames.find((frame) => frame.object === object && frame.name === `magnetic_${suffix}`);
+      assert.deepEqual(beam.frame, magnetic.frame);
+    }
+  };
+  matchesMagnetic(buildScene(parseLayout(input)), "Q1");
+  assert.ok(objectFrameNames(input.types.magnet, input.objects.Q1).includes("beam_exit"));
+  assert.ok(!typeFrameNames(input.types.magnet).includes("beam_exit"));
+  assert.ok(!("beam_length" in parseLayout(input).objects.Q1));
+
+  input.objects.Q2 = structuredClone(input.objects.Q1);
+  Object.assign(input.objects.Q1, {
+    beam_center: { transformation: [["ty", 0.5]] },
+    beam_length: 1.25, beam_curvature: -0.4, beam_roll: 0.8,
+  });
+  const explicit = buildScene(parseLayout(input)).beamFrames.filter((frame) => frame.object === "Q1");
+  input.types.magnet.magnetic_length = 3;
+  input.types.magnet.magnetic_center.transformation.push(["ry", 0.2]);
+  const changed = buildScene(parseLayout(input));
+  assert.deepEqual(changed.beamFrames.filter((frame) => frame.object === "Q1"), explicit);
+  matchesMagnetic(changed, "Q2");
+
+  // A beam override's target must use its own local frame, despite sharing a type.
+  input.objects.Q2.position = {
+    target: "beam_entry", reference: { kind: "object_frame", object: "Q1", frame: "beam_exit" },
+    transformation: [],
+  };
+  const aligned = buildScene(parseLayout(input));
+  const source = aligned.beamFrames.find((frame) => frame.object === "Q1" && frame.name === "beam_exit");
+  const target = aligned.beamFrames.find((frame) => frame.object === "Q2" && frame.name === "beam_entry");
+  for (const axis of ["o", "x", "y", "s"]) approximatelyEqual(source.frame[axis], target.frame[axis]);
+  for (const key of ["beam_center", "beam_length", "beam_curvature", "beam_roll"]) delete input.objects.Q1[key];
+  matchesMagnetic(buildScene(parseLayout(input)), "Q1");
+});
+
+test("beam-only objects expose only their own frames and reject type-level beam fields", () => {
+  const input = {
+    reference_curves: {}, types: { bare: { color: "#112233", frames: {} } },
+    objects: {
+      A: { type: "bare", position: { target: "center", reference: { kind: "world" }, transformation: [] },
+        beam_center: { transformation: [["ts", 0.5]] }, beam_length: 2, beam_curvature: 0, beam_roll: 0 },
+      B: { type: "bare", position: { target: "center", reference: { kind: "world" }, transformation: [] } },
+    },
+  };
+  const parsed = parseLayout(input);
+  assert.deepEqual(objectFrameNames(parsed.types.bare, parsed.objects.B), ["center"]);
+  const scene = buildScene(parsed);
+  assert.equal(scene.beamAxes.length, 1);
+  approximatelyEqual(scene.beamFrames.find((frame) => frame.name === "beam_entry").frame.o, [0, 0, -0.5]);
+  const noAxis = structuredClone(input);
+  noAxis.objects.B.position.target = "beam_entry";
+  assert.throws(() => parseLayout(noAxis), /unknown frame/);
+  const legacy = structuredClone(input);
+  legacy.types.bare.beam_center = { transformation: [] };
+  assert.throws(() => parseLayout(legacy), /types\.bare contains unsupported fields: beam_center/);
+  for (const field of ["beam_length", "beam_curvature", "beam_roll"]) {
+    const malformed = structuredClone(input);
+    malformed.objects.A[field] = NaN;
+    assert.throws(() => parseLayout(malformed), /must be a finite number/);
+  }
+  const nonlocal = structuredClone(input);
+  nonlocal.objects.A.beam_center.reference = { kind: "world" };
+  assert.throws(() => parseLayout(nonlocal), /unsupported fields: reference/);
 });
 
 test("represents a shapeless object by its center frame", () => {

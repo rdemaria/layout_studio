@@ -1,6 +1,6 @@
 import {
   BEAM_BOUNDARY_FRAME_NAMES,
-  hasBeamFeature,
+  effectiveBeamFeature,
   hasMagneticFeature,
   MAGNETIC_BOUNDARY_FRAME_NAMES,
   shapePath,
@@ -197,6 +197,7 @@ function invertFrame(frame: Frame): Frame {
 function localFrameForName(
   type: LayoutType,
   frameName: string,
+  object: LayoutObject,
 ): Frame | undefined {
   if (frameName === "center") return cloneFrame(IDENTITY);
   const path = mechanicalPath(type);
@@ -223,17 +224,18 @@ function localFrameForName(
     frameName === "beam_entry" ||
     frameName === "beam_exit"
   ) {
-    if (!hasBeamFeature(type)) return undefined;
+    const beam = effectiveBeamFeature(type, object);
+    if (!beam) return undefined;
     const center = applyLocalOperations(
       IDENTITY,
-      type.beam_center!.transformation,
+      beam.center.transformation,
       path,
     );
     if (frameName === "beam_center") return center;
     const direction = frameName === "beam_entry" ? -1 : 1;
-    return advanceLocalPath(center, direction * type.beam_length! / 2, {
-      curvature: type.beam_curvature!,
-      roll: type.beam_roll!,
+    return advanceLocalPath(center, direction * beam.length / 2, {
+      curvature: beam.curvature,
+      roll: beam.roll,
     });
   }
   const definition = Object.prototype.hasOwnProperty.call(type.frames, frameName)
@@ -1194,6 +1196,7 @@ export function buildScene(
     const targetLocalFrame = localFrameForName(
       type,
       object.position.target,
+      object,
     );
     const frame = targetLocalFrame !== undefined
       ? composeFrames(targetFrame, invertFrame(targetLocalFrame))
@@ -1214,7 +1217,7 @@ export function buildScene(
     const object = layout.objects[objectName];
     const type = layout.types[object?.type];
     if (!type) return resolveObject(objectName, stack);
-    const localFrame = localFrameForName(type, frameName);
+    const localFrame = localFrameForName(type, frameName, object);
     if (localFrame === undefined) return resolveObject(objectName, stack);
     const frame = composeFrames(
       resolveObject(objectName, [...stack, `frame:${key}`]),
@@ -1355,16 +1358,17 @@ export function buildScene(
         });
       }
     }
-    if (hasBeamFeature(type)) {
+    const beam = effectiveBeamFeature(type, object);
+    if (beam) {
       const centerFrame = resolveFrame(objectName, "beam_center", []);
       beamAxes.push(buildFeatureAxisGeometry(
         objectName,
         object.type,
         "beam",
         centerFrame,
-        type.beam_length!,
-        type.beam_curvature!,
-        type.beam_roll!,
+        beam.length,
+        beam.curvature,
+        beam.roll,
       ));
       for (const name of BEAM_BOUNDARY_FRAME_NAMES) {
         const frame = resolveFrame(objectName, name, []);
@@ -1374,7 +1378,7 @@ export function buildScene(
           typeName: object.type,
           kind: "beam",
           frame,
-          vertices: featurePlaneVertices(type, frame, type.beam_length!),
+          vertices: featurePlaneVertices(type, frame, beam.length),
         });
       }
     }

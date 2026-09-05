@@ -35,10 +35,6 @@ def detached_type(color="#445566"):
         magnetic_length=1.5,
         magnetic_curvature=0.2,
         magnetic_roll=-0.1,
-        beam_center=Frame().ty(0.2),
-        beam_length=1.25,
-        beam_curvature=-0.3,
-        beam_roll=0.4,
     )
 
 
@@ -136,10 +132,6 @@ def test_type_set_validates_every_change_before_committing_any():
     original_length = type_.magnetic_length
     original_curvature = type_.magnetic_curvature
     original_roll = type_.magnetic_roll
-    original_beam_center = type_.beam_center
-    original_beam_length = type_.beam_length
-    original_beam_curvature = type_.beam_curvature
-    original_beam_roll = type_.beam_roll
     replacement_center = Frame().ty(0.4)
 
     with pytest.raises(ValidationError):
@@ -158,12 +150,7 @@ def test_type_set_validates_every_change_before_committing_any():
     assert type_.magnetic_length == original_length
     assert type_.magnetic_curvature == original_curvature
     assert type_.magnetic_roll == original_roll
-    assert type_.beam_center is original_beam_center
-    assert type_.beam_length == original_beam_length
-    assert type_.beam_curvature == original_beam_curvature
-    assert type_.beam_roll == original_beam_roll
     assert original_center.owner is type_
-    assert original_beam_center.owner is type_
     assert replacement_center.owner is None
 
 
@@ -184,19 +171,17 @@ def test_type_axis_feature_can_be_removed_as_one_atomic_group():
     assert type_.magnetic_curvature is None
     assert type_.magnetic_roll is None
     assert "magnetic_center" not in type_.to_dict()
-    assert "beam_center" in type_.to_dict()
 
 
 def test_type_axis_partial_removal_rolls_back_without_detaching_center():
     type_ = detached_type()
     original = type_.to_dict()
-    center = type_.beam_center
+    center = type_.magnetic_center
 
     with pytest.raises(ValidationError):
-        type_.set(beam_center=None)
+        type_.set(magnetic_center=None)
 
     assert type_.to_dict() == original
-    assert type_.beam_center is center
     assert center.owner is type_
 
 
@@ -208,7 +193,6 @@ def test_type_mechanical_shape_can_be_removed_independently():
     assert type_.shape is None
     assert "shape" not in type_.to_dict()
     assert type_.magnetic_center is not None
-    assert type_.beam_center is not None
 
 
 def test_axis_helpers_create_update_and_remove_optional_features():
@@ -221,15 +205,17 @@ def test_axis_helpers_create_update_and_remove_optional_features():
     assert type_.magnetic_curvature == 0.3
     assert type_.magnetic_roll == -0.2
 
+    object_ = Layout().new_object("A", type="magnet", position=Position("world"))
     replacement = Frame().tx(0.4)
-    assert type_.set_beam_axis(center=replacement, length=1.5) is type_
-    assert type_.beam_center is replacement
-    assert type_.beam_length == 1.5
-    assert type_.beam_curvature == 0.0
-    assert type_.beam_roll == 0.0
+    assert object_.set_beam_axis(center=replacement, length=1.5) is object_
+    assert object_.beam_center is replacement
+    assert replacement.owner is object_
+    assert object_.beam_length == 1.5
+    assert object_.beam_curvature == 0.0
+    assert object_.beam_roll == 0.0
 
     assert type_.remove_magnetic_axis() is type_
-    assert type_.remove_beam_axis() is type_
+    assert object_.remove_beam_axis() is object_
     assert type_.implicit_frames == frozenset({"center"})
 
 

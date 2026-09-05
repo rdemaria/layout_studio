@@ -123,7 +123,10 @@ rendering or export.
 
 A type always defines the implicit `center` frame. Its mechanical shape is optional;
 when present, the shape tuple contains its centerline length, curvature, and roll.
-Magnetic and Beam-interface features are separate optional groups. Each group contains
-a local center transformation plus its own length, curvature, and roll, and derives
-its corresponding entry/exit frames. Omitting all three features leaves a center-only
-object, which remains selectable in the viewer.
+The magnetic group belongs to the type. The optional Beam-interface group belongs
+to each object and is edited in the Objects card. Each group contains a local center
+transformation plus its own length, curvature, and roll. An omitted object group
+inherits all four magnetic values dynamically, including its derived entry/exit
+frames. Without either group, no beam frames exist. JSON preserves inheritance by
+omitting the object beam fields. Type-level beam fields from older documents must
+be moved to their objects. A center-only object remains selectable in the viewer.

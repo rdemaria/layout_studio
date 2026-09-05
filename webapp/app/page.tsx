@@ -70,7 +70,8 @@ import {
   parseLayout,
   SAMPLE_LAYOUT,
   shapePath,
-  typeFrameNames,
+  objectFrameNames,
+  effectiveBeamFeature,
   uniqueName,
   type BoxShape,
   type CylinderShape,
@@ -185,7 +186,7 @@ function selectionExistsInLayout(
   if (!object) return false;
   if (selection.kind === "object") return true;
   const type = layout.types[object.type];
-  return Boolean(type && typeFrameNames(type).includes(selection.name));
+  return Boolean(type && objectFrameNames(type, object).includes(selection.name));
 }
 
 function fitTargetIsInScope(
@@ -495,15 +496,18 @@ export default function Home() {
   };
 
   const selectFrame = (objectName: string, frameName: string) => {
-    const objectType = layout.objects[objectName]?.type;
+    const selected = layout.objects[objectName];
+    const objectType = selected?.type;
     if (
       !objectType ||
-      !Object.keys(layout.types[objectType]?.frames ?? {}).includes(frameName)
+      !objectFrameNames(layout.types[objectType], selected).includes(frameName)
     ) return;
     setSelectedObject(objectName);
     setSelectedType(objectType);
-    setSelectedTypeFrame(frameName);
-    setTypeFramesOpen(true);
+    if (!isImplicitTypeFrameName(frameName)) {
+      setSelectedTypeFrame(frameName);
+      setTypeFramesOpen(true);
+    }
     setSelection({ kind: "frame", object: objectName, name: frameName });
   };
 
@@ -543,11 +547,13 @@ export default function Home() {
           ?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
     } else if (toggled?.kind === "frame") {
-      setTypesCardOpen(true);
+      const isBeam = toggled.name.startsWith("beam_");
+      if (isBeam) setObjectsCardOpen(true);
+      else setTypesCardOpen(true);
       selectFrame(toggled.object, toggled.name);
       requestAnimationFrame(() => {
         document
-          .getElementById("types-card")
+          .getElementById(isBeam ? "objects-card" : "types-card")
           ?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
     } else {
@@ -620,7 +626,7 @@ export default function Home() {
       }
       if (
         next.kind === "frame" &&
-        !typeFrameNames(nextType).includes(next.name)
+        !objectFrameNames(nextType, nextObject).includes(next.name)
       ) {
         throw new Error(`Object ${objectName} has no frame ${next.name}`);
       }
@@ -638,7 +644,7 @@ export default function Home() {
       setObjectsCardOpen(true);
       setSelectedObject(objectName);
       setSelectedType(nextObject.type);
-      if (next.kind === "frame") {
+      if (next.kind === "frame" && !next.name.startsWith("beam_")) {
         setTypesCardOpen(true);
         setTypeFramesOpen(true);
         if (!isImplicitTypeFrameName(next.name)) {
@@ -783,7 +789,7 @@ export default function Home() {
   const frameNames = Object.keys(typeDefinition?.frames ?? {});
   const frameDefinition = typeDefinition?.frames[selectedTypeFrame];
   const objectTargetNames = object
-    ? typeFrameNames(layout.types[object.type])
+    ? objectFrameNames(layout.types[object.type], object)
     : ["center"];
   const typeInstances = objectNames.filter(
     (name) => layout.objects[name].type === selectedType,
@@ -1092,7 +1098,7 @@ export default function Home() {
   const changeObjectType = (nextType: string) => {
     if (!object || !layout.types[nextType]) return;
     const nextTypeFrameNames = Object.keys(layout.types[nextType].frames);
-    const nextReferenceFrameNames = typeFrameNames(layout.types[nextType]);
+    const nextReferenceFrameNames = objectFrameNames(layout.types[nextType], object);
     const missing = new Set<string>();
     forEachTransformation(layout, (transformation) => {
       const reference = transformation.reference;
@@ -1235,10 +1241,9 @@ export default function Home() {
                         <dt>Types</dt>
                         <dd>
                           Reusable definitions with a color and optional mechanical geometry,
-                          magnetic axis, Beam interface and named local frames. Mechanical,
-                          magnetic and Beam paths have independent lengths, curvatures and
-                          rolls. Every instance has a center frame; feature-specific center,
-                          entry and exit frames exist only while that feature is defined.
+                          magnetic axis and named local frames. Mechanical and magnetic
+                          paths have independent lengths, curvatures and rolls. Every
+                          instance has a center frame.
                         </dd>
                       </div>
                       <div>
@@ -1246,7 +1251,10 @@ export default function Home() {
                         <dd>
                           Instances of a type. A position says which target frame on the
                           instance is placed at a transformed world, curve or object-frame
-                          reference. Many objects can reuse one type.
+                          reference. Many objects can reuse one type. Each object owns
+                          its beam interface, which uses the type’s magnetic axis unless
+                          customized. Its center, entry and exit frames exist when a
+                          custom interface or magnetic axis is available.
                         </dd>
                       </div>
                     </dl>
@@ -1264,7 +1272,7 @@ export default function Home() {
                     <p>
                       <code>ts</code> is a path coordinate. With a curve reference, all ts
                       values are summed to select the curve frame before the remaining
-                      operations run. In a type-local frame, ts follows the mechanical axis
+                      operations run. In a local frame, including a beam center, ts follows the mechanical axis
                       when present and a straight local axis otherwise. <code>tt</code> never
                       follows a curve. Magnetic and Beam entry/exit frames follow their own
                       axes from their respective center frames.
@@ -1661,7 +1669,7 @@ export default function Home() {
                   <span className="main-card-count">{typeNames.length}</span>
                 </CardTitle>
                 <CardDescription>
-                  Optional mechanical, magnetic and Beam geometry with local frames.
+                  Optional mechanical and magnetic geometry with local frames.
                 </CardDescription>
                 <CardAction className="main-card-actions">
                   <Button type="button" variant="outline" size="sm" onClick={addType}>
@@ -1992,100 +2000,6 @@ export default function Home() {
                       )}
                     </div>
 
-                    <div className="subsection">
-                      <div className="subsection-title">
-                        <div className="subsection-title-copy">
-                          <h3>Beam interface</h3>
-                          <span>beam center, entry and exit</span>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="xs"
-                          onClick={() =>
-                            updateValidated((draft) => {
-                              const type = draft.types[selectedType];
-                              if (type.beam_center) {
-                                delete type.beam_center;
-                                delete type.beam_length;
-                                delete type.beam_curvature;
-                                delete type.beam_roll;
-                              } else {
-                                type.beam_center = { transformation: [] };
-                                type.beam_length = 1;
-                                type.beam_curvature = 0;
-                                type.beam_roll = 0;
-                              }
-                            })
-                          }
-                        >
-                          {typeDefinition.beam_center ? <Trash2 /> : <Plus />}
-                          {typeDefinition.beam_center ? "Remove" : "Add interface"}
-                        </Button>
-                      </div>
-                      {typeDefinition.beam_center ? (
-                        <>
-                          <div className="shape-path-row">
-                            <Field label="Length [m]">
-                              <NumberInput
-                                value={typeDefinition.beam_length ?? 1}
-                                min={0}
-                                step={0.1}
-                                label="Beam-interface length"
-                                onChange={(value) =>
-                                  update((draft) => {
-                                    draft.types[selectedType].beam_length =
-                                      Math.max(0.000001, value);
-                                  })
-                                }
-                              />
-                            </Field>
-                            <Field label="Curvature [1/m]">
-                              <NumberInput
-                                value={typeDefinition.beam_curvature ?? 0}
-                                step={0.01}
-                                label="Beam-interface curvature"
-                                onChange={(value) =>
-                                  update((draft) => {
-                                    draft.types[selectedType].beam_curvature = value;
-                                  })
-                                }
-                              />
-                            </Field>
-                            <Field label="Roll [degree]">
-                              <NumberInput
-                                value={(typeDefinition.beam_roll ?? 0) * 180 / Math.PI}
-                                step={5}
-                                label="Beam-interface roll in degrees"
-                                onChange={(value) =>
-                                  update((draft) => {
-                                    draft.types[selectedType].beam_roll =
-                                      value * Math.PI / 180;
-                                  })
-                                }
-                              />
-                            </Field>
-                          </div>
-                          <div className="implicit-reference">
-                            beam_center is relative to object center. Beam entry and exit
-                            are derived at −Lbeam/2 and +Lbeam/2 along the Beam axis.
-                          </div>
-                          <OperationsEditor
-                            value={typeDefinition.beam_center.transformation}
-                            allowedNames={LOCAL_TRANSFORM_NAMES}
-                            onChange={(transformation) =>
-                              update((draft) => {
-                                const center = draft.types[selectedType].beam_center;
-                                if (center) center.transformation = transformation;
-                              })
-                            }
-                          />
-                        </>
-                      ) : (
-                        <p className="inline-empty">No Beam interface or Beam frames.</p>
-                      )}
-                    </div>
-
                     <Collapsible
                       className="subsection collapsible-subsection"
                       open={typeFramesOpen}
@@ -2204,7 +2118,7 @@ export default function Home() {
                   <span className="main-card-count">{objectNames.length}</span>
                 </CardTitle>
                 <CardDescription>
-                  Reusable type and reference-based position.
+                  Reusable type, beam interface and reference-based position.
                 </CardDescription>
                 <CardAction className="main-card-actions">
                   <Button
@@ -2299,6 +2213,107 @@ export default function Home() {
                       >
                         Edit type
                       </Button>
+                    </div>
+
+                    <div className="subsection">
+                      <div className="subsection-title">
+                        <div className="subsection-title-copy">
+                          <h3>Beam interface</h3>
+                          <span>object beam center, entry and exit</span>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={() =>
+                            updateValidated((draft) => {
+                              const object = draft.objects[selectedObject];
+                              if (object.beam_center) {
+                                delete object.beam_center;
+                                delete object.beam_length;
+                                delete object.beam_curvature;
+                                delete object.beam_roll;
+                              } else {
+                                const inherited = effectiveBeamFeature(draft.types[object.type], object);
+                                object.beam_center = structuredClone(inherited?.center ?? { transformation: [] });
+                                object.beam_length = inherited?.length ?? 1;
+                                object.beam_curvature = inherited?.curvature ?? 0;
+                                object.beam_roll = inherited?.roll ?? 0;
+                              }
+                            })
+                          }
+                        >
+                          {object.beam_center ? <Trash2 /> : <Plus />}
+                          {object.beam_center
+                            ? layout.types[object.type].magnetic_center ? "Use magnetic axis" : "Remove interface"
+                            : "Customize interface"}
+                        </Button>
+                      </div>
+                      {object.beam_center ? (
+                        <>
+                          <div className="shape-path-row">
+                            <Field label="Length [m]">
+                              <NumberInput
+                                value={object.beam_length ?? 1}
+                                min={0}
+                                step={0.1}
+                                label="Beam-interface length"
+                                onChange={(value) =>
+                                  update((draft) => {
+                                    draft.objects[selectedObject].beam_length =
+                                      Math.max(0.000001, value);
+                                  })
+                                }
+                              />
+                            </Field>
+                            <Field label="Curvature [1/m]">
+                              <NumberInput
+                                value={object.beam_curvature ?? 0}
+                                step={0.01}
+                                label="Beam-interface curvature"
+                                onChange={(value) =>
+                                  update((draft) => {
+                                    draft.objects[selectedObject].beam_curvature = value;
+                                  })
+                                }
+                              />
+                            </Field>
+                            <Field label="Roll [degree]">
+                              <NumberInput
+                                value={(object.beam_roll ?? 0) * 180 / Math.PI}
+                                step={5}
+                                label="Beam-interface roll in degrees"
+                                onChange={(value) =>
+                                  update((draft) => {
+                                    draft.objects[selectedObject].beam_roll =
+                                      value * Math.PI / 180;
+                                  })
+                                }
+                              />
+                            </Field>
+                          </div>
+                          <div className="implicit-reference">
+                            beam_center is relative to object center. Beam entry and exit
+                            are derived at −Lbeam/2 and +Lbeam/2 along the Beam axis.
+                          </div>
+                          <OperationsEditor
+                            value={object.beam_center.transformation}
+                            allowedNames={LOCAL_TRANSFORM_NAMES}
+                            onChange={(transformation) =>
+                              update((draft) => {
+                                const center = draft.objects[selectedObject].beam_center;
+                                if (center) center.transformation = transformation;
+                              })
+                            }
+                          />
+                        </>
+                      ) : (
+                        <p className="inline-empty">
+                          {effectiveBeamFeature(layout.types[object.type], object)
+                            ? "Uses the type’s magnetic axis, including its center, length, curvature and roll."
+                            : "No magnetic axis to inherit. Customize the interface to define beam frames."}
+                        </p>
+                      )}
                     </div>
 
                     <div className="subsection">

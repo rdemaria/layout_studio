@@ -7,20 +7,46 @@
           "kind": "world"
         },
         "transformation": [
-          ["tx", -5]
+          [
+            "tx",
+            -5
+          ]
         ]
       },
       "segments": [
-        [5, 0, 0],
-        [5, 1.0471975511965976, 0],
-        [4, 0, 0],
-        [4, -0.6283185307179586, 0.22]
+        [
+          5,
+          0,
+          0
+        ],
+        [
+          5,
+          1.0471975511965976,
+          0
+        ],
+        [
+          4,
+          0,
+          0
+        ],
+        [
+          4,
+          -0.6283185307179586,
+          0.22
+        ]
       ]
     }
   },
   "types": {
     "quadrupole": {
-      "shape": ["box", 1.1, 0.9, 1.6, 0.22, 0],
+      "shape": [
+        "box",
+        1.1,
+        0.9,
+        1.6,
+        0.22,
+        0
+      ],
       "color": "#f0a84b",
       "magnetic_center": {
         "transformation": []
@@ -28,23 +54,29 @@
       "magnetic_length": 1.4,
       "magnetic_curvature": 0.22,
       "magnetic_roll": 0,
-      "beam_center": {
-        "transformation": []
-      },
-      "beam_length": 1.4,
-      "beam_curvature": 0.22,
-      "beam_roll": 0,
       "frames": {
         "survey_mark": {
           "transformation": [
-            ["tx", 0.45],
-            ["ty", 0.35]
+            [
+              "tx",
+              0.45
+            ],
+            [
+              "ty",
+              0.35
+            ]
           ]
         }
       }
     },
     "monitor": {
-      "shape": ["cylinder", 0.62, 0.7, 0, 0],
+      "shape": [
+        "cylinder",
+        0.62,
+        0.7,
+        0,
+        0
+      ],
       "color": "#5fd6c7",
       "magnetic_center": {
         "transformation": []
@@ -52,16 +84,17 @@
       "magnetic_length": 0.5,
       "magnetic_curvature": 0,
       "magnetic_roll": 0,
-      "beam_center": {
-        "transformation": []
-      },
-      "beam_length": 0.5,
-      "beam_curvature": 0,
-      "beam_roll": 0,
       "frames": {}
     },
     "detector": {
-      "shape": ["box", 2.2, 1.5, 0.55, 0, 0],
+      "shape": [
+        "box",
+        2.2,
+        1.5,
+        0.55,
+        0,
+        0
+      ],
       "color": "#8898ff",
       "magnetic_center": {
         "transformation": []
@@ -72,8 +105,14 @@
       "frames": {
         "sensor_origin": {
           "transformation": [
-            ["tx", 0.9],
-            ["ty", 0.55]
+            [
+              "tx",
+              0.9
+            ],
+            [
+              "ty",
+              0.55
+            ]
           ]
         }
       }
@@ -89,9 +128,18 @@
           "curve": "ring"
         },
         "transformation": [
-          ["ts", 3.5]
+          [
+            "ts",
+            3.5
+          ]
         ]
-      }
+      },
+      "beam_center": {
+        "transformation": []
+      },
+      "beam_length": 1.4,
+      "beam_curvature": 0.22,
+      "beam_roll": 0
     },
     "BPM1": {
       "type": "monitor",
@@ -102,9 +150,18 @@
           "curve": "ring"
         },
         "transformation": [
-          ["ts", 8.4]
+          [
+            "ts",
+            8.4
+          ]
         ]
-      }
+      },
+      "beam_center": {
+        "transformation": []
+      },
+      "beam_length": 0.5,
+      "beam_curvature": 0,
+      "beam_roll": 0
     },
     "Detector": {
       "type": "detector",
@@ -116,8 +173,14 @@
           "frame": "magnetic_exit"
         },
         "transformation": [
-          ["tt", 2.2],
-          ["rs", 0.18]
+          [
+            "tt",
+            2.2
+          ],
+          [
+            "rs",
+            0.18
+          ]
         ]
       }
     }
