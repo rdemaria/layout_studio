@@ -55,12 +55,14 @@
   "zero_mechanical_length_objects": 5,
   "zero_optic_length_objects": 225,
   "zero_length_display_value": 0.1,
-  "zero_magnetic_length_value": 1e-09,
+  "root_name": "M2-LINE",
+  "root_name_source": "explicit argument",
+  "mechanical_models": {},
+  "span_objects": {},
+  "explicit_beam_interfaces": 0,
   "warnings": [
     "split 8 LDB type name(s) because geometry and/or color initial varies",
     "displayed 5 zero-length object(s) with dz=0.1 m",
-    "represented 225 zero optic length(s) with magnetic_length=1e-09 m"
-  ],
-  "root_name": "M2-LINE",
-  "root_name_source": "machine-name alias"
+    "kept 225 zero optic length(s) as exact stored frames; no magnetic/beam axis"
+  ]
 }

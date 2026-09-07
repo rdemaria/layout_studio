@@ -1,51 +1,26 @@
 # M2 LS3 conversion
 
-This directory records the M2 LS3 regression conversion from the CERN Layout
-Database positioning model to Layout Studio.
+Run `python conversion/m2/convert.py` from the repository root to regenerate
+[`M2--LS3.json.gz`](M2--LS3.json.gz), its report, and checksum manifest from the
+committed `M2--LS3.pickle`.
 
-## Reproduce
+The M2 policy selects `M2-LINE` as the external LDB root. Direct root coverage
+establishes a line length of **1185.5781 m**. This is supplied to
+`get_ref_curve()`, ignoring the source class's cached LHC-length default.
 
-Place the trusted `M2--LS3.pickle` snapshot in this directory, then run from the
-repository root:
+Mechanical shapes are straight by default; magnetic curvature and roll are
+independent. LDB optic anchors use each object's beam interface, inherited from
+its magnetic axis unless an explicit center override is needed. Zero optic
+lengths retain exact stored optic frames. There are no span type overrides for
+this snapshot. See the [shared documentation](../README.md) for the complete
+coordinate mapping and the `TX → ts` approximation.
 
-```bash
-python conversion/ldb_machine_to_layout.py \
-  conversion/m2/M2--LS3.pickle \
-  --output conversion/m2/M2--LS3.layout.json \
-  --report conversion/m2/M2--LS3.layout-report.json \
-  --indent 0
-```
-
-No M2-specific options are required. The converter detects `M2-LINE` as the
-external root because it is a machine-name alias, and derives `1185.5781 m` as
-the last direct mechanical/optic endpoint. It then calls
-`Machine.get_ref_curve(machine_length=1185.5781, ...)`; the stale cached LHC
-length `26658.8832 m` is ignored.
-
-The explicit equivalent is:
+The converted model has **428 objects, 115 types, and 29 curve segments**, with
+no missing-parent omissions. All objects and 3,177 frames resolve through the
+Python API. At all 30 curve boundaries, the source `LDBPoint.to_madpoint()` and
+Layout Studio frames agree within `2.3e-13 m` and `5.6e-16` in rotation-matrix
+coefficients.
 
 ```bash
-python conversion/ldb_machine_to_layout.py conversion/m2/M2--LS3.pickle \
-  --root-name M2-LINE \
-  --machine-length 1185.5781
+python conversion/validate.py conversion/m2/M2--LS3.pickle conversion/m2/M2--LS3.json.gz
 ```
-
-## Result
-
-- Input transformations: 428
-- Output objects: 428
-- Output types: 115
-- Reference-curve segments: 29
-- Reference-curve length: 1185.5781 m
-- Reference-curve total bend angle: 0.0222839 rad
-- Skipped objects: 0
-
-## Validation
-
-- Python syntax compilation.
-- Strict canonical Layout Studio JSON structural validation.
-- Three regression tests for root aliases, stale cached curve lengths and true
-  dangling branches.
-- Reference-curve comparison at all 29 segment boundaries against
-  `LDBPoint.to_madpoint()`: maximum position difference below `3e-13 m` and
-  maximum orientation-matrix coefficient difference below `6e-16`.

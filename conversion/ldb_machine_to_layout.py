@@ -11,34 +11,27 @@ path with the LHC circumference by default.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import sys
 from collections import Counter
-from dataclasses import asdict, dataclass
-from typing import Any, Literal, Sequence
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any, Iterable, Literal, Sequence
 
 try:  # Package import when conversion is imported as a namespace/package.
     from . import _ldb_machine_to_layout_core as _core
 except ImportError:  # Direct execution: python conversion/ldb_machine_to_layout.py
     import _ldb_machine_to_layout_core as _core
 
-# Preserve the original public surface, then replace the functions/classes whose
-# semantics are extended below.
-for _name in dir(_core):
-    if not _name.startswith("__"):
-        globals().setdefault(_name, getattr(_core, _name))
-
-
-@dataclass
-class ConversionReport(_core.ConversionReport):
-    """Conversion report including the resolved external LDB root."""
-
-    root_name: str = ""
-    root_name_source: str = ""
-
-
-# The core constructs this class by looking it up in its module globals.
-_core.ConversionReport = ConversionReport
+ConversionError = _core.ConversionError
+ConversionReport = _core.ConversionReport
+ConversionResult = _core.ConversionResult
+load_machine_pickle = _core.load_machine_pickle
+convert_ldb_operations = _core.convert_ldb_operations
+validate_layout_json = _core.validate_layout_json
+write_json = _core.write_json
+color_for_name = _core.color_for_name
 
 
 def _external_reference_counts(machine: Any) -> Counter[str]:
@@ -166,7 +159,8 @@ def machine_to_layout(
     machine_length: float | None = None,
     transverse_size: float = 0.1,
     point_length: float = 0.1,
-    zero_magnetic_length: float = 1e-9,
+    span_types: Iterable[str] = (),
+    curved_types: Iterable[str] = (),
     dangling: Literal["skip", "error"] = "skip",
 ) -> ConversionResult:
     """Convert an LDB ``Machine`` with automatic root and length discovery."""
@@ -187,22 +181,12 @@ def machine_to_layout(
             raise ConversionError("machine_length must be positive")
         length_source = "explicit argument"
 
-    # The conversion core consistently uses machine.name as the external root.
-    # Substitute only for the duration of the call, while preserving the actual
-    # machine name as the output curve name and in the report.
-    machine.name = resolved_root
-    try:
-        result = _core.machine_to_layout(
-            machine,
-            curve_name=output_curve_name,
-            machine_length=resolved_length,
-            transverse_size=transverse_size,
-            point_length=point_length,
-            zero_magnetic_length=zero_magnetic_length,
-            dangling=dangling,
-        )
-    finally:
-        machine.name = original_machine_name
+    result = _core.machine_to_layout(
+        machine, curve_name=output_curve_name, root_name=resolved_root,
+        machine_length=resolved_length, transverse_size=transverse_size,
+        point_length=point_length, span_types=span_types, curved_types=curved_types,
+        dangling=dangling,
+    )
 
     result.report.machine = original_machine_name
     result.report.machine_length_source = length_source
@@ -211,8 +195,8 @@ def machine_to_layout(
     return result
 
 
-def build_argument_parser():
-    parser = _core.build_argument_parser()
+def build_argument_parser(*, default_input: Path | None = None):
+    parser = _core.build_argument_parser(default_input=default_input)
     parser.add_argument(
         "--root-name",
         help=(
@@ -223,26 +207,37 @@ def build_argument_parser():
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = build_argument_parser().parse_args(argv)
+def main(argv: Sequence[str] | None = None, *, convert=machine_to_layout,
+         default_input: Path | None = None) -> int:
+    parser = build_argument_parser(default_input=default_input)
+    args = parser.parse_args(argv)
     output = args.output or _core._default_output_path(args.input)
-    report_path = args.report or output.with_name(f"{output.stem}.report.json")
+    basename = output.name.removesuffix(".gz").removesuffix(".json")
+    report_path = args.report or output.with_name(f"{basename}.layout-report.json")
     indent = None if args.indent == 0 else args.indent
 
     try:
         machine = load_machine_pickle(args.input, module_dir=args.module_dir)
-        result = machine_to_layout(
+        result = convert(
             machine,
             curve_name=args.curve_name,
             root_name=args.root_name,
             machine_length=args.machine_length,
             transverse_size=args.transverse_size,
             point_length=args.point_length,
-            zero_magnetic_length=args.zero_magnetic_length,
+            span_types=args.span_type,
+            curved_types=args.curved_type,
             dangling=args.dangling,
         )
         write_json(output, result.layout, indent=indent)
         write_json(report_path, asdict(result.report), indent=2)
+        artifacts = {}
+        for path, role in ((args.input, "source Machine snapshot"), (output, "generated Layout Studio model"),
+                           (report_path, "conversion report")):
+            content = path.read_bytes()
+            artifacts[path.name] = {"bytes": len(content), "sha256": hashlib.sha256(content).hexdigest(), "role": role}
+        write_json(output.with_name(f"{basename}.files.json"),
+                   {"machine": result.report.machine, "version": result.report.version, "artifacts": artifacts})
     except ConversionError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

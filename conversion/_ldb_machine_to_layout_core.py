@@ -24,19 +24,17 @@ The signs and axis permutation are the elementary-operation form of
 all LDB longitudinal ``tx`` operations become path-following ``ts`` operations;
 no LDB ``tx`` is silently converted to the straight-tangent ``tt`` operation.
 
-Type conversion
----------------
-The LDB mechanical middle becomes Layout Studio ``center``.  Two stored type
-frames, ``mechanical_start`` and ``mechanical_end``, are generated.  LDB optic
-middle/start/end map to Layout Studio's implicit ``magnetic_center``,
-``magnetic_entry`` and ``magnetic_exit`` frames.  Box transverse dimensions are
-configurable and default to 0.1 m.  The type curvature is the deflection angle
-divided by optic length, matching ``Machine.get_ref_curve``.
+Geometry conversion
+-------------------
+Physical mechanical lengths are straight by default. Explicit machine policy
+can identify curved hardware or logical s-span containers. Span frames are
+sampled from the complete reference curve and expressed as local rigid frames;
+spans have no solid shape or fictitious magnetic axis.
 
-Layout Studio requires positive shape and magnetic lengths.  A zero mechanical
-length is displayed with ``point_length`` (default 0.1 m), while its generated
-mechanical frames still coincide exactly.  A zero optic length is represented
-by a tiny positive ``zero_magnetic_length`` (default 1e-9 m).
+Positive optic lengths define the available magnetic axis. LDB optic points
+address the object's beam interface, which inherits that axis unless the source
+optic center differs from its mechanical-to-magnetic offset. Zero optic lengths
+remain exact stored optic frames, without a tiny artificial magnetic length.
 
 Security
 --------
@@ -50,6 +48,7 @@ from __future__ import annotations
 import argparse
 import colorsys
 import hashlib
+import gzip
 import importlib
 import importlib.util
 import json
@@ -59,18 +58,20 @@ import re
 import sys
 import types
 from collections import defaultdict, deque
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Literal, Mapping, Sequence
+
+import numpy as np
 
 
 POINT_TO_LAYOUT_FRAME: dict[str, str] = {
     "MECHANICAL START": "mechanical_start",
     "MECHANICAL MIDDLE": "center",
     "MECHANICAL END": "mechanical_end",
-    "OPTIC START": "magnetic_entry",
-    "OPTIC MIDDLE": "magnetic_center",
-    "OPTIC END": "magnetic_exit",
+    "OPTIC START": "beam_entry",
+    "OPTIC MIDDLE": "beam_center",
+    "OPTIC END": "beam_exit",
 }
 
 # name, multiplicative factor, convert-degrees-to-radians
@@ -107,9 +108,13 @@ class TypeKey:
     color_initial: str
     mechanical_length: float
     optic_length: float
-    optic_offset: float
+    magnetic_long_offset: float
+    magnetic_radial_offset: float
+    magnetic_vertical_offset: float
     angle: float
     roll: float
+    mechanical_model: str = "straight"
+    span_frames: tuple = ()
 
 
 @dataclass
@@ -130,7 +135,11 @@ class ConversionReport:
     zero_mechanical_length_objects: int = 0
     zero_optic_length_objects: int = 0
     zero_length_display_value: float = 0.1
-    zero_magnetic_length_value: float = 1e-9
+    root_name: str = ""
+    root_name_source: str = ""
+    mechanical_models: dict[str, str] = field(default_factory=dict)
+    span_objects: dict[str, dict[str, float]] = field(default_factory=dict)
+    explicit_beam_interfaces: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -200,61 +209,6 @@ def _point_offset(tf: Any, point_name: str) -> float:
         ) from exc
 
 
-def infer_machine_length(machine: Any) -> tuple[float, str]:
-    """Infer circumference/beamline length from top-level mechanical coverage.
-
-    For SPS this uses the six ``TS*`` sextants attached directly to ``SPS`` and
-    yields 6911.51818896 m.  The existing ``Machine.ref_curve`` is only a
-    fallback because the supplied implementation creates it with an LHC-length
-    default for every machine.
-    """
-
-    machine_name = str(machine.name)
-    top_level = [
-        tf
-        for tf in machine.transformations.values()
-        if str(tf.ref) == machine_name
-        and _as_float(tf.ty, f"{tf.target}.ty") == 0.0
-        and _as_float(tf.tz, f"{tf.target}.tz") == 0.0
-        and _as_float(tf.rx, f"{tf.target}.rx") == 0.0
-        and _as_float(tf.ry, f"{tf.target}.ry") == 0.0
-        and _as_float(tf.rz, f"{tf.target}.rz") == 0.0
-    ]
-
-    ends: list[float] = []
-    for tf in top_level:
-        # The external machine root is treated as s=0.  This inference is used
-        # only for direct, purely longitudinal children of that root.
-        target_origin = _as_float(tf.tx, f"{tf.target}.tx") - _point_offset(
-            tf, str(tf.target_point)
-        )
-        mechanical_end = target_origin + _as_float(
-            tf.length, f"{tf.target}.length"
-        ) / 2.0
-        optic_end = (
-            target_origin
-            + _as_float(tf.optic_offset, f"{tf.target}.optic_offset")
-            + _as_float(tf.optic_length, f"{tf.target}.optic_length") / 2.0
-        )
-        ends.append(max(mechanical_end, optic_end))
-
-    positive_ends = [value for value in ends if value > 0.0]
-    if positive_ends:
-        inferred = max(positive_ends)
-        return inferred, "top-level mechanical/optic coverage"
-
-    ref_curve = getattr(machine, "ref_curve", None)
-    dcum = getattr(ref_curve, "dcum", None)
-    if dcum is not None and len(dcum):
-        fallback = _as_float(dcum[-1], "machine.ref_curve length")
-        if fallback > 0.0:
-            return fallback, "existing machine.ref_curve"
-
-    raise ConversionError(
-        "cannot infer machine length; pass machine_length explicitly"
-    )
-
-
 def convert_ldb_operations(tf: Any) -> list[list[Any]]:
     """Convert one ordered LDB transformation to Layout Studio operations."""
 
@@ -275,35 +229,24 @@ def convert_ldb_operations(tf: Any) -> list[list[Any]]:
     return operations
 
 
-def _layout_starting_frame_from_ldb(path: Any) -> dict[str, Any]:
-    """Convert an LDBPath start frame through LDBPoint -> MADPoint."""
-
-    start = getattr(path, "start", None)
-    if start is None:
-        return {"reference": {"kind": "world"}, "transformation": []}
-    if not hasattr(start, "to_madpoint"):
-        raise ConversionError("reference path start does not provide to_madpoint()")
-
-    mad = start.to_madpoint()
-    xyz = [_as_float(value, "curve start coordinate") for value in mad.xyz]
+def _mad_frame_operations(mad: Any) -> list[list[Any]]:
+    """Encode a rigid MADPoint with fixed translations followed by rotations."""
+    xyz = [_as_float(value, "frame coordinate") for value in mad.xyz]
     theta, phi, psi = (
-        _as_float(value, "curve start Euler angle")
-        for value in mad.get_theta_phi_psi()
+        _as_float(value, "frame Euler angle") for value in mad.get_theta_phi_psi()
     )
+    # MADPoint R = Ry(theta) Rx(-phi) Rs(psi).
+    values = [*zip(("tx", "ty", "tt"), xyz),
+              ("ry", theta), ("rx", -phi), ("rs", psi)]
+    return [[name, value] for name, value in values if _nonzero(value)]
 
-    operations: list[list[Any]] = []
-    # Translate in the fixed world axes before orienting the local frame.
-    for name, value in zip(("tx", "ty", "tt"), xyz):
-        if _nonzero(value):
-            operations.append([name, value])
 
-    # MADPoint stores R = Ry(theta) Rx(-phi) Rs(psi), while Layout Studio's
-    # rx/ry/rs matrices are ordinary right-handed local rotations.
-    for name, value in (("ry", theta), ("rx", -phi), ("rs", psi)):
-        if _nonzero(value):
-            operations.append([name, value])
-
-    return {"reference": {"kind": "world"}, "transformation": operations}
+def _layout_starting_frame_from_ldb(path: Any) -> dict[str, Any]:
+    start = getattr(path, "start", None)
+    if start is not None and not hasattr(start, "to_madpoint"):
+        raise ConversionError("reference path start does not provide to_madpoint()")
+    return {"reference": {"kind": "world"}, "transformation":
+            [] if start is None else _mad_frame_operations(start.to_madpoint())}
 
 
 def _make_reference_curve(
@@ -346,16 +289,87 @@ def _make_reference_curve(
     )
 
 
-def _type_key(object_name: str, tf: Any) -> TypeKey:
+def _magnetic_offset(tf: Any, field: str, fallback: float = 0.0) -> float:
+    value = getattr(tf, field, None)
+    return fallback if value is None else _as_float(value, f"{tf.target}.{field}")
+
+
+def _frame_name(tf: Any, point: str, *, span: bool = False) -> str:
+    if point.startswith("OPTIC ") and (span or tf.optic_length == 0):
+        return {"OPTIC START": "optic_start", "OPTIC MIDDLE": "optic_center",
+                "OPTIC END": "optic_end"}[point]
+    try:
+        return POINT_TO_LAYOUT_FRAME[point]
+    except KeyError as exc:
+        raise ConversionError(f"{tf.target!r} uses unsupported point {point!r}") from exc
+
+
+def _type_key(object_name: str, tf: Any, mechanical_model: str, span_frames=()) -> TypeKey:
+    length = _as_float(tf.length, f"{object_name}.length")
+    optic_length = _as_float(tf.optic_length, f"{object_name}.optic_length")
+    if length < 0 or optic_length < 0:
+        raise ConversionError(f"{object_name!r} has a negative length")
+    optic_offset = _as_float(tf.optic_offset, f"{object_name}.optic_offset")
     return TypeKey(
-        ldb_type=str(tf.target_type),
-        color_initial=_object_initial(object_name),
-        mechanical_length=_as_float(tf.length, f"{object_name}.length"),
-        optic_length=_as_float(tf.optic_length, f"{object_name}.optic_length"),
-        optic_offset=_as_float(tf.optic_offset, f"{object_name}.optic_offset"),
+        ldb_type=str(tf.target_type), color_initial=_object_initial(object_name),
+        mechanical_length=length, optic_length=optic_length,
+        magnetic_long_offset=(_magnetic_offset(tf, "mec_long_offset", optic_offset)
+                              if optic_length else optic_offset),
+        magnetic_radial_offset=_magnetic_offset(tf, "mec_radial_offset"),
+        magnetic_vertical_offset=_magnetic_offset(tf, "mec_vertical_offset"),
         angle=_as_float(tf.angle, f"{object_name}.angle"),
         roll=_as_float(tf.roll, f"{object_name}.roll"),
+        mechanical_model=mechanical_model, span_frames=span_frames,
     )
+
+
+def _span_center_stations(machine: Any, root_name: str, names: Iterable[str]) -> dict[str, float]:
+    """Resolve the source's longitudinal hierarchy before wrapping it onto a curve.
+
+    A span is a station interval, not rotated/offset hardware. Refuse such
+    source data rather than guessing how to transport a span away from the path.
+    """
+    cache: dict[str, float] = {}
+
+    def station(name: str) -> float:
+        if name in cache:
+            return cache[name]
+        tf = machine.transformations[name]
+        if any(_nonzero(_as_float(getattr(tf, op), f"{name}.{op}"))
+               for op in ("ty", "tz", "rx", "ry", "rz")):
+            raise ConversionError(f"span ancestry {name!r} is not purely longitudinal")
+        if str(tf.ref) == root_name:
+            base = 0.0
+        else:
+            parent = machine.transformations[str(tf.ref)]
+            base = station(str(tf.ref)) + _point_offset(parent, str(tf.ref_point))
+        cache[name] = base + _as_float(tf.tx, f"{name}.tx") - _point_offset(tf, str(tf.target_point))
+        return cache[name]
+
+    return {name: station(name) for name in sorted(names)}
+
+
+def _span_local_frames(tf: Any, center_station: float, path: Any) -> tuple:
+    def at(station: float):
+        length = float(path.dcum[-1])
+        if station < -1e-8 or station > length + 1e-8:
+            raise ConversionError(f"span {tf.target!r} extends beyond the reference curve")
+        return path.get_point(min(length, max(0.0, station))).to_madpoint()
+
+    center = at(center_station)
+    inverse = np.linalg.inv(center.matrix)
+    frames = []
+    for point in POINT_TO_LAYOUT_FRAME:
+        name = _frame_name(tf, point, span=True)
+        if name == "center":
+            continue
+        offset = _point_offset(tf, point)
+        if offset == 0:
+            frames.append((name, ()))
+        else:
+            local = type(center)(inverse @ at(center_station + offset).matrix)
+            frames.append((name, tuple(tuple(op) for op in _mad_frame_operations(local))))
+    return tuple(frames)
 
 
 def _allocate_type_names(
@@ -396,68 +410,48 @@ def _allocate_type_names(
     return key_to_name, splits
 
 
-def _make_layout_type(
-    key: TypeKey,
-    *,
-    transverse_size: float,
-    point_length: float,
-    zero_magnetic_length: float,
-) -> dict[str, Any]:
-    if transverse_size <= 0.0:
-        raise ConversionError("transverse_size must be positive")
-    if point_length <= 0.0:
-        raise ConversionError("point_length must be positive")
-    if zero_magnetic_length <= 0.0:
-        raise ConversionError("zero_magnetic_length must be positive")
+def _offset_operations(longitudinal: float, radial=0.0, vertical=0.0, *, curved=False):
+    # These are local geometry offsets, not source positioning TX operations.
+    return [[name, value] for name, value in
+            (("ts" if curved else "tt", longitudinal), ("tx", -radial), ("ty", vertical))
+            if _nonzero(value)]
 
-    displayed_length = key.mechanical_length if key.mechanical_length > 0.0 else point_length
-    magnetic_length = key.optic_length if key.optic_length > 0.0 else zero_magnetic_length
 
-    if key.angle != 0.0:
-        curvature_denominator = key.optic_length or key.mechanical_length
-        if curvature_denominator <= 0.0:
-            raise ConversionError(
-                f"type {key.ldb_type!r} has a bend angle but no positive length"
-            )
-        curvature = key.angle / curvature_denominator
+def _make_layout_type(key: TypeKey, *, transverse_size: float, point_length: float) -> dict[str, Any]:
+    result: dict[str, Any] = {"color": color_for_name(key.color_initial), "frames": {}}
+    if key.mechanical_model == "span":
+        result["frames"] = {name: {"transformation": [list(op) for op in ops]}
+                            for name, ops in key.span_frames}
+        return result
+
+    if key.angle and key.optic_length <= 0:
+        raise ConversionError(f"type {key.ldb_type!r} has a bend angle but no optic length")
+    curvature = key.angle / key.optic_length if key.optic_length else 0.0
+    curved = key.mechanical_model == "curved"
+    result["shape"] = ["box", transverse_size, transverse_size,
+                       key.mechanical_length or point_length,
+                       curvature if curved else 0.0, key.roll if curved else 0.0]
+    for name, direction in (("mechanical_start", -0.5), ("mechanical_end", 0.5)):
+        result["frames"][name] = {"transformation":
+                                  _offset_operations(direction * key.mechanical_length, curved=curved)}
+    center = {"transformation": _offset_operations(
+        key.magnetic_long_offset, key.magnetic_radial_offset, key.magnetic_vertical_offset,
+        curved=curved,
+    )}
+    if key.optic_length:
+        result.update(magnetic_center=center, magnetic_length=key.optic_length,
+                      magnetic_curvature=curvature, magnetic_roll=key.roll)
     else:
-        curvature = 0.0
-
-    magnetic_center_ops: list[list[Any]] = []
-    if _nonzero(key.optic_offset):
-        magnetic_center_ops.append(["ts", key.optic_offset])
-
-    # These use the actual LDB mechanical length, even when point_length is used
-    # merely to make a zero-length entity visible.
-    start_shift = -key.mechanical_length / 2.0
-    end_shift = key.mechanical_length / 2.0
-    mechanical_start_ops = [["ts", start_shift]] if _nonzero(start_shift) else []
-    mechanical_end_ops = [["ts", end_shift]] if _nonzero(end_shift) else []
-
-    return {
-        "shape": [
-            "box",
-            transverse_size,
-            transverse_size,
-            displayed_length,
-            curvature,
-            key.roll,
-        ],
-        "color": color_for_name(key.color_initial),
-        "magnetic_center": {"transformation": magnetic_center_ops},
-        "magnetic_length": magnetic_length,
-        "magnetic_curvature": curvature,
-        "magnetic_roll": key.roll,
-        "frames": {
-            "mechanical_start": {"transformation": mechanical_start_ops},
-            "mechanical_end": {"transformation": mechanical_end_ops},
-        },
-    }
+        # A zero-length optic point is still a valid source anchor. It has no
+        # finite axis and its start/middle/end coincide exactly.
+        for name in ("optic_start", "optic_center", "optic_end"):
+            result["frames"][name] = {"transformation": _offset_operations(key.magnetic_long_offset, curved=curved)}
+    return result
 
 
-def _initial_dangling_objects(machine: Any) -> dict[str, str]:
+def _initial_dangling_objects(machine: Any, root_name: str) -> dict[str, str]:
     transformations = machine.transformations
-    machine_name = str(machine.name)
+    machine_name = root_name
     dangling: dict[str, str] = {}
     for object_name, tf in transformations.items():
         reference_name = str(tf.ref)
@@ -507,38 +501,12 @@ def _check_input_cycles(machine: Any, kept_names: set[str]) -> None:
 
 
 def machine_to_layout(
-    machine: Any,
-    *,
-    curve_name: str | None = None,
-    machine_length: float | None = None,
-    transverse_size: float = 0.1,
-    point_length: float = 0.1,
-    zero_magnetic_length: float = 1e-9,
+    machine: Any, *, curve_name: str, root_name: str, machine_length: float,
+    transverse_size: float = 0.1, point_length: float = 0.1,
+    span_types: Iterable[str] = (), curved_types: Iterable[str] = (),
     dangling: Literal["skip", "error"] = "skip",
 ) -> ConversionResult:
-    """Convert an already-loaded LDB ``Machine`` to canonical Layout Studio JSON.
-
-    Parameters
-    ----------
-    machine:
-        A ``Machine``-like object exposing ``name``, ``version``,
-        ``transformations`` and ``get_ref_curve``.
-    curve_name:
-        Output curve name.  Defaults to ``machine.name``.
-    machine_length:
-        Explicit finite curve domain.  When omitted, infer it from top-level
-        mechanical/optic coverage and fall back to ``machine.ref_curve``.
-    transverse_size:
-        Box ``dx`` and ``dy`` in metres.
-    point_length:
-        Displayed ``dz`` for zero-mechanical-length entities.
-    zero_magnetic_length:
-        Positive approximation used where LDB optic length is zero.
-    dangling:
-        ``"skip"`` removes dangling objects and their descendants; ``"error"``
-        aborts conversion.
-    """
-
+    """Shared conversion implementation; root/length discovery is in the public module."""
     for attribute in ("name", "version", "transformations", "get_ref_curve"):
         if not hasattr(machine, attribute):
             raise ConversionError(f"machine is missing required attribute {attribute!r}")
@@ -546,33 +514,32 @@ def machine_to_layout(
     if dangling not in {"skip", "error"}:
         raise ConversionError("dangling must be 'skip' or 'error'")
 
-    machine_name = str(machine.name)
-    output_curve_name = curve_name or machine_name
+    machine_name = root_name
+    output_curve_name = curve_name
     if not output_curve_name:
         raise ConversionError("curve_name must be non-empty")
 
-    if machine_length is None:
-        resolved_length, length_source = infer_machine_length(machine)
-    else:
-        resolved_length = _as_float(machine_length, "machine_length")
-        if resolved_length <= 0.0:
-            raise ConversionError("machine_length must be positive")
-        length_source = "explicit argument"
-
+    resolved_length = _as_float(machine_length, "machine_length")
+    for name, value in (("machine_length", resolved_length),
+                        ("transverse_size", transverse_size), ("point_length", point_length)):
+        if _as_float(value, name) <= 0:
+            raise ConversionError(f"{name} must be positive")
+    span_types, curved_types = frozenset(span_types), frozenset(curved_types)
+    if span_types & curved_types:
+        raise ConversionError("a type cannot be both a span and curved hardware")
     transformations: Mapping[str, Any] = machine.transformations
     report = ConversionReport(
-        machine=machine_name,
+        machine=str(machine.name),
         version=str(machine.version),
         curve_name=output_curve_name,
         machine_length=resolved_length,
-        machine_length_source=length_source,
+        machine_length_source="explicit argument",
         input_transformations=len(transformations),
         input_type_names=len({str(tf.target_type) for tf in transformations.values()}),
         zero_length_display_value=point_length,
-        zero_magnetic_length_value=zero_magnetic_length,
     )
 
-    skipped = _initial_dangling_objects(machine)
+    skipped = _initial_dangling_objects(machine, root_name)
     if skipped and dangling == "error":
         details = "; ".join(f"{name}: {reason}" for name, reason in sorted(skipped.items()))
         raise ConversionError(f"dangling LDB references: {details}")
@@ -603,13 +570,24 @@ def machine_to_layout(
             f"{curve_length_from_segments} versus {resolved_length}"
         )
 
+    span_names = {name for name in kept_names if str(transformations[name].target_type) in span_types}
+    span_stations = _span_center_stations(machine, root_name, span_names)
+    report.mechanical_models = {name: "span" for name in sorted(span_types)}
+    report.mechanical_models.update({name: "curved" for name in sorted(curved_types)})
     keys_by_base: dict[str, set[TypeKey]] = defaultdict(set)
     key_for_object: dict[str, TypeKey] = {}
     for object_name, tf in transformations.items():
         object_name = str(object_name)
         if object_name in skipped:
             continue
-        key = _type_key(object_name, tf)
+        model = "span" if object_name in span_names else "curved" if str(tf.target_type) in curved_types else "straight"
+        span_frames = ()
+        if model == "span":
+            station = span_stations[object_name]
+            span_frames = _span_local_frames(tf, station, source_path)
+            report.span_objects[object_name] = {"start": station - tf.length / 2,
+                                                "center": station, "end": station + tf.length / 2}
+        key = _type_key(object_name, tf, model, span_frames)
         key_for_object[object_name] = key
         keys_by_base[key.ldb_type].add(key)
         if key.mechanical_length == 0.0:
@@ -627,7 +605,6 @@ def machine_to_layout(
             key,
             transverse_size=transverse_size,
             point_length=point_length,
-            zero_magnetic_length=zero_magnetic_length,
         )
 
     output_objects: dict[str, Any] = {}
@@ -637,8 +614,9 @@ def machine_to_layout(
             continue
 
         try:
-            target_frame = POINT_TO_LAYOUT_FRAME[str(tf.target_point)]
-            reference_frame = POINT_TO_LAYOUT_FRAME[str(tf.ref_point)]
+            target_frame = _frame_name(tf, str(tf.target_point), span=object_name in span_names)
+            reference_frame = ("center" if str(tf.ref) == root_name else _frame_name(
+                transformations[str(tf.ref)], str(tf.ref_point), span=str(tf.ref) in span_names))
         except KeyError as exc:
             raise ConversionError(
                 f"{object_name!r} uses unsupported point type {exc.args[0]!r}"
@@ -675,6 +653,18 @@ def machine_to_layout(
             "type": type_name_for_key[key_for_object[object_name]],
             "position": position,
         }
+        key = key_for_object[object_name]
+        if key.optic_length > 0 and key.mechanical_model != "span":
+            beam_center = {"transformation": _offset_operations(
+                _as_float(tf.optic_offset, f"{object_name}.optic_offset"),
+                curved=key.mechanical_model == "curved")}
+            magnetic = output_types[type_name_for_key[key]]
+            if beam_center != magnetic["magnetic_center"]:
+                output_objects[object_name].update(
+                    beam_center=beam_center, beam_length=key.optic_length,
+                    beam_curvature=magnetic["magnetic_curvature"], beam_roll=key.roll,
+                )
+                report.explicit_beam_interfaces += 1
 
     layout = {
         "reference_curves": {output_curve_name: reference_curve},
@@ -695,8 +685,7 @@ def machine_to_layout(
         )
     if report.zero_optic_length_objects:
         report.warnings.append(
-            f"represented {report.zero_optic_length_objects} zero optic length(s) with "
-            f"magnetic_length={zero_magnetic_length:g} m"
+            f"kept {report.zero_optic_length_objects} zero optic length(s) as exact stored frames; no magnetic/beam axis"
         )
 
     validate_layout_json(layout)
@@ -738,6 +727,33 @@ def validate_layout_json(layout: Mapping[str, Any]) -> None:
                 raise ConversionError(f"{path}[{index}] has invalid operation {name!r}")
             finite(amount, f"{path}[{index}][1]")
 
+    def local_frame(value: Any, path: str) -> None:
+        if not isinstance(value, Mapping) or set(value) != {"transformation"}:
+            raise ConversionError(f"{path} must be a local transformation")
+        operations(value["transformation"], path)
+
+    def axis(value: Mapping, feature: str, path: str) -> None:
+        fields = {f"{feature}_{name}" for name in ("center", "length", "curvature", "roll")}
+        present = fields.intersection(value)
+        if present and present != fields:
+            raise ConversionError(f"{path}.{feature} fields must be all present or all absent")
+        if not present:
+            return
+        local_frame(value[f"{feature}_center"], f"{path}.{feature}_center")
+        if finite(value[f"{feature}_length"], f"{path}.{feature}_length") <= 0:
+            raise ConversionError(f"{path}.{feature}_length must be positive")
+        for name in ("curvature", "roll"):
+            finite(value[f"{feature}_{name}"], f"{path}.{feature}_{name}")
+
+    def frame_names(obj: Mapping) -> set[str]:
+        type_ = types_[obj["type"]]
+        names = {"center", *type_["frames"]}
+        if "magnetic_center" in type_:
+            names.update(("magnetic_center", "magnetic_entry", "magnetic_exit"))
+        if "beam_center" in obj or "magnetic_center" in type_:
+            names.update(("beam_center", "beam_entry", "beam_exit"))
+        return names
+
     def reference(value: Any, path: str) -> None:
         if not isinstance(value, Mapping):
             raise ConversionError(f"{path} must be a reference object")
@@ -754,9 +770,8 @@ def validate_layout_json(layout: Mapping[str, Any]) -> None:
             object_name = value.get("object")
             if object_name not in objects:
                 raise ConversionError(f"{path} references unknown object {object_name!r}")
-            referenced_type = types_[objects[object_name]["type"]]
             frame = value.get("frame")
-            if frame not in IMPLICIT_FRAMES and frame not in referenced_type["frames"]:
+            if frame not in frame_names(objects[object_name]):
                 raise ConversionError(f"{path} references unknown frame {frame!r}")
         else:
             raise ConversionError(f"{path} has invalid reference kind {kind!r}")
@@ -785,50 +800,38 @@ def validate_layout_json(layout: Mapping[str, Any]) -> None:
             finite(segment[2], "segment roll")
 
     for type_name, type_ in types_.items():
-        if not type_name or set(type_) != {
-            "shape",
-            "color",
-            "magnetic_center",
-            "magnetic_length",
-            "magnetic_curvature",
-            "magnetic_roll",
-            "frames",
-        }:
+        allowed = {"color", "frames", "shape", "magnetic_center", "magnetic_length",
+                   "magnetic_curvature", "magnetic_roll"}
+        if not type_name or not isinstance(type_, Mapping) or not {"color", "frames"}.issubset(type_) or not set(type_).issubset(allowed):
             raise ConversionError(f"invalid type {type_name!r}")
         color(type_["color"], f"types.{type_name}.color")
-        shape = type_["shape"]
-        if not isinstance(shape, list) or len(shape) != 6 or shape[0] != "box":
-            raise ConversionError(f"types.{type_name}.shape is not a Layout Studio box")
-        for index in (1, 2, 3):
-            if finite(shape[index], f"types.{type_name}.shape[{index}]") <= 0.0:
-                raise ConversionError(f"types.{type_name} shape dimensions must be positive")
-        finite(shape[4], f"types.{type_name}.shape curvature")
-        finite(shape[5], f"types.{type_name}.shape roll")
-        if finite(type_["magnetic_length"], f"types.{type_name}.magnetic_length") <= 0.0:
-            raise ConversionError(f"types.{type_name}.magnetic_length must be positive")
-        finite(type_["magnetic_curvature"], f"types.{type_name}.magnetic_curvature")
-        finite(type_["magnetic_roll"], f"types.{type_name}.magnetic_roll")
-        magnetic_center = type_["magnetic_center"]
-        if not isinstance(magnetic_center, Mapping) or set(magnetic_center) != {"transformation"}:
-            raise ConversionError(f"types.{type_name}.magnetic_center is invalid")
-        operations(magnetic_center["transformation"], f"types.{type_name}.magnetic_center")
+        if "shape" in type_:
+            shape = type_["shape"]
+            if not isinstance(shape, list) or len(shape) != 6 or shape[0] != "box":
+                raise ConversionError(f"types.{type_name}.shape is not a Layout Studio box")
+            for index in (1, 2, 3):
+                if finite(shape[index], f"types.{type_name}.shape[{index}]") <= 0:
+                    raise ConversionError(f"types.{type_name} shape dimensions must be positive")
+            finite(shape[4], f"types.{type_name}.shape curvature")
+            finite(shape[5], f"types.{type_name}.shape roll")
+        axis(type_, "magnetic", f"types.{type_name}")
         frames = type_["frames"]
-        if not isinstance(frames, Mapping):
-            raise ConversionError(f"types.{type_name}.frames must be a dictionary")
-        if IMPLICIT_FRAMES.intersection(frames):
-            raise ConversionError(f"types.{type_name}.frames uses a reserved name")
-        for frame_name, frame in frames.items():
-            if not frame_name or not isinstance(frame, Mapping) or set(frame) != {"transformation"}:
-                raise ConversionError(f"types.{type_name}.frames.{frame_name} is invalid")
-            operations(frame["transformation"], f"types.{type_name}.frames.{frame_name}")
+        if not isinstance(frames, Mapping) or IMPLICIT_FRAMES.intersection(frames):
+            raise ConversionError(f"types.{type_name}.frames must be a mapping with no reserved names")
+        for name, frame in frames.items():
+            if not name:
+                raise ConversionError(f"types.{type_name}.frames contains an empty name")
+            local_frame(frame, f"types.{type_name}.frames.{name}")
 
     dependencies: dict[str, list[str]] = {}
     for object_name, obj in objects.items():
-        if not object_name or not isinstance(obj, Mapping) or set(obj) != {"type", "position"}:
+        allowed = {"type", "position", "beam_center", "beam_length", "beam_curvature", "beam_roll"}
+        if not object_name or not isinstance(obj, Mapping) or not {"type", "position"}.issubset(obj) or not set(obj).issubset(allowed):
             raise ConversionError(f"invalid object {object_name!r}")
         type_name = obj["type"]
         if type_name not in types_:
             raise ConversionError(f"object {object_name!r} references unknown type {type_name!r}")
+        axis(obj, "beam", f"objects.{object_name}")
         position = obj["position"]
         if not isinstance(position, Mapping):
             raise ConversionError(f"object {object_name!r} position is invalid")
@@ -840,7 +843,7 @@ def validate_layout_json(layout: Mapping[str, Any]) -> None:
         }.issubset(position):
             raise ConversionError(f"object {object_name!r} position has wrong fields")
         target = position["target"]
-        if target not in IMPLICIT_FRAMES and target not in types_[type_name]["frames"]:
+        if target not in frame_names(obj):
             raise ConversionError(f"object {object_name!r} targets unknown frame {target!r}")
         reference(position["reference"], f"objects.{object_name}.position.reference")
         operations(position["transformation"], f"objects.{object_name}.position.transformation")
@@ -887,10 +890,16 @@ def validate_layout_json(layout: Mapping[str, Any]) -> None:
 
 
 def write_json(path: Path, value: Any, *, indent: int | None = 2) -> None:
+    """Write JSON, using reproducible gzip bytes for a .gz output path."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as stream:
-        json.dump(value, stream, indent=indent, ensure_ascii=False, allow_nan=False)
-        stream.write("\n")
+    data = (json.dumps(value, indent=indent, ensure_ascii=False, allow_nan=False,
+                       separators=(",", ":") if indent is None else None) + "\n").encode("utf-8")
+    if path.suffix == ".gz":
+        with path.open("wb") as raw:
+            with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0, compresslevel=9) as stream:
+                stream.write(data)
+    else:
+        path.write_bytes(data)
 
 
 def _bootstrap_legacy_modules(module_dir: Path | None) -> None:
@@ -984,12 +993,12 @@ def _default_output_path(input_path: Path) -> Path:
         if stem.endswith(suffix):
             stem = stem[: -len(suffix)]
             break
-    return input_path.with_name(f"{stem}.layout.json")
+    return input_path.with_name(f"{stem}.json.gz")
 
 
-def build_argument_parser() -> argparse.ArgumentParser:
+def build_argument_parser(*, default_input: Path | None = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", type=Path, help="Machine pickle")
+    parser.add_argument("input", type=Path, nargs="?" if default_input else None, default=default_input, help="Machine pickle")
     parser.add_argument("-o", "--output", type=Path, help="Layout Studio JSON path")
     parser.add_argument(
         "--report",
@@ -1019,12 +1028,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=0.1,
         help="display dz for zero-length objects in metres (default: 0.1)",
     )
-    parser.add_argument(
-        "--zero-magnetic-length",
-        type=float,
-        default=1e-9,
-        help="positive approximation for zero optic length (default: 1e-9)",
-    )
+    parser.add_argument("--span-type", action="append", default=[], help="LDB type whose length is a reference-curve span (repeatable)")
+    parser.add_argument("--curved-type", action="append", default=[], help="LDB type with mechanical curvature matching its magnetic axis (repeatable)")
     parser.add_argument(
         "--dangling",
         choices=("skip", "error"),
@@ -1034,52 +1039,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--indent",
         type=int,
-        default=2,
-        help="JSON indentation; use 0 for compact output (default: 2)",
+        default=0,
+        help="JSON indentation; use 0 for compact output (default: 0)",
     )
     return parser
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    args = build_argument_parser().parse_args(argv)
-    output = args.output or _default_output_path(args.input)
-    report_path = args.report or output.with_name(f"{output.stem}.report.json")
-    indent = None if args.indent == 0 else args.indent
-
-    try:
-        machine = load_machine_pickle(args.input, module_dir=args.module_dir)
-        result = machine_to_layout(
-            machine,
-            curve_name=args.curve_name,
-            machine_length=args.machine_length,
-            transverse_size=args.transverse_size,
-            point_length=args.point_length,
-            zero_magnetic_length=args.zero_magnetic_length,
-            dangling=args.dangling,
-        )
-        write_json(output, result.layout, indent=indent)
-        write_json(report_path, asdict(result.report), indent=2)
-    except ConversionError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-
-    report = result.report
-    print(
-        f"wrote {output} with {report.output_objects} objects, "
-        f"{report.output_types} types and {report.curve_segments} curve segments"
-    )
-    print(
-        f"curve {report.curve_name!r}: {report.machine_length:.12g} m "
-        f"({report.machine_length_source})"
-    )
-    if report.skipped_objects:
-        print(
-            f"warning: skipped {len(report.skipped_objects)} object(s); see {report_path}",
-            file=sys.stderr,
-        )
-    print(f"wrote report {report_path}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
