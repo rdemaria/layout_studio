@@ -72,6 +72,15 @@ export function buildLayoutDependencyHierarchy(layout: LayoutData) {
   const dependentsByAnchor = new Map<string, LayoutDependencyEdge[]>();
 
   for (const edge of graph.edges) {
+    if (edge.relation === "station_curve") {
+      const node = graphNodes.get(edge.from);
+      // The referenced object is the hierarchy parent; the station curve
+      // remains a dependency in the graph used for positioning.
+      if (node?.kind === "object" &&
+          layout.objects[node.name]?.position.reference.kind === "object_frame") {
+        continue;
+      }
+    }
     const edges = dependentsByAnchor.get(edge.to) ?? [];
     edges.push(edge);
     dependentsByAnchor.set(edge.to, edges);

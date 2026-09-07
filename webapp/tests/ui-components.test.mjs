@@ -700,7 +700,7 @@ test("orients the dependency hierarchy outward from World", async () => {
   const { buildLayoutDependencyHierarchy } = await vite.ssrLoadModule(
     "/app/dependency-tree.tsx",
   );
-  const { parseLayout, SAMPLE_LAYOUT } = await vite.ssrLoadModule(
+  const { getLayoutDependencyGraph, parseLayout, SAMPLE_LAYOUT } = await vite.ssrLoadModule(
     "/app/layout-data.ts",
   );
   const layout = structuredClone(SAMPLE_LAYOUT);
@@ -722,7 +722,6 @@ test("orients the dependency hierarchy outward from World", async () => {
     [
       ["object:QF1", "position_reference"],
       ["object:BPM1", "position_reference"],
-      ["object:Detector", "station_curve"],
     ],
   );
   assert.deepEqual(
@@ -733,6 +732,17 @@ test("orients the dependency hierarchy outward from World", async () => {
     ]),
     [["object:Detector", "position_reference", "magnetic_exit"]],
   );
+  assert.ok(getLayoutDependencyGraph(layout).edges.some((edge) =>
+    edge.from === "object:Detector" && edge.to === "curve:ring" &&
+    edge.relation === "station_curve",
+  ));
+
+  // Without an object reference, the station curve still appears in the tree.
+  layout.objects.Detector.position.reference = { kind: "world" };
+  const worldHierarchy = buildLayoutDependencyHierarchy(parseLayout(layout));
+  assert.ok(worldHierarchy.dependentsByAnchor.get("curve:ring").some((edge) =>
+    edge.from === "object:Detector" && edge.relation === "station_curve",
+  ));
 });
 
 test("renders collapsible controls for every main card", async () => {
