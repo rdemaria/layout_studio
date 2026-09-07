@@ -59,14 +59,16 @@ class RingMachine(FakeMachine):
     ("MECHANICAL START", 10, 10),
     ("MECHANICAL END", -10, 90),
 ])
-def test_ring_seam_uses_source_station_without_inverse_ambiguity(reference_point, offset, station):
+def test_ring_seam_preserves_parent_and_source_station_without_inverse_ambiguity(reference_point, offset, station):
     sector = transformation("SECTOR", ref="LHC", tx=0, length=100, target_type="LHC SECTOR")
     child = transformation("CHILD", ref="SECTOR", tx=offset, length=1,
                            target_point="MECHANICAL MIDDLE")
     child.ref_point = reference_point
     machine = RingMachine(name="LHC", transformations={"SECTOR": sector, "CHILD": child})
     result = convert(machine)
-    assert result.layout["objects"]["CHILD"]["position"]["reference"] == {"kind": "curve", "curve": "LHC"}
+    position = result.layout["objects"]["CHILD"]["position"]
+    assert position["reference"] == {"kind": "object_frame", "object": "SECTOR", "frame": "anchor"}
+    assert position["reference_curve"] == "LHC"
     assert result.report.seam_reference_stations["CHILD"] == (0 if offset > 0 else 100)
     assert child.ref == "SECTOR"
     with Resolver(Layout.from_dict(result.layout)) as resolver:

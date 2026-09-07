@@ -20,9 +20,13 @@ the JSON with the command below, or import the separately supplied JSON file.
 - 817 objects are omitted because their ancestors are absent from the snapshot.
 - 840 objects with unavailable mechanical lengths remain as shapeless anchors.
 - 82,701 explicitly zero-length objects retain the converter's small display box.
-- 37 seam references use known source stations to avoid ambiguous closed-ring
-  station inference. The full browser scene fingerprint is identical before
-  and after this correction; Python now also resolves the complete layout.
+- 37 seam references use the parent span's midpoint plus the known boundary
+  offset to avoid ambiguous closed-ring station inference while preserving the
+  object hierarchy. The earlier direct-to-curve workaround left S12 without
+  children in the hierarchy; the midpoint reference restores its branch.
+  Comparing all 322,464 anchor and mechanical-center frames with that output
+  gives a maximum position difference of 3.19e-12 m and direction-component
+  difference of 1.12e-15. Types and reference curves are unchanged.
 
 The Python validator resolved all 161,941 objects and 1,177,217 frames. It
 compared 2,466 curve boundaries and 1,734 span frames with the source converted

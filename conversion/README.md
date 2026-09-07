@@ -103,9 +103,11 @@ children do not require unknown endpoints. Separate type variants protect
 objects whose length is known. The source snapshot is not modified.
 
 At the closed-ring seam, coincident start/end frames cannot uniquely identify
-a path station. The LHC script writes the known source station directly for
-37 affected references to span boundaries, preserving operation order. The
-report records these choices. This avoids tolerance-dependent inverse searches.
+a path station. The LHC script rebases the 37 affected span-boundary references
+onto their parent span's midpoint and adds the boundary's relative `ts` offset.
+This preserves both the object hierarchy and the placed frames without a
+tolerance-dependent choice between the seam's two stations. The report records
+the original boundary stations.
 
 The generated plain LHC JSON contains 161,941 of 162,758 source objects.
 817 objects have missing ancestors and are listed in the report. The missing

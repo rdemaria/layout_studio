@@ -62,14 +62,13 @@ def convert(machine, *, span_types=(), **options):
         station = parent_span["center"] + offsets[source.ref_point]
         if min(abs(station), abs(station - result.report.machine_length)) > 1e-7:
             continue
-        # A closed ring has two equally valid geometric stations at its seam.
-        # Preserve the source's unwrapped station explicitly instead of relying
-        # on a nearest-station search or a numerical nudge of the reference.
+        # The seam has two equally valid geometric stations. Use the parent
+        # span's unambiguous center and shift back to the source boundary,
+        # retaining the object parent without changing the placed frame.
         position = obj["position"]
-        position["reference"] = {"kind": "curve", "curve": result.report.curve_name}
-        position.pop("reference_curve", None)
-        if station:
-            position["transformation"].insert(0, ["ts", station])
+        position["reference"] = {"kind": "object_frame", "object": source.ref, "frame": "anchor"}
+        position["reference_curve"] = result.report.curve_name
+        position["transformation"].insert(0, ["ts", station - parent_span["center"]])
         seam_stations[name] = station
     kept_unknown = sorted(unknown & result.layout["objects"].keys())
     for name in kept_unknown:
@@ -86,7 +85,7 @@ def convert(machine, *, span_types=(), **options):
     if kept_unknown:
         report.warnings.append(f"kept {len(kept_unknown)} objects with unavailable mechanical lengths as anchors without solids or mechanical endpoints")
     if seam_stations:
-        report.warnings.append(f"used explicit source stations for {len(seam_stations)} references at the closed-ring seam")
+        report.warnings.append(f"rebased {len(seam_stations)} closed-ring seam references onto parent span centers, preserving the object hierarchy")
     result.report = LHCConversionReport(**asdict(report), unavailable_mechanical_lengths=kept_unknown,
                                       seam_reference_stations=seam_stations)
     validate_layout_json(result.layout)

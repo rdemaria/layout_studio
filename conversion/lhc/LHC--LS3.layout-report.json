@@ -4347,7 +4347,7 @@
     "kept 146365 zero optic length(s) as exact stored frames; no magnetic/beam axis",
     "displayed 82701 zero-length objects with dz=0.1 m",
     "kept 840 objects with unavailable mechanical lengths as anchors without solids or mechanical endpoints",
-    "used explicit source stations for 37 references at the closed-ring seam"
+    "rebased 37 closed-ring seam references onto parent span centers, preserving the object hierarchy"
   ],
   "unavailable_mechanical_lengths": [
     "ACFMC.A4R1",
