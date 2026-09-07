@@ -27,11 +27,7 @@ const compressed = gzipSync(sampleBytes);
 
 const server = createHttpServer((request, response) => {
   switch (request.url) {
-    case "/raw.json.gz":
-      response.setHeader("Content-Type", "application/gzip");
-      response.end(compressed);
-      break;
-    case "/encoded.json.gz":
+    case "/encoded.json":
       response.setHeader("Content-Type", "application/json");
       response.setHeader("Content-Encoding", "gzip");
       response.end(compressed);
@@ -56,13 +52,10 @@ after(async () => {
   ]);
 });
 
-test("imports JSON and gzip files based on bytes rather than name or MIME type", async () => {
+test("imports plain JSON files with UTF-8 text and optional BOM", async () => {
   for (const [name, bytes, type] of [
     ["layout.json", sampleBytes, "application/json"],
-    ["layout.json.gz", compressed, "application/gzip"],
-    ["layout.gz", compressed, ""],
-    ["layout.json", compressed, "application/json"],
-    ["layout.json.gz", sampleBytes, "application/gzip"],
+    ["layout.json", sampleBytes, ""],
     ["bom.json", Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), sampleBytes]), ""],
   ]) {
     const file = new File([bytes], name, { type });
@@ -70,37 +63,33 @@ test("imports JSON and gzip files based on bytes rather than name or MIME type",
   }
   const unicode = { name: "SPS — entrée" };
   assert.deepEqual(
-    await readLayoutJson(new File([gzipSync(JSON.stringify(unicode))], "unicode.gz")),
+    await readLayoutJson(new File([JSON.stringify(unicode)], "unicode.json")),
     unicode,
   );
 });
 
-test("loads plain, raw gzip, and HTTP-decoded gzip URL responses", async () => {
-  for (const path of ["plain.json", "raw.json.gz", "encoded.json.gz"]) {
+test("loads JSON URL responses, including transparent HTTP compression", async () => {
+  for (const path of ["plain.json", "encoded.json"]) {
     assert.deepEqual(await fetchLayoutJson(new URL(path, baseUrl).href), sample, path);
   }
 });
 
 test("reports failed URL requests and supports cancellation", async () => {
-  await assert.rejects(fetchLayoutJson(new URL("missing.json.gz", baseUrl).href), /HTTP 404/);
+  await assert.rejects(fetchLayoutJson(new URL("missing.json", baseUrl).href), /HTTP 404/);
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(fetchLayoutJson(baseUrl, controller.signal), { name: "AbortError" });
 });
 
-test("rejects corrupt gzip and invalid JSON", async () => {
-  await assert.rejects(
-    readLayoutJson(new File([compressed.subarray(0, 12)], "broken.gz")),
-    /Could not decompress gzip layout/,
-  );
-  for (const bytes of ["{", gzipSync("{"), ""]) {
+test("rejects invalid JSON", async () => {
+  for (const bytes of ["{", ""]) {
     await assert.rejects(readLayoutJson(new File([bytes], "invalid.json")), SyntaxError);
   }
 });
 
-test("reads the shipped SPS and M2 gzip conversions as valid editor layouts", async () => {
+test("reads the shipped SPS and M2 JSON conversions as valid editor layouts", async () => {
   for (const [machine, count] of [["SPS", 12339], ["M2", 428]]) {
-    const name = `${machine}--LS3.json.gz`;
+    const name = `${machine}--LS3.json`;
     const bytes = await readFile(new URL(`../public/layouts/${name}`, import.meta.url));
     const layout = parseLayout(await readLayoutJson(new File([bytes], name)));
     assert.equal(Object.keys(layout.objects).length, count, machine);
@@ -116,17 +105,17 @@ test("debug URL query accepts relative, external, quoted, and encoded values", (
   page.search = "";
   assert.equal(layoutUrlFromQuery(page), null);
 
-  const external = "https://other.example/SPS.json.gz?download=1&version=LS3#layout";
+  const external = "https://other.example/SPS.json?download=1&version=LS3#layout";
   for (const value of [external, `"${external}"`, `'${external}'`]) {
     page.searchParams.set("url", value);
     assert.equal(layoutUrlFromQuery(page), external);
   }
   assert.equal(
-    layoutUrlFromQuery('https://layout.example/studio/?url="layouts/SPS--LS3.json.gz"'),
-    "https://layout.example/studio/layouts/SPS--LS3.json.gz",
+    layoutUrlFromQuery('https://layout.example/studio/?url="layouts/SPS--LS3.json"'),
+    "https://layout.example/studio/layouts/SPS--LS3.json",
   );
-  page.searchParams.set("url", " ../M2.json.gz ");
-  assert.equal(layoutUrlFromQuery(page), "https://layout.example/M2.json.gz");
+  page.searchParams.set("url", " ../M2.json ");
+  assert.equal(layoutUrlFromQuery(page), "https://layout.example/M2.json");
   page.searchParams.set("url", "data:application/json,{}");
   assert.throws(() => layoutUrlFromQuery(page), /must use HTTP or HTTPS/);
   page.searchParams.set("url", "https://[");

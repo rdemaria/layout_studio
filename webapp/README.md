@@ -26,8 +26,8 @@ interface tests.
 
 Running the standalone build produces `build/index.html` with its JavaScript and
 CSS fully inlined. It also copies the optional URL catalog and its listed local
-JSON and gzip-compressed JSON files beside the page. Rebuild after bridge/source
-or catalog changes before using it from Python:
+JSON files beside the page. Rebuild after bridge/source or catalog changes before
+using it from Python:
 
 ```bash
 npm run build:standalone
@@ -49,7 +49,7 @@ wheel. Do not add a second generated HTML copy under `python_api`.
 - `app/layout-viewport.tsx` — interactive 3D projection and viewer controls.
 - `app/python-bridge.ts` — validated external-control protocol for Python.
 - `app/layout-url-catalog.ts` — catalog validation and debug URL resolution.
-- `app/layout-import.ts` — shared JSON/gzip reader for files and URL responses.
+- `app/layout-import.ts` — JSON loading from files and URLs.
 - `app/layout-controls.tsx` — reusable model-editing controls.
 - `app/dependency-tree.tsx` — World-rooted dependency view.
 - `app/globals.css` — responsive application styling.
@@ -65,7 +65,7 @@ served page. Select an entry and click **Load layout**. In a source development
 server this file comes from `public/list.json`. The compact form is:
 
 ```json
-["layouts/SPS--LS3.json.gz", "layouts/sample-layout.json"]
+["layouts/SPS--LS3.json", "layouts/sample-layout.json"]
 ```
 
 Entries may also provide labels, as in the checked-in sample:
@@ -76,14 +76,12 @@ Entries may also provide labels, as in the checked-in sample:
 
 Only same-origin HTTP(S) paths from the catalog are offered. Prefer relative paths
 so a layout continues to work when the app is mounted below an origin root. The
-bundled catalog includes the sample layout and the SPS LS3 and M2 LS3 conversions.
+bundled catalog includes the sample layout and the SPS LS3 and M2 LS3 conversions
+as plain JSON files.
 
-**Import file** accepts plain JSON and gzip-compressed JSON (`.json.gz` or `.gz`).
-URL loading supports both formats too. Compression is detected from the received
-bytes, so responses already decompressed by HTTP `Content-Encoding: gzip` also
-work. Raw gzip decoding requires a browser with `DecompressionStream` support.
-Files can still be imported when the catalog is absent or the standalone page is
-opened directly from disk.
+**Import file** and URL loading use plain `.json`. Files are parsed directly from
+text and URLs use the browser's JSON response reader. Files can still be imported
+when the catalog is absent or the standalone page is opened directly from disk.
 
 For debugging, add `?url=...` to the page address to load an arbitrary HTTP(S) URL
 on startup, independently of the catalog. Relative URLs resolve beside the page;
@@ -91,10 +89,10 @@ cross-origin URLs require the remote server to allow CORS. URL-encode the value,
 especially when it contains its own query parameters, for example:
 
 ```text
-index.html?url=https%3A%2F%2Fexample.org%2Flayout.json.gz
+index.html?url=https%3A%2F%2Fexample.org%2Flayout.json
 ```
 
-Matching quotes around the value, as in `?url="layouts/SPS--LS3.json.gz"`, are also
+Matching quotes around the value, as in `?url="layouts/SPS--LS3.json"`, are also
 accepted. The editor has no free-text URL input.
 
 ## Viewer navigation

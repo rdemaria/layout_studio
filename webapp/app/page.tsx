@@ -1384,7 +1384,7 @@ export default function Home() {
               ref={fileInputRef}
               className="sr-only"
               type="file"
-              accept=".json,.gz,application/json,application/gzip,application/x-gzip"
+              accept=".json,application/json"
               onChange={(event) => void importFile(event.target.files?.[0])}
             />
             <Button

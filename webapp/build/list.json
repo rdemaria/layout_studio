@@ -4,11 +4,11 @@
     "label": "Sample layout"
   },
   {
-    "path": "layouts/SPS--LS3.json.gz",
+    "path": "layouts/SPS--LS3.json",
     "label": "SPS LS3"
   },
   {
-    "path": "layouts/M2--LS3.json.gz",
+    "path": "layouts/M2--LS3.json",
     "label": "M2 LS3"
   }
 ]
