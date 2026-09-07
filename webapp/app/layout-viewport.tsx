@@ -31,6 +31,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Slider } from "@/components/ui/slider";
 import { NumberInput } from "./number-input";
 import { zoomFocusDepth, type ZoomGeometry } from "./viewport-zoom";
+import { beginLayoutProfile, endLayoutProfile } from "./layout-performance";
 import {
   Tooltip,
   TooltipContent,
@@ -870,7 +871,10 @@ export function LayoutViewport({
   );
   const sceneResult = useMemo(() => {
     try {
-      return { scene: buildScene(layout, scope), error: "" };
+      const profileStarted = beginLayoutProfile();
+      const scene = buildScene(layout, scope);
+      endLayoutProfile("buildScene", profileStarted, {objects: scene.objects.length, frames: scene.frames.length});
+      return { scene, error: "" };
     } catch (error) {
       return {
         scene: EMPTY_SCENE,
@@ -1253,6 +1257,7 @@ export function LayoutViewport({
     syncCanvasDimensions(canvas, size.width, size.height, ratio);
     const context = canvas.getContext("2d");
     if (!context) return;
+    const profileStarted = beginLayoutProfile();
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     const { width, height } = size;
     const project = cameraProjector(camera, width, height);
@@ -1664,6 +1669,7 @@ export function LayoutViewport({
 
     hitTargetsRef.current = hits;
     zoomProjectionRef.current = {camera, width, height, geometry: zoomGeometry};
+    endLayoutProfile("viewportDraw", profileStarted, {width, height, ratio, faces: faces.length, hits: hits.length, objectsVisible: showObjects});
   }, [
     camera,
     hoverStyleKey,

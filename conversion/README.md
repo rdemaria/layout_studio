@@ -13,10 +13,12 @@ From the repository root:
 python -m pip install -r conversion/requirements.txt
 python conversion/sps/convert.py
 python conversion/m2/convert.py
+python conversion/lhc/convert.py --output conversion/lhc/LHC--LS3.json
 ```
 
-Each script reads its adjacent `MACHINE--LS3.pickle`, writes
+Each script reads its adjacent `MACHINE--LS3.pickle`, defaults to writing
 `MACHINE--LS3.json.gz`, and refreshes its report and SHA-256 manifest.
+The LHC command above explicitly selects plain JSON for publication.
 Gzip output has no timestamp or original filename, so repeated conversions
 with the same inputs produce the same bytes. Plain `.json` output is supported
 with `--output`; `--indent 2` enables pretty printing.
@@ -54,7 +56,7 @@ converted through `to_madpoint()`.
 
 | LDB point | Output frame |
 | --- | --- |
-| Mechanical middle | `center` |
+| Mechanical middle | `anchor` |
 | Mechanical start/end | `mechanical_start` / `mechanical_end` |
 | Optic middle/start/end with positive optic length on hardware | `beam_center` / `beam_entry` / `beam_exit` |
 | Optic middle/start/end with zero optic length or on a span | Stored `optic_center` / `optic_start` / `optic_end` |
@@ -87,6 +89,31 @@ stored optic frames, with no artificial magnetic length or beam axis.
 SPS explicitly classifies `SPS SEXTANT`, `SPS HALF ARC`, `SPS LSS`, and
 `SPS PERIOD` as longitudinal spans. M2 currently needs only its `M2-LINE` root
 alias and uses straight mechanical lengths.
+
+LHC classifies `LHC SECTOR`, `LHC ARC`, `LHC HALF-ARC`,
+`LHC DISPERSION SUPPRESSOR`, `LHC HALF-LSS`, and `LHC HALF-CELL` as spans.
+The LS3 snapshot contains 578 such containers; its inferred circumference is
+26,658.8832 m. Other types retain the common straight mechanical default;
+the 0.1 m transverse boxes are display approximations, not surveyed envelopes.
+
+The LHC script keeps 840 objects with unavailable mechanical lengths as anchors
+without solids or mechanical endpoints. This is allowed only for middle-based
+placements with zero optic length, optic offset, and deflection, and only when
+children do not require unknown endpoints. Separate type variants protect
+objects whose length is known. The source snapshot is not modified.
+
+At the closed-ring seam, coincident start/end frames cannot uniquely identify
+a path station. The LHC script writes the known source station directly for
+37 affected references to span boundaries, preserving operation order. The
+report records these choices. This avoids tolerance-dependent inverse searches.
+
+The generated plain LHC JSON contains 161,941 of 162,758 source objects.
+817 objects have missing ancestors and are listed in the report. The missing
+external parents are `DFBLA.RR13`, `DFBLB.RR17`, `DFBLD.RR53`, `DFBLE.RR57`,
+`GISCB.01UX85`, and `UJ33`; their positions cannot be recovered from this snapshot.
+The JSON is also copied to `webapp/public/layouts/` and the standalone build,
+with an entry in their `list.json` catalogs. See
+[LHC viewer performance](../webapp/LHC-PERFORMANCE.md) for measurements and proposals.
 
 For a span, resolve its station interval from the longitudinal source hierarchy.
 Sample its boundary and middle frames on the complete piecewise reference curve.
@@ -133,6 +160,7 @@ and skipped with their descendants; `--dangling error` aborts instead.
 ```bash
 python conversion/validate.py conversion/sps/SPS--LS3.pickle conversion/sps/SPS--LS3.json.gz
 python conversion/validate.py conversion/m2/M2--LS3.pickle conversion/m2/M2--LS3.json.gz
+python conversion/validate.py conversion/lhc/LHC--LS3.pickle conversion/lhc/LHC--LS3.json
 PYTHONPATH=python_api/src python -m pytest conversion/tests
 ```
 

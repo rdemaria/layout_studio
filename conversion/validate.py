@@ -59,7 +59,7 @@ def validate_conversion(input_path: Path, output_path: Path, report_path: Path) 
                 result["frames_resolved"] += 1
             result["objects_resolved"] += 1
         for name, stations in report.get("span_objects", {}).items():
-            for boundary, frame in (("start", "mechanical_start"), ("center", "center"), ("end", "mechanical_end")):
+            for boundary, frame in (("start", "mechanical_start"), ("center", "anchor"), ("end", "mechanical_end")):
                 station = min(float(source.dcum[-1]), max(0.0, stations[boundary]))
                 compare(resolver.object_frame(name, frame).matrix,
                         source.get_point(station).to_madpoint().matrix, "span")

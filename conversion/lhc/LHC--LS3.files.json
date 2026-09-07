@@ -1,0 +1,21 @@
+{
+  "machine": "LHC",
+  "version": "LS3",
+  "artifacts": {
+    "LHC--LS3.pickle": {
+      "bytes": 33089728,
+      "sha256": "9d0a5918c9289fee28eae97203261282afa51b6b9ffc06dfdb0c1459a665251c",
+      "role": "source Machine snapshot"
+    },
+    "LHC--LS3.json": {
+      "bytes": 35608954,
+      "sha256": "eecbae11d76acb6ee8357440d228a295720ec8d7980abc3582344fcc852299ad",
+      "role": "generated Layout Studio model"
+    },
+    "LHC--LS3.layout-report.json": {
+      "bytes": 154107,
+      "sha256": "33c8f2e7dc3c12b84198be1414a9d9e9c0b927d2ba883b00dc0f3b91f0f50539",
+      "role": "conversion report"
+    }
+  }
+}

@@ -1,5 +1,7 @@
 "use client";
 
+import { beginLayoutProfile, endLayoutProfile } from "./layout-performance";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box as BoxIcon,
@@ -335,7 +337,9 @@ export default function Home() {
     source: string,
     options: LoadValueOptions = {},
   ) => {
+    const profileStarted = beginLayoutProfile();
     const parsed = parseLayout(value);
+    endLayoutProfile("parseLayout", profileStarted);
     const preserveViewport = options.preserveViewport ?? false;
     const nextScope =
       options.scope ??
@@ -390,7 +394,9 @@ export default function Home() {
   ) => {
     setStatus({ kind: "loading", message: `Loading ${source}…` });
     try {
+      const profileStarted = beginLayoutProfile();
       const value = await fetchLayoutJson(url, signal);
+      endLayoutProfile("fetch and JSON decode", profileStarted, {source});
       if (!signal?.aborted) loadValue(value, source);
     } catch (error) {
       if (signal?.aborted) return;

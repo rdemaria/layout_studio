@@ -1,5 +1,7 @@
 # SPS loading performance
 
+For the larger LHC snapshot, see [LHC conversion and viewer performance](LHC-PERFORMANCE.md).
+
 Analysis on 2026-09-07, using `public/layouts/SPS--LS3.json` from commit
 `0775f2492252eb01d57ee73283f7c8150fd94608`:
 
