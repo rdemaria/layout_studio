@@ -6,6 +6,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+
 from layout_studio import Layout, Segment, model
 
 

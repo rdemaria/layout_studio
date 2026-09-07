@@ -6,6 +6,14 @@
   scrollbar-width: thin;
 }
 
+@utility scrollbar-none {
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 :root {
   --background: #edf1f3;
   --foreground: #17212b;
@@ -243,9 +251,10 @@ textarea {
 
 .url-loader {
   display: grid;
-  grid-template-columns: auto minmax(150px, 1fr) auto;
+  grid-template-columns: auto minmax(150px, 1fr) minmax(160px, 210px) auto;
   align-items: center;
-  width: min(540px, 100%);
+  gap: 4px;
+  width: min(760px, 100%);
   min-width: 250px;
   padding-left: 10px;
   border: 1px solid var(--input);
@@ -265,6 +274,15 @@ textarea {
 
 .url-loader input:focus-visible {
   box-shadow: none;
+}
+
+.url-loader [data-slot="native-select-wrapper"] {
+  width: 100%;
+}
+
+.url-loader .url-suggestion-select {
+  background: rgba(239, 245, 246, 0.9);
+  color: #31515a;
 }
 
 .status-pill {
@@ -686,9 +704,118 @@ textarea {
   font-size: 0.7rem;
 }
 
-.number-input {
+.number-control,
+.field > .number-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 20px 20px;
+  align-items: stretch;
+  min-width: 0;
+  height: 36px;
+  border: 1px solid #ccd7db;
+  border-radius: 5px;
+  background: #fff;
+  color: #24363e;
+  font-weight: 400;
+}
+
+.number-control:focus-within {
+  border-color: #368a93;
+  box-shadow: 0 0 0 2px rgb(54 138 147 / 15%);
+}
+
+.operation-row .number-control {
+  height: 32px;
+}
+
+.number-input-value {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.number-control .number-input,
+.number-input-underline {
   font-family: var(--font-mono);
   font-size: 0.78rem !important;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  line-height: 20px;
+  padding: 0 5px;
+}
+
+.number-control .number-input {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 4px 0 0 4px;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+.number-input-underline {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  pointer-events: none;
+  color: transparent;
+  white-space: pre;
+}
+
+.number-input-mirror {
+  position: relative;
+  flex: none;
+}
+
+.number-input-digit {
+  text-decoration: underline;
+  text-decoration-color: #16717c;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+.number-input-arrows {
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  border-left: 1px solid #e0e6e8;
+}
+
+.number-input-arrows button {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: #61737b;
+  box-shadow: none;
+}
+
+.number-input-arrows button:hover,
+.number-input-arrows button:focus-visible {
+  background: #e9f4f5;
+  color: #16717c;
+}
+
+.number-input-arrows button:disabled {
+  opacity: 0.35;
+}
+
+.number-input-arrows button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.number-input-digit-arrows button:first-child {
+  border-top-right-radius: 4px;
+}
+
+.number-input-digit-arrows button:last-child {
+  border-bottom-right-radius: 4px;
 }
 
 .wide-add {
@@ -1190,6 +1317,7 @@ textarea {
 .viewport-canvas.mode-orbit:active { cursor: grabbing; }
 .viewport-canvas.mode-pan { cursor: move; }
 .viewport-canvas.mode-select { cursor: crosshair; }
+.viewport-canvas.mode-zoom-region { cursor: zoom-in; }
 
 .viewport-toolbar {
   position: absolute;
@@ -1213,6 +1341,28 @@ textarea {
 .viewport-toolbar button[data-variant="default"] {
   background: #317c82;
   color: #fff;
+}
+
+.viewport-toolbar .canonical-view-trigger {
+  height: 28px;
+  gap: 5px;
+  padding-inline: 7px;
+  font-size: 0.69rem;
+}
+
+.viewport-toolbar .canonical-view-trigger > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.viewport-toolbar .canonical-view-trigger .canonical-view-chevron {
+  width: 11px;
+  height: 11px;
+  opacity: 0.68;
+}
+
+.canonical-view-menu {
+  min-width: 9.5rem;
 }
 
 .toolbar-separator {
@@ -1531,6 +1681,26 @@ textarea {
 
   .import-cluster > button {
     flex: 1;
+  }
+
+  .url-loader {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding-block: 4px;
+  }
+
+  .url-loader > svg {
+    grid-row: 1 / span 2;
+  }
+
+  .url-loader [data-slot="native-select-wrapper"] {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .url-loader > button {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    align-self: stretch;
   }
 
   .reference-row,

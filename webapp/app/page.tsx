@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box as BoxIcon,
   ChevronDown,
@@ -70,7 +70,8 @@ import {
   parseLayout,
   SAMPLE_LAYOUT,
   shapePath,
-  typeFrameNames,
+  objectFrameNames,
+  effectiveBeamFeature,
   uniqueName,
   type BoxShape,
   type CylinderShape,
@@ -82,8 +83,22 @@ import { DependencyTree } from "./dependency-tree";
 import {
   LayoutViewport,
   toggleViewerSelection,
+  type ViewportCommand,
   type ViewportFitRequest,
 } from "./layout-viewport";
+import type { SceneScope } from "./layout-geometry";
+import {
+  installPythonBridge,
+  type PythonBridgeCommand,
+  type PythonBridgeController,
+  type PythonBridgeHandlers,
+} from "./python-bridge";
+import {
+  layoutCatalogUrl,
+  parseLayoutUrlList,
+  resolveLayoutUrl,
+  type LayoutUrlSuggestion,
+} from "./layout-url-catalog";
 
 type Status = {
   kind: "idle" | "loading" | "success" | "error";
@@ -92,6 +107,129 @@ type Status = {
 
 const LARGE_SEGMENT_COUNT = 200;
 const LARGE_FRAME_COUNT = 200;
+
+type ViewportCommandBody = ViewportCommand extends infer Command
+  ? Command extends ViewportCommand
+    ? Omit<Command, "id">
+    : never
+  : never;
+
+type PendingViewportCommand = {
+  command: ViewportCommand;
+  resolve: () => void;
+  reject: (error: Error) => void;
+};
+
+type LoadValueOptions = {
+  preserveViewport?: boolean;
+  scope?: SceneScope;
+};
+
+function sameSelection(a: SelectedEntity, b: SelectedEntity): boolean {
+  if (!a || !b) return a === b;
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "frame" && b.kind === "frame") {
+    return a.object === b.object && a.name === b.name;
+  }
+  if (a.kind === "curve" && b.kind === "curve") {
+    return a.name === b.name && a.segmentIndex === b.segmentIndex;
+  }
+  return a.kind === "object" && b.kind === "object" && a.name === b.name;
+}
+
+function sameScope(a: SceneScope, b: SceneScope): boolean {
+  return a.kind === b.kind &&
+    (a.kind === "layout" || (b.kind !== "layout" && a.name === b.name));
+}
+
+function selectionIsInScope(
+  selection: SelectedEntity,
+  scope: SceneScope,
+): boolean {
+  if (!selection || scope.kind === "layout") return true;
+  if (scope.kind === "curve") {
+    return selection.kind === "curve" && selection.name === scope.name;
+  }
+  return selection.kind === "object"
+    ? selection.name === scope.name
+    : selection.kind === "frame" && selection.object === scope.name;
+}
+
+function validateScope(layout: LayoutData, scope: SceneScope): void {
+  if (
+    scope.kind === "curve" &&
+    !Object.hasOwn(layout.reference_curves, scope.name)
+  ) {
+    throw new Error(`Unknown reference curve: ${scope.name}`);
+  }
+  if (scope.kind === "object" && !Object.hasOwn(layout.objects, scope.name)) {
+    throw new Error(`Unknown object: ${scope.name}`);
+  }
+}
+
+function selectionExistsInLayout(
+  selection: SelectedEntity,
+  layout: LayoutData,
+): boolean {
+  if (!selection) return true;
+  if (selection.kind === "curve") {
+    const curve = layout.reference_curves[selection.name];
+    return Boolean(
+      curve &&
+      (selection.segmentIndex === undefined ||
+        selection.segmentIndex < curve.segments.length),
+    );
+  }
+  const objectName =
+    selection.kind === "object" ? selection.name : selection.object;
+  const object = layout.objects[objectName];
+  if (!object) return false;
+  if (selection.kind === "object") return true;
+  const type = layout.types[object.type];
+  return Boolean(type && objectFrameNames(type, object).includes(selection.name));
+}
+
+function fitTargetIsInScope(
+  target: Extract<PythonBridgeCommand, { command: "fit" }>["target"],
+  scope: SceneScope,
+): boolean {
+  if (target.kind === "layout" || scope.kind === "layout") return true;
+  return target.kind === scope.kind && target.name === scope.name;
+}
+
+type LayoutUrlPickerProps = {
+  suggestions: LayoutUrlSuggestion[];
+  onSelect: (path: string) => void;
+};
+
+export function LayoutUrlPicker({
+  suggestions,
+  onSelect,
+}: LayoutUrlPickerProps) {
+  return (
+    <NativeSelect
+      aria-label="Available layout JSON files"
+      className="url-suggestion-select"
+      size="sm"
+      value=""
+      disabled={suggestions.length === 0}
+      onChange={(event) => {
+        if (event.target.value) onSelect(event.target.value);
+      }}
+    >
+      <NativeSelectOption value="">
+        {suggestions.length > 0 ? "Available JSON…" : "No JSON catalog"}
+      </NativeSelectOption>
+      {suggestions.map((suggestion) => (
+        <NativeSelectOption key={suggestion.href} value={suggestion.path}>
+          {suggestion.label
+            ? `${suggestion.label} — ${suggestion.path}`
+            : suggestion.path}
+        </NativeSelectOption>
+      ))}
+    </NativeSelect>
+  );
+}
 
 export default function Home() {
   const [layout, setLayout] = useState<LayoutData>(() =>
@@ -111,32 +249,73 @@ export default function Home() {
   const [viewerRevision, setViewerRevision] = useState(0);
   const [viewportFitRequest, setViewportFitRequest] =
     useState<ViewportFitRequest | null>(null);
+  const [viewportCommand, setViewportCommand] =
+    useState<ViewportCommand | null>(null);
+  const [viewportScope, setViewportScope] =
+    useState<SceneScope>({ kind: "layout" });
   const [selection, setSelection] = useState<SelectedEntity>({
     kind: "object",
     name: "QF1",
   });
   const [url, setUrl] = useState("");
+  const [urlSuggestions, setUrlSuggestions] = useState<
+    LayoutUrlSuggestion[]
+  >([]);
   const [status, setStatus] = useState<Status>({
     kind: "idle",
     message: "Ready",
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const viewportFitIdRef = useRef(0);
+  const viewportCommandIdRef = useRef(0);
+  const viewportCommandQueueRef = useRef<PendingViewportCommand[]>([]);
+  const viewportScopeRef = useRef<SceneScope>(viewportScope);
+  const layoutRef = useRef(layout);
+  const pythonBridgeRef = useRef<PythonBridgeController | null>(null);
+  const pythonBridgeHandlersRef = useRef<PythonBridgeHandlers | null>(null);
+
+  useEffect(() => {
+    if (window.location.protocol !== "http:" && window.location.protocol !== "https:") {
+      return;
+    }
+
+    const controller = new AbortController();
+    const catalogUrl = layoutCatalogUrl(document.baseURI);
+
+    void (async () => {
+      try {
+        const response = await fetch(catalogUrl, {
+          cache: "no-cache",
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        setUrlSuggestions(
+          parseLayoutUrlList(await response.json(), catalogUrl),
+        );
+      } catch {
+        // The catalog is optional; free-form URLs remain available without it.
+      }
+    })();
+
+    return () => controller.abort();
+  }, []);
 
   const update = (mutate: (draft: LayoutData) => void) => {
-    setLayout((current) => {
-      const draft = structuredClone(current);
-      mutate(draft);
-      return draft;
-    });
+    const draft = structuredClone(layoutRef.current);
+    mutate(draft);
+    layoutRef.current = draft;
+    setLayout(draft);
     setStatus({ kind: "idle", message: "Edited locally" });
   };
 
   const updateValidated = (mutate: (draft: LayoutData) => void) => {
-    const draft = structuredClone(layout);
+    const draft = structuredClone(layoutRef.current);
     mutate(draft);
     try {
-      setLayout(parseLayout(draft));
+      const parsed = parseLayout(draft);
+      layoutRef.current = parsed;
+      setLayout(parsed);
       setStatus({ kind: "idle", message: "Edited locally" });
     } catch (error) {
       setStatus({
@@ -146,8 +325,22 @@ export default function Home() {
     }
   };
 
-  const loadValue = (value: unknown, source: string) => {
+  const loadValue = (
+    value: unknown,
+    source: string,
+    options: LoadValueOptions = {},
+  ) => {
     const parsed = parseLayout(value);
+    const preserveViewport = options.preserveViewport ?? false;
+    const nextScope =
+      options.scope ??
+      (preserveViewport
+        ? viewportScopeRef.current
+        : { kind: "layout" as const });
+    validateScope(parsed, nextScope);
+
+    layoutRef.current = parsed;
+    viewportScopeRef.current = nextScope;
     const firstCurve = Object.keys(parsed.reference_curves)[0] ?? "";
     const firstType = Object.keys(parsed.types)[0] ?? "";
     const firstObject = Object.keys(parsed.objects)[0] ?? "";
@@ -167,8 +360,20 @@ export default function Home() {
         LARGE_FRAME_COUNT,
     );
     setViewportFitRequest(null);
-    setViewerRevision((current) => current + 1);
-    setSelection(null);
+    setViewportScope((current) =>
+      sameScope(current, nextScope) ? current : nextScope,
+    );
+    if (preserveViewport) {
+      setSelection((current) =>
+        selectionExistsInLayout(current, parsed) &&
+        selectionIsInScope(current, nextScope)
+          ? current
+          : null,
+      );
+    } else {
+      setViewerRevision((current) => current + 1);
+      setSelection(null);
+    }
     setStatus({ kind: "success", message: `Loaded ${source}` });
   };
 
@@ -176,7 +381,8 @@ export default function Home() {
     if (!url.trim()) return;
     setStatus({ kind: "loading", message: "Loading URL…" });
     try {
-      const response = await fetch(url.trim());
+      const catalogUrl = layoutCatalogUrl(document.baseURI);
+      const response = await fetch(resolveLayoutUrl(url, catalogUrl));
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       loadValue(await response.json(), "URL");
     } catch (error) {
@@ -219,6 +425,10 @@ export default function Home() {
   };
 
   const clearLayout = () => {
+    const fullLayoutScope: SceneScope = { kind: "layout" };
+    viewportScopeRef.current = fullLayoutScope;
+    setViewportScope(fullLayoutScope);
+    layoutRef.current = createEmptyLayout();
     setLayout(createEmptyLayout());
     setSelectedCurve("");
     setSelectedType("");
@@ -271,22 +481,33 @@ export default function Home() {
     kind: ViewportFitRequest["kind"],
     name: string,
   ) => {
+    const target = { kind, name } as const;
+    if (!fitTargetIsInScope(target, viewportScopeRef.current)) {
+      setStatus({
+        kind: "error",
+        message: `${kind === "curve" ? "Curve" : "Object"} ${name} is outside the current viewport scope`,
+      });
+      return;
+    }
     viewportFitIdRef.current += 1;
     setViewerCardOpen(true);
-    setSelection({ kind, name });
+    setSelection(target);
     setViewportFitRequest({ id: viewportFitIdRef.current, kind, name });
   };
 
   const selectFrame = (objectName: string, frameName: string) => {
-    const objectType = layout.objects[objectName]?.type;
+    const selected = layout.objects[objectName];
+    const objectType = selected?.type;
     if (
       !objectType ||
-      !Object.keys(layout.types[objectType]?.frames ?? {}).includes(frameName)
+      !objectFrameNames(layout.types[objectType], selected).includes(frameName)
     ) return;
     setSelectedObject(objectName);
     setSelectedType(objectType);
-    setSelectedTypeFrame(frameName);
-    setTypeFramesOpen(true);
+    if (!isImplicitTypeFrameName(frameName)) {
+      setSelectedTypeFrame(frameName);
+      setTypeFramesOpen(true);
+    }
     setSelection({ kind: "frame", object: objectName, name: frameName });
   };
 
@@ -326,17 +547,232 @@ export default function Home() {
           ?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
     } else if (toggled?.kind === "frame") {
-      setTypesCardOpen(true);
+      const isBeam = toggled.name.startsWith("beam_");
+      if (isBeam) setObjectsCardOpen(true);
+      else setTypesCardOpen(true);
       selectFrame(toggled.object, toggled.name);
       requestAnimationFrame(() => {
         document
-          .getElementById("types-card")
+          .getElementById(isBeam ? "objects-card" : "types-card")
           ?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
     } else {
       setSelection(null);
     }
   };
+
+  const issueViewportCommand = useCallback(
+    (body: ViewportCommandBody): Promise<void> => {
+      viewportCommandIdRef.current += 1;
+      const command = {
+        id: viewportCommandIdRef.current,
+        ...body,
+      } as ViewportCommand;
+      setViewerCardOpen(true);
+      return new Promise<void>((resolve, reject) => {
+        const queue = viewportCommandQueueRef.current;
+        queue.push({ command, resolve, reject });
+        if (queue.length === 1) setViewportCommand(command);
+      });
+    },
+    [],
+  );
+
+  const handleViewportCommandApplied = useCallback(
+    (id: number, error?: string) => {
+      const queue = viewportCommandQueueRef.current;
+      const completed = queue[0];
+      if (!completed || completed.command.id !== id) return;
+      queue.shift();
+      setViewportCommand(queue[0]?.command ?? null);
+      if (error) completed.reject(new Error(error));
+      else completed.resolve();
+    },
+    [],
+  );
+
+  const applyExternalSelection = (next: SelectedEntity) => {
+    if (!next) {
+      setSelection((current) =>
+        sameSelection(current, null) ? current : null,
+      );
+      return;
+    }
+    const currentLayout = layoutRef.current;
+    if (next.kind === "curve") {
+      if (!Object.hasOwn(currentLayout.reference_curves, next.name)) {
+        throw new Error(`Unknown reference curve: ${next.name}`);
+      }
+      const nextCurve = currentLayout.reference_curves[next.name];
+      if (
+        next.segmentIndex !== undefined &&
+        next.segmentIndex >= nextCurve.segments.length
+      ) {
+        throw new Error(
+          `Curve ${next.name} has no segment ${next.segmentIndex}`,
+        );
+      }
+    } else {
+      const objectName = next.kind === "object" ? next.name : next.object;
+      if (!Object.hasOwn(currentLayout.objects, objectName)) {
+        throw new Error(`Unknown object: ${objectName}`);
+      }
+      const nextObject = currentLayout.objects[objectName];
+      const nextType = currentLayout.types[nextObject.type];
+      if (!nextType) {
+        throw new Error(
+          `Object ${objectName} has unknown type ${nextObject.type}`,
+        );
+      }
+      if (
+        next.kind === "frame" &&
+        !objectFrameNames(nextType, nextObject).includes(next.name)
+      ) {
+        throw new Error(`Object ${objectName} has no frame ${next.name}`);
+      }
+    }
+    if (!selectionIsInScope(next, viewportScopeRef.current)) {
+      throw new Error("Selection is outside the current viewport scope");
+    }
+    if (next.kind === "curve") {
+      setCurvesCardOpen(true);
+      setSegmentsOpen(true);
+      setSelectedCurve(next.name);
+    } else {
+      const objectName = next.kind === "object" ? next.name : next.object;
+      const nextObject = currentLayout.objects[objectName];
+      setObjectsCardOpen(true);
+      setSelectedObject(objectName);
+      setSelectedType(nextObject.type);
+      if (next.kind === "frame" && !next.name.startsWith("beam_")) {
+        setTypesCardOpen(true);
+        setTypeFramesOpen(true);
+        if (!isImplicitTypeFrameName(next.name)) {
+          setSelectedTypeFrame(next.name);
+        }
+      }
+    }
+    setSelection((current) => (sameSelection(current, next) ? current : next));
+  };
+
+  const executePythonBridgeCommand = (command: PythonBridgeCommand) => {
+    switch (command.command) {
+      case "set_layout": {
+        loadValue(command.layout, "Python", {
+          preserveViewport: true,
+          ...(command.scope ? { scope: command.scope } : {}),
+        });
+        if (Object.hasOwn(command, "selection")) {
+          applyExternalSelection(command.selection ?? null);
+        }
+        if (
+          command.fit &&
+          !fitTargetIsInScope(command.fit, viewportScopeRef.current)
+        ) {
+          throw new Error("Fit target is outside the current viewport scope");
+        }
+        // Even an empty visibility update acts as the render barrier for the
+        // new layout/scope, so Python is acknowledged only after the viewport
+        // has observed this transaction.
+        return (async () => {
+          await issueViewportCommand({
+            command: "set_visibility",
+            visibility: command.visibility ?? {},
+          });
+          if (command.mode) {
+            await issueViewportCommand({ command: "set_mode", mode: command.mode });
+          }
+          if (command.view) {
+            await issueViewportCommand({ command: "set_view", view: command.view });
+          }
+          if (command.fit) {
+            await issueViewportCommand({ command: "fit", target: command.fit });
+          }
+        })();
+      }
+      case "get_layout":
+        return { layout: layoutRef.current };
+      case "set_selection":
+        applyExternalSelection(command.selection);
+        return issueViewportCommand({
+          command: "set_visibility",
+          visibility: {},
+        });
+      case "fit":
+        if (
+          command.target.kind === "curve" &&
+          !Object.hasOwn(
+            layoutRef.current.reference_curves,
+            command.target.name,
+          )
+        ) {
+          throw new Error(`Unknown reference curve: ${command.target.name}`);
+        }
+        if (
+          command.target.kind === "object" &&
+          !Object.hasOwn(layoutRef.current.objects, command.target.name)
+        ) {
+          throw new Error(`Unknown object: ${command.target.name}`);
+        }
+        if (!fitTargetIsInScope(command.target, viewportScopeRef.current)) {
+          throw new Error("Fit target is outside the current viewport scope");
+        }
+        return issueViewportCommand({ command: "fit", target: command.target });
+      case "set_mode":
+        return issueViewportCommand({
+          command: "set_mode",
+          mode: command.mode,
+        });
+      case "set_view":
+        return issueViewportCommand({
+          command: "set_view",
+          view: command.view,
+        });
+      case "set_scope":
+        validateScope(layoutRef.current, command.scope);
+        viewportScopeRef.current = command.scope;
+        setViewerCardOpen(true);
+        setViewportScope((current) =>
+          sameScope(current, command.scope) ? current : command.scope,
+        );
+        setSelection((current) =>
+          selectionIsInScope(current, command.scope) ? current : null,
+        );
+        return issueViewportCommand({
+          command: "set_visibility",
+          visibility: {},
+        });
+      case "set_visibility":
+        return issueViewportCommand({
+          command: "set_visibility",
+          visibility: command.visibility,
+        });
+    }
+  };
+
+  useEffect(() => {
+    pythonBridgeHandlersRef.current = {
+      execute: executePythonBridgeCommand,
+      getSelection: () => selection,
+    };
+  });
+
+  useEffect(() => {
+    const controller = installPythonBridge(window, () => {
+      const handlers = pythonBridgeHandlersRef.current;
+      if (!handlers) throw new Error("Python bridge is not ready");
+      return handlers;
+    });
+    pythonBridgeRef.current = controller;
+    return () => {
+      controller?.close();
+      if (pythonBridgeRef.current === controller) pythonBridgeRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    pythonBridgeRef.current?.emitSelection(selection);
+  }, [selection]);
 
   const curveNames = Object.keys(layout.reference_curves);
   const typeNames = Object.keys(layout.types);
@@ -346,12 +782,14 @@ export default function Home() {
   );
   const curve = layout.reference_curves[selectedCurve];
   const typeDefinition = layout.types[selectedType];
-  const typePath = typeDefinition ? shapePath(typeDefinition.shape) : null;
+  const typePath = typeDefinition?.shape
+    ? shapePath(typeDefinition.shape)
+    : null;
   const object = layout.objects[selectedObject];
   const frameNames = Object.keys(typeDefinition?.frames ?? {});
   const frameDefinition = typeDefinition?.frames[selectedTypeFrame];
   const objectTargetNames = object
-    ? typeFrameNames(layout.types[object.type])
+    ? objectFrameNames(layout.types[object.type], object)
     : ["center"];
   const typeInstances = objectNames.filter(
     (name) => layout.objects[name].type === selectedType,
@@ -563,10 +1001,7 @@ export default function Home() {
     const name = uniqueName("type", typeNames);
     update((draft) => {
       draft.types[name] = {
-        shape: ["box", 1, 1, 1, 0, 0],
         color: "#f0a84b",
-        magnetic_center: { transformation: [] },
-        magnetic_length: 1,
         frames: {},
       };
     });
@@ -663,7 +1098,7 @@ export default function Home() {
   const changeObjectType = (nextType: string) => {
     if (!object || !layout.types[nextType]) return;
     const nextTypeFrameNames = Object.keys(layout.types[nextType].frames);
-    const nextReferenceFrameNames = typeFrameNames(layout.types[nextType]);
+    const nextReferenceFrameNames = objectFrameNames(layout.types[nextType], object);
     const missing = new Set<string>();
     forEachTransformation(layout, (transformation) => {
       const reference = transformation.reference;
@@ -805,10 +1240,10 @@ export default function Home() {
                       <div>
                         <dt>Types</dt>
                         <dd>
-                          Reusable definitions containing shape, color, centerline curvature
-                          and roll, a magnetic center and length, and named local frames.
-                          Every instance also has implicit center, magnetic center, Beam entry
-                          and Beam exit frames.
+                          Reusable definitions with a color and optional mechanical geometry,
+                          magnetic axis and named local frames. Mechanical and magnetic
+                          paths have independent lengths, curvatures and rolls. Every
+                          instance has a center frame.
                         </dd>
                       </div>
                       <div>
@@ -816,7 +1251,10 @@ export default function Home() {
                         <dd>
                           Instances of a type. A position says which target frame on the
                           instance is placed at a transformed world, curve or object-frame
-                          reference. Many objects can reuse one type.
+                          reference. Many objects can reuse one type. Each object owns
+                          its beam interface, which uses the type’s magnetic axis unless
+                          customized. Its center, entry and exit frames exist when a
+                          custom interface or magnetic axis is available.
                         </dd>
                       </div>
                     </dl>
@@ -834,9 +1272,10 @@ export default function Home() {
                     <p>
                       <code>ts</code> is a path coordinate. With a curve reference, all ts
                       values are summed to select the curve frame before the remaining
-                      operations run. In a type-local frame, ts follows the type&apos;s curved
-                      centerline and updates its tangent. <code>tt</code> never follows a
-                      curve.
+                      operations run. In a local frame, including a beam center, ts follows the mechanical axis
+                      when present and a straight local axis otherwise. <code>tt</code> never
+                      follows a curve. Magnetic and Beam entry/exit frames follow their own
+                      axes from their respective center frames.
                     </p>
                   </section>
                   <section>
@@ -895,13 +1334,29 @@ export default function Home() {
               <Link aria-hidden="true" />
               <Input
                 aria-label="Layout JSON URL"
-                type="url"
-                placeholder="https://…/layout.json"
+                type="text"
+                inputMode="url"
+                autoComplete="off"
+                list="layout-url-suggestions"
+                placeholder="layouts/example.json or https://…"
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") void importUrl();
                 }}
+              />
+              <datalist id="layout-url-suggestions">
+                {urlSuggestions.map((suggestion) => (
+                  <option
+                    key={suggestion.href}
+                    value={suggestion.path}
+                    label={suggestion.label}
+                  />
+                ))}
+              </datalist>
+              <LayoutUrlPicker
+                suggestions={urlSuggestions}
+                onSelect={setUrl}
               />
               <Button
                 type="button"
@@ -1214,7 +1669,7 @@ export default function Home() {
                   <span className="main-card-count">{typeNames.length}</span>
                 </CardTitle>
                 <CardDescription>
-                  Shared curved shape, magnetic axis and object-local named frames.
+                  Optional mechanical and magnetic geometry with local frames.
                 </CardDescription>
                 <CardAction className="main-card-actions">
                   <Button type="button" variant="outline" size="sm" onClick={addType}>
@@ -1313,145 +1768,236 @@ export default function Home() {
 
                     <div className="subsection">
                       <div className="subsection-title">
-                        <h3>Shape</h3><span>s = 0 at every object center</span>
+                        <div className="subsection-title-copy">
+                          <h3>Mechanical geometry</h3>
+                          <span>shape and axis centered on the object center</span>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={() =>
+                            update((draft) => {
+                              if (draft.types[selectedType].shape) {
+                                delete draft.types[selectedType].shape;
+                              } else {
+                                draft.types[selectedType].shape = ["box", 1, 1, 1, 0, 0];
+                              }
+                            })
+                          }
+                        >
+                          {typeDefinition.shape ? <Trash2 /> : <Plus />}
+                          {typeDefinition.shape ? "Remove" : "Add geometry"}
+                        </Button>
                       </div>
-                      <div className="shape-row">
-                        <Field label="Primitive">
-                          <NativeSelect
-                            value={typeDefinition.shape[0]}
-                            onChange={(event) =>
-                              update((draft) => {
-                                const current = draft.types[selectedType].shape;
-                                const { curvature, roll } = shapePath(current);
-                                draft.types[selectedType].shape =
-                                  event.target.value === "box"
-                                    ? ["box", 1, 1, 1, curvature, roll]
-                                    : ["cylinder", 0.5, 1, curvature, roll];
-                              })
-                            }
-                          >
-                            <NativeSelectOption value="box">Box</NativeSelectOption>
-                            <NativeSelectOption value="cylinder">Cylinder</NativeSelectOption>
-                          </NativeSelect>
-                        </Field>
-                        {typeDefinition.shape[0] === "box" ? (
-                          <>
-                            {([1, 2, 3] as const).map((axis) => (
-                              <Field key={axis} label={`${["", "dx", "dy", "dz"][axis]} [m]`}>
-                                <NumberInput
-                                  value={(typeDefinition.shape as BoxShape)[axis]}
-                                  min={0}
-                                  step={0.1}
-                                  label={`Box ${["", "dx", "dy", "dz"][axis]}`}
-                                  onChange={(value) =>
-                                    update((draft) => {
-                                      (draft.types[selectedType].shape as BoxShape)[axis] =
-                                        Math.max(0.000001, value);
-                                    })
-                                  }
-                                />
-                              </Field>
-                            ))}
-                          </>
-                        ) : (
-                          <>
-                            {([1, 2] as const).map((axis) => (
-                              <Field key={axis} label={`${axis === 1 ? "r" : "dz"} [m]`}>
-                                <NumberInput
-                                  value={(typeDefinition.shape as CylinderShape)[axis]}
-                                  min={0}
-                                  step={0.1}
-                                  label={axis === 1 ? "Cylinder radius" : "Cylinder dz"}
-                                  onChange={(value) =>
-                                    update((draft) => {
-                                      (draft.types[selectedType].shape as CylinderShape)[axis] =
-                                        Math.max(0.000001, value);
-                                    })
-                                  }
-                                />
-                              </Field>
-                            ))}
-                          </>
-                        )}
+                      {typeDefinition.shape ? (
+                        <>
+                          <div className="shape-row">
+                            <Field label="Primitive">
+                              <NativeSelect
+                                value={typeDefinition.shape[0]}
+                                onChange={(event) =>
+                                  update((draft) => {
+                                    const current = draft.types[selectedType].shape;
+                                    if (!current) return;
+                                    const { curvature, roll } = shapePath(current);
+                                    draft.types[selectedType].shape =
+                                      event.target.value === "box"
+                                        ? ["box", 1, 1, 1, curvature, roll]
+                                        : ["cylinder", 0.5, 1, curvature, roll];
+                                  })
+                                }
+                              >
+                                <NativeSelectOption value="box">Box</NativeSelectOption>
+                                <NativeSelectOption value="cylinder">Cylinder</NativeSelectOption>
+                              </NativeSelect>
+                            </Field>
+                            {typeDefinition.shape[0] === "box" ? (
+                              <>
+                                {([1, 2, 3] as const).map((axis) => (
+                                  <Field key={axis} label={`${["", "dx", "dy", "dz"][axis]} [m]`}>
+                                    <NumberInput
+                                      value={(typeDefinition.shape as BoxShape)[axis]}
+                                      min={0}
+                                      step={0.1}
+                                      label={`Box ${["", "dx", "dy", "dz"][axis]}`}
+                                      onChange={(value) =>
+                                        update((draft) => {
+                                          const shape = draft.types[selectedType].shape;
+                                          if (shape?.[0] === "box") {
+                                            shape[axis] = Math.max(0.000001, value);
+                                          }
+                                        })
+                                      }
+                                    />
+                                  </Field>
+                                ))}
+                              </>
+                            ) : (
+                              <>
+                                {([1, 2] as const).map((axis) => (
+                                  <Field key={axis} label={`${axis === 1 ? "r" : "dz"} [m]`}>
+                                    <NumberInput
+                                      value={(typeDefinition.shape as CylinderShape)[axis]}
+                                      min={0}
+                                      step={0.1}
+                                      label={axis === 1 ? "Cylinder radius" : "Cylinder dz"}
+                                      onChange={(value) =>
+                                        update((draft) => {
+                                          const shape = draft.types[selectedType].shape;
+                                          if (shape?.[0] === "cylinder") {
+                                            shape[axis] = Math.max(0.000001, value);
+                                          }
+                                        })
+                                      }
+                                    />
+                                  </Field>
+                                ))}
+                              </>
+                            )}
+                          </div>
+                          {typePath && (
+                            <>
+                              <div className="shape-path-row">
+                                <Field label="Curvature [1/m]">
+                                  <NumberInput
+                                    value={typePath.curvature}
+                                    step={0.01}
+                                    label="Mechanical curvature"
+                                    onChange={(value) =>
+                                      update((draft) => {
+                                        const shape = draft.types[selectedType].shape;
+                                        if (!shape) return;
+                                        if (shape[0] === "box") shape[4] = value;
+                                        else shape[3] = value;
+                                      })
+                                    }
+                                  />
+                                </Field>
+                                <Field label="Roll [degree]">
+                                  <NumberInput
+                                    value={typePath.roll * 180 / Math.PI}
+                                    step={5}
+                                    label="Mechanical roll in degrees"
+                                    onChange={(value) =>
+                                      update((draft) => {
+                                        const shape = draft.types[selectedType].shape;
+                                        if (!shape) return;
+                                        const radians = value * Math.PI / 180;
+                                        if (shape[0] === "box") shape[5] = radians;
+                                        else shape[4] = radians;
+                                      })
+                                    }
+                                  />
+                                </Field>
+                              </div>
+                              <p className="shape-help">
+                                dz is the mechanical centerline length. Positive curvature
+                                at roll 0° bends toward −x; positive roll rotates the bend
+                                toward −y.
+                              </p>
+                            </>
+                          )}
+                        </>
+                      ) : (
+                        <p className="inline-empty">
+                          No mechanical shape. Instances remain selectable at their center.
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="subsection">
+                      <div className="subsection-title">
+                        <div className="subsection-title-copy">
+                          <h3>Magnetic axis</h3>
+                          <span>magnetic center, entry and exit</span>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={() =>
+                            updateValidated((draft) => {
+                              const type = draft.types[selectedType];
+                              if (type.magnetic_center) {
+                                delete type.magnetic_center;
+                                delete type.magnetic_length;
+                                delete type.magnetic_curvature;
+                                delete type.magnetic_roll;
+                              } else {
+                                type.magnetic_center = { transformation: [] };
+                                type.magnetic_length = 1;
+                                type.magnetic_curvature = 0;
+                                type.magnetic_roll = 0;
+                              }
+                            })
+                          }
+                        >
+                          {typeDefinition.magnetic_center ? <Trash2 /> : <Plus />}
+                          {typeDefinition.magnetic_center ? "Remove" : "Add axis"}
+                        </Button>
                       </div>
-                      {typePath && (
+                      {typeDefinition.magnetic_center ? (
                         <>
                           <div className="shape-path-row">
-                            <Field label="Curvature [1/m]">
+                            <Field label="Length [m]">
                               <NumberInput
-                                value={typePath.curvature}
-                                step={0.01}
-                                label="Shape curvature"
+                                value={typeDefinition.magnetic_length ?? 1}
+                                min={0}
+                                step={0.1}
+                                label="Magnetic length"
                                 onChange={(value) =>
                                   update((draft) => {
-                                    const shape = draft.types[selectedType].shape;
-                                    if (shape[0] === "box") shape[4] = value;
-                                    else shape[3] = value;
+                                    draft.types[selectedType].magnetic_length =
+                                      Math.max(0.000001, value);
+                                  })
+                                }
+                              />
+                            </Field>
+                            <Field label="Curvature [1/m]">
+                              <NumberInput
+                                value={typeDefinition.magnetic_curvature ?? 0}
+                                step={0.01}
+                                label="Magnetic curvature"
+                                onChange={(value) =>
+                                  update((draft) => {
+                                    draft.types[selectedType].magnetic_curvature = value;
                                   })
                                 }
                               />
                             </Field>
                             <Field label="Roll [degree]">
                               <NumberInput
-                                value={typePath.roll * 180 / Math.PI}
+                                value={(typeDefinition.magnetic_roll ?? 0) * 180 / Math.PI}
                                 step={5}
-                                label="Shape roll in degrees"
+                                label="Magnetic roll in degrees"
                                 onChange={(value) =>
                                   update((draft) => {
-                                    const shape = draft.types[selectedType].shape;
-                                    const radians = value * Math.PI / 180;
-                                    if (shape[0] === "box") shape[5] = radians;
-                                    else shape[4] = radians;
+                                    draft.types[selectedType].magnetic_roll =
+                                      value * Math.PI / 180;
                                   })
                                 }
                               />
                             </Field>
                           </div>
-                          <p className="shape-help">
-                            dz is centerline arc length. Positive curvature at roll 0° bends
-                            toward −x; positive roll rotates the bend toward −y.
-                          </p>
-                        </>
-                      )}
-                    </div>
-
-                    <div className="subsection">
-                      <div className="subsection-title">
-                        <h3>Magnetic axis</h3>
-                        <span>Beam entry / exit</span>
-                      </div>
-                      <div className="magnetic-axis-row">
-                        <Field label="Magnetic length [m]">
-                          <NumberInput
-                            value={typeDefinition.magnetic_length}
-                            min={0}
-                            step={0.1}
-                            label="Magnetic length"
-                            onChange={(value) =>
+                          <div className="implicit-reference">
+                            magnetic_center is relative to object center. Entry and exit
+                            are derived at −Lmag/2 and +Lmag/2 along the magnetic axis.
+                          </div>
+                          <OperationsEditor
+                            value={typeDefinition.magnetic_center.transformation}
+                            allowedNames={LOCAL_TRANSFORM_NAMES}
+                            onChange={(transformation) =>
                               update((draft) => {
-                                draft.types[selectedType].magnetic_length =
-                                  Math.max(0.000001, value);
+                                const center = draft.types[selectedType].magnetic_center;
+                                if (center) center.transformation = transformation;
                               })
                             }
                           />
-                        </Field>
-                      </div>
-                      <div className="implicit-reference">
-                        Magnetic center frame relative to the object center · ts
-                        follows the curved type axis · entry and exit are derived at
-                        −Lmag/2 and +Lmag/2 with planes normal to the tangent
-                      </div>
-                      <OperationsEditor
-                        value={typeDefinition.magnetic_center.transformation}
-                        allowedNames={LOCAL_TRANSFORM_NAMES}
-                        onChange={(transformation) =>
-                          update((draft) => {
-                            draft.types[
-                              selectedType
-                            ].magnetic_center.transformation = transformation;
-                          })
-                        }
-                      />
+                        </>
+                      ) : (
+                        <p className="inline-empty">No magnetic axis or magnetic frames.</p>
+                      )}
                     </div>
 
                     <Collapsible
@@ -1572,7 +2118,7 @@ export default function Home() {
                   <span className="main-card-count">{objectNames.length}</span>
                 </CardTitle>
                 <CardDescription>
-                  Reusable type and reference-based position.
+                  Reusable type, beam interface and reference-based position.
                 </CardDescription>
                 <CardAction className="main-card-actions">
                   <Button
@@ -1671,6 +2217,107 @@ export default function Home() {
 
                     <div className="subsection">
                       <div className="subsection-title">
+                        <div className="subsection-title-copy">
+                          <h3>Beam interface</h3>
+                          <span>object beam center, entry and exit</span>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={() =>
+                            updateValidated((draft) => {
+                              const object = draft.objects[selectedObject];
+                              if (object.beam_center) {
+                                delete object.beam_center;
+                                delete object.beam_length;
+                                delete object.beam_curvature;
+                                delete object.beam_roll;
+                              } else {
+                                const inherited = effectiveBeamFeature(draft.types[object.type], object);
+                                object.beam_center = structuredClone(inherited?.center ?? { transformation: [] });
+                                object.beam_length = inherited?.length ?? 1;
+                                object.beam_curvature = inherited?.curvature ?? 0;
+                                object.beam_roll = inherited?.roll ?? 0;
+                              }
+                            })
+                          }
+                        >
+                          {object.beam_center ? <Trash2 /> : <Plus />}
+                          {object.beam_center
+                            ? layout.types[object.type].magnetic_center ? "Use magnetic axis" : "Remove interface"
+                            : "Customize interface"}
+                        </Button>
+                      </div>
+                      {object.beam_center ? (
+                        <>
+                          <div className="shape-path-row">
+                            <Field label="Length [m]">
+                              <NumberInput
+                                value={object.beam_length ?? 1}
+                                min={0}
+                                step={0.1}
+                                label="Beam-interface length"
+                                onChange={(value) =>
+                                  update((draft) => {
+                                    draft.objects[selectedObject].beam_length =
+                                      Math.max(0.000001, value);
+                                  })
+                                }
+                              />
+                            </Field>
+                            <Field label="Curvature [1/m]">
+                              <NumberInput
+                                value={object.beam_curvature ?? 0}
+                                step={0.01}
+                                label="Beam-interface curvature"
+                                onChange={(value) =>
+                                  update((draft) => {
+                                    draft.objects[selectedObject].beam_curvature = value;
+                                  })
+                                }
+                              />
+                            </Field>
+                            <Field label="Roll [degree]">
+                              <NumberInput
+                                value={(object.beam_roll ?? 0) * 180 / Math.PI}
+                                step={5}
+                                label="Beam-interface roll in degrees"
+                                onChange={(value) =>
+                                  update((draft) => {
+                                    draft.objects[selectedObject].beam_roll =
+                                      value * Math.PI / 180;
+                                  })
+                                }
+                              />
+                            </Field>
+                          </div>
+                          <div className="implicit-reference">
+                            beam_center is relative to object center. Beam entry and exit
+                            are derived at −Lbeam/2 and +Lbeam/2 along the Beam axis.
+                          </div>
+                          <OperationsEditor
+                            value={object.beam_center.transformation}
+                            allowedNames={LOCAL_TRANSFORM_NAMES}
+                            onChange={(transformation) =>
+                              update((draft) => {
+                                const center = draft.objects[selectedObject].beam_center;
+                                if (center) center.transformation = transformation;
+                              })
+                            }
+                          />
+                        </>
+                      ) : (
+                        <p className="inline-empty">
+                          {effectiveBeamFeature(layout.types[object.type], object)
+                            ? "Uses the type’s magnetic axis, including its center, length, curvature and roll."
+                            : "No magnetic axis to inherit. Customize the interface to define beam frames."}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="subsection">
+                      <div className="subsection-title">
                         <h3>Position</h3>
                         <span>place target at (reference, transformation)</span>
                       </div>
@@ -1759,6 +2406,9 @@ export default function Home() {
                   selection={selection}
                   onSelect={selectFromViewport}
                   fitRequest={viewportFitRequest}
+                  command={viewportCommand}
+                  onCommandApplied={handleViewportCommandApplied}
+                  scope={viewportScope}
                 />
               </CardContent>
             </CollapsibleContent>

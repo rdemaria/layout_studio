@@ -5,6 +5,7 @@ import json
 import math
 
 import pytest
+
 from layout_studio import (
     AttachmentError,
     Box,
@@ -12,6 +13,7 @@ from layout_studio import (
     Cylinder,
     Frame,
     Layout,
+    Object,
     Position,
     Segment,
     Type,
@@ -31,6 +33,19 @@ def test_canonical_dict_and_json_round_trip(canonical_layout_dict):
         Layout.from_json(text=layout.to_json(str).encode()).to_dict()
         == canonical_layout_dict
     )
+
+
+def test_inert_reference_curve_is_preserved_in_json(canonical_layout_dict):
+    position = canonical_layout_dict["objects"]["Q1"]["position"]
+    position["reference"] = {"kind": "world"}
+    position["reference_curve"] = "main"
+    position["transformation"] = []
+
+    layout = Layout.from_dict(canonical_layout_dict)
+    layout.validate()
+
+    serialized = layout.to_dict()
+    assert serialized["objects"]["Q1"]["position"]["reference_curve"] == "main"
 
 
 def test_json_local_paths_and_gzip(tmp_path, canonical_layout_dict):
@@ -72,6 +87,8 @@ def test_python_shortcuts_serialize_to_canonical_json():
         color="#abcdef",
         magnetic_center=Frame(),
         magnetic_length=1.0,
+        magnetic_curvature=0.0,
+        magnetic_roll=0.0,
     )
     layout.new_object(
         "thing",
@@ -129,6 +146,70 @@ def test_canonical_reader_is_strict(canonical_copy, mutate):
         Layout.from_dict(document)
 
 
+def test_type_without_optional_geometry_has_minimal_canonical_json():
+    type_ = Type(color="#112233")
+
+    assert type_.shape is None
+    assert type_.magnetic_center is None
+    assert type_.magnetic_length is None
+    assert type_.magnetic_curvature is None
+    assert type_.magnetic_roll is None
+    assert type_.to_dict() == {"color": "#112233", "frames": {}}
+    assert Type.from_dict(type_.to_dict()).to_dict() == type_.to_dict()
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "magnetic_center",
+        "magnetic_length",
+        "magnetic_curvature",
+        "magnetic_roll",
+        "beam_center",
+        "beam_length",
+        "beam_curvature",
+        "beam_roll",
+    ],
+)
+def test_axis_features_are_flat_all_or_none_in_json(canonical_copy, missing):
+    document = canonical_copy()
+    (document["objects"]["Q1"] if missing.startswith("beam_") else document["types"]["magnet"]).pop(missing)
+
+    with pytest.raises(ValidationError, match="all|together|complete"):
+        Layout.from_dict(document)
+
+
+@pytest.mark.parametrize("field", ["magnetic_roll", "beam_center"])
+def test_present_axis_feature_fields_cannot_be_null(canonical_copy, field):
+    document = canonical_copy()
+    (document["objects"]["Q1"] if field.startswith("beam_") else document["types"]["magnet"])[field] = None
+
+    with pytest.raises(ValidationError, match="null|all present"):
+        Layout.from_dict(document)
+
+
+@pytest.mark.parametrize(
+    "partial",
+    [
+        {"magnetic_center": Frame()},
+        {"magnetic_length": 1.0},
+        {"magnetic_curvature": 0.1},
+        {"magnetic_roll": 0.2},
+        {"beam_center": Frame()},
+        {"beam_length": 1.0},
+        {"beam_curvature": 0.1},
+        {"beam_roll": 0.2},
+    ],
+    ids=lambda value: next(iter(value)),
+)
+def test_axis_features_are_flat_all_or_none_in_python(partial):
+    with pytest.raises(ValidationError, match="all|together|complete"):
+        if next(iter(partial)).startswith("beam_"):
+            Object(type="magnet", position=Position("world"), **partial)
+        else:
+            Type(color="#112233", **partial)
+
+
 @pytest.mark.parametrize(
     "factory",
     [
@@ -143,6 +224,15 @@ def test_canonical_reader_is_strict(canonical_copy, mutate):
             color="#112233",
             magnetic_center=Frame(),
             magnetic_length=0.0,
+            magnetic_curvature=0.0,
+            magnetic_roll=0.0,
+        ),
+        lambda: Object(
+            type="magnet", position=Position("world"),
+            beam_center=Frame(),
+            beam_length=1.0,
+            beam_curvature=math.nan,
+            beam_roll=0.0,
         ),
         lambda: Curve(
             starting_frame=Frame("world"),
@@ -158,6 +248,7 @@ def test_canonical_reader_is_strict(canonical_copy, mutate):
         "nan-operation",
         "infinite-operation",
         "zero-magnetic-length",
+        "nan-beam-curvature",
         "noncanonical-color",
     ],
 )

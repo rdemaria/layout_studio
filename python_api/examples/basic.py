@@ -15,6 +15,8 @@ kind = layout.new_type(
     color="#f0a84b",
     magnetic_center=Frame(),
     magnetic_length=1.2,
+    magnetic_curvature=0.05,
+    magnetic_roll=0.0,
 )
 magnet = layout.new_object(
     "Q1",
@@ -23,4 +25,3 @@ magnet = layout.new_object(
 )
 
 print(magnet.get_frame("magnetic_exit"))
-layout.plot3d(beam_frames=True)

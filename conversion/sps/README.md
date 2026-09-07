@@ -27,6 +27,9 @@ sizes and SHA-256 checksums of the input snapshot and prepared outputs.
 - Mechanical middle becomes `center`; mechanical start/end become named frames.
 - Optic middle/start/end become
   `magnetic_center`/`magnetic_entry`/`magnetic_exit`.
+- The converter writes the magnetic curvature and roll explicitly; they match
+  the converted shape path for this source model even though Layout Studio now
+  treats the mechanical and magnetic axes independently.
 - Shapes are boxes with 0.1 m transverse dimensions. Aperture/profile data is
   intentionally kept separate.
 - Color is determined by the first character of each object name. Source types

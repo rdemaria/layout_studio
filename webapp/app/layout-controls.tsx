@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -36,94 +36,11 @@ import type {
 import {
   NON_CURVE_TRANSFORM_NAMES,
   TRANSFORM_NAMES,
-  typeFrameNames,
+  objectFrameNames,
 } from "./layout-data";
 
-export function NumberInput({
-  value,
-  onChange,
-  label,
-  min,
-  step = "any",
-}: {
-  value: number;
-  onChange: (value: number) => void;
-  label: string;
-  min?: number;
-  step?: number | "any";
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const onChangeRef = useRef(onChange);
-  const wheelListenerRef = useRef<((event: WheelEvent) => void) | null>(null);
-  const wheelConfigRef = useRef({ min, step, value });
-
-  useEffect(() => {
-    onChangeRef.current = onChange;
-    wheelConfigRef.current = { min, step, value };
-  }, [min, onChange, step, value]);
-
-  const enableWheelEditing = (input: HTMLInputElement) => {
-    if (wheelListenerRef.current) {
-      input.removeEventListener("wheel", wheelListenerRef.current);
-    }
-    const handleWheel = (event: WheelEvent) => {
-      if (
-        document.activeElement !== input ||
-        event.deltaY === 0 ||
-        event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.shiftKey
-      ) return;
-      event.preventDefault();
-      event.stopPropagation();
-
-      try {
-        if (event.deltaY < 0) input.stepUp();
-        else input.stepDown();
-      } catch {
-        const { min: currentMin, step: currentStep, value: currentValue } =
-          wheelConfigRef.current;
-        const amount = typeof currentStep === "number" ? currentStep : 1;
-        const current = Number.isFinite(input.valueAsNumber)
-          ? input.valueAsNumber
-          : currentValue;
-        input.valueAsNumber = Math.max(
-          currentMin ?? Number.NEGATIVE_INFINITY,
-          current + (event.deltaY < 0 ? amount : -amount),
-        );
-      }
-
-      if (Number.isFinite(input.valueAsNumber)) {
-        onChangeRef.current(input.valueAsNumber);
-      }
-    };
-
-    wheelListenerRef.current = handleWheel;
-    input.addEventListener("wheel", handleWheel, { passive: false });
-  };
-
-  const disableWheelEditing = (input: HTMLInputElement) => {
-    if (!wheelListenerRef.current) return;
-    input.removeEventListener("wheel", wheelListenerRef.current);
-    wheelListenerRef.current = null;
-  };
-
-  return (
-    <Input
-      ref={inputRef}
-      aria-label={label}
-      className="number-input"
-      type="number"
-      value={Number.isFinite(value) ? value : 0}
-      min={min}
-      step={step}
-      onBlur={(event) => disableWheelEditing(event.currentTarget)}
-      onChange={(event) => onChange(Number(event.target.value))}
-      onFocus={(event) => enableWheelEditing(event.currentTarget)}
-    />
-  );
-}
+import { NumberInput } from "./number-input";
+export { NumberInput } from "./number-input";
 
 export function Field({
   label,
@@ -499,7 +416,7 @@ export function ReferenceEditor({
   );
   const frameNamesForObject = (objectName: string) => {
     const type = layout.types[layout.objects[objectName]?.type];
-    return type ? typeFrameNames(type) : ["center"];
+    return type ? objectFrameNames(type, layout.objects[objectName]) : ["center"];
   };
   const reference = value.reference;
   const referenceCurve = owner.kind === "object" ? value.reference_curve : undefined;

@@ -89,6 +89,9 @@ IMPLICIT_FRAMES = {
     "magnetic_center",
     "magnetic_entry",
     "magnetic_exit",
+    "beam_center",
+    "beam_entry",
+    "beam_exit",
 }
 
 
@@ -443,6 +446,8 @@ def _make_layout_type(
         "color": color_for_name(key.color_initial),
         "magnetic_center": {"transformation": magnetic_center_ops},
         "magnetic_length": magnetic_length,
+        "magnetic_curvature": curvature,
+        "magnetic_roll": key.roll,
         "frames": {
             "mechanical_start": {"transformation": mechanical_start_ops},
             "mechanical_end": {"transformation": mechanical_end_ops},
@@ -785,6 +790,8 @@ def validate_layout_json(layout: Mapping[str, Any]) -> None:
             "color",
             "magnetic_center",
             "magnetic_length",
+            "magnetic_curvature",
+            "magnetic_roll",
             "frames",
         }:
             raise ConversionError(f"invalid type {type_name!r}")
@@ -799,6 +806,8 @@ def validate_layout_json(layout: Mapping[str, Any]) -> None:
         finite(shape[5], f"types.{type_name}.shape roll")
         if finite(type_["magnetic_length"], f"types.{type_name}.magnetic_length") <= 0.0:
             raise ConversionError(f"types.{type_name}.magnetic_length must be positive")
+        finite(type_["magnetic_curvature"], f"types.{type_name}.magnetic_curvature")
+        finite(type_["magnetic_roll"], f"types.{type_name}.magnetic_roll")
         magnetic_center = type_["magnetic_center"]
         if not isinstance(magnetic_center, Mapping) or set(magnetic_center) != {"transformation"}:
             raise ConversionError(f"types.{type_name}.magnetic_center is invalid")
