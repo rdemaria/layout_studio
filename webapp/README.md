@@ -61,6 +61,20 @@ wheel. Do not add a second generated HTML copy under `python_api`.
 - `standalone/` — repository-relative single-file bundler.
 - `build/index.html` — generated standalone application.
 
+## Anchors and feature references
+
+Objects are positioned by their `anchor` frame. A type's optional
+`mechanical_center` places its shape; magnetic centers, named frames, and object
+beam centers use the same reference-and-operations editor. The default reference
+is the anchor. Choose a local frame, world, a curve, or a frame on another object.
+Local frame references use `{"kind":"local_frame","frame":"name"}` in JSON.
+Targets must be rooted in their own anchor, and reference cycles are rejected.
+The reader normalizes old `center` links to `anchor`.
+
+The common [positioning specification](../specifications/layout_positioning_model.tex)
+and [reference example](../specifications/examples/anchored-features.json) define
+these semantics for both JavaScript and Python.
+
 ## Loading layouts
 
 The dropdown lists layouts from the optional same-origin `list.json` next to the

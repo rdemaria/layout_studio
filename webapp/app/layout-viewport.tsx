@@ -969,8 +969,8 @@ export function LayoutViewport({
         addFrameStation(
           object.frame.o,
           object.name,
-          "center",
-          `${object.name}.center`,
+          "anchor",
+          `${object.name}.anchor`,
         );
       }
       const surfacePaths = curveObjectSurfaceIntersectionPaths(
@@ -1884,7 +1884,7 @@ export function LayoutViewport({
             if (hover.kind === "object") {
               return source.kind === "frame" &&
                 source.object === hover.name &&
-                source.name === "center";
+                source.name === "anchor";
             }
             if (hover.kind === "frame") {
               return source.kind === "frame" &&
@@ -2193,7 +2193,7 @@ export function LayoutViewport({
       const object = scene.objects.find((candidate) => candidate.name === hovered.name);
       return object
         ? {
-            label: `Object ${object.name} · ${object.typeName} · center`,
+            label: `Object ${object.name} · ${object.typeName} · anchor`,
             frame: object.frame,
           }
         : null;
@@ -2226,7 +2226,7 @@ export function LayoutViewport({
       const object = scene.objects.find((candidate) => candidate.name === selection.name);
       return object
         ? {
-            label: `Object ${object.name} · ${object.typeName} · center`,
+            label: `Object ${object.name} · ${object.typeName} · anchor`,
             frame: object.frame,
           }
         : null;
@@ -2237,6 +2237,13 @@ export function LayoutViewport({
           candidate.object === selection.object &&
           candidate.name === selection.name,
       );
+      if (!namedFrame && (selection.name === "anchor" || selection.name === "mechanical_center")) {
+        const object = scene.objects.find((candidate) => candidate.name === selection.object);
+        const frame = selection.name === "anchor" ? object?.frame : object?.mechanicalFrame;
+        return object && frame
+          ? {label: `Frame ${object.name}.${selection.name} · ${object.typeName}`, frame}
+          : null;
+      }
       return namedFrame
         ? {
             label: `Frame ${namedFrame.object}.${namedFrame.name} · ${namedFrame.typeName}`,

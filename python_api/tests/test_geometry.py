@@ -74,7 +74,7 @@ def test_explicit_resolver_context_reuses_validation_and_geometry_caches():
 
     assert calls == 1
     np.testing.assert_allclose(first.matrix, second.matrix)
-    assert resolver._object_centers == {}
+    assert resolver._object_anchors == {}
     assert resolver._curve_data_cache == {}
 
     resolver.object_frame(object_)

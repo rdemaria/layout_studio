@@ -216,11 +216,11 @@ def test_axis_helpers_create_update_and_remove_optional_features():
 
     assert type_.remove_magnetic_axis() is type_
     assert object_.remove_beam_axis() is object_
-    assert type_.implicit_frames == frozenset({"center"})
+    assert type_.implicit_frames == frozenset({"anchor"})
 
 
 def test_position_set_rolls_back_and_operations_remain_a_live_alias():
-    position = Position("world", target="center").tx(1.0)
+    position = Position("world", target="anchor").tx(1.0)
     original_reference = position.reference
     original_target = position.target_name
     candidate_reference = Frame("world").tt(5.0)

@@ -116,8 +116,8 @@ class Resolver:                             # analytic snapshot evaluator
     __exit__(self, *exc_info) -> None
     curve_frame(self, curve, station, *, extrapolate=True) -> Pose
     infer_station(self, curve, point) -> float
-    type_frame(self, type_, frame="center") -> Pose
-    object_frame(self, object_, frame="center") -> Pose
+    type_frame(self, type_, frame="anchor") -> Pose
+    object_frame(self, object_, frame="anchor") -> Pose
     sampled_curve(self, curve, resolution=128) -> Mapping[str, object]
     swept_object_mesh(
         self, object_, resolution=32, radial_resolution=24, *,
@@ -241,14 +241,15 @@ class Curve(OwnedValue):
 
 
 class Type(OwnedValue):
-    reserved_frames: frozenset[str]          # all seven implicit names
+    reserved_frames: frozenset[str]          # all reserved implicit names
     color: str
     shape: Box | Cylinder | None
+    mechanical_center: Frame | None
     magnetic_center: Frame | None
     magnetic_length: float | None
     magnetic_curvature: float | None
     magnetic_roll: float | None
-    implicit_frames: frozenset[str]          # center plus present feature frames
+    implicit_frames: frozenset[str]          # anchor plus present feature frames
     frames: EntityMap[Frame]                 # stored named frames only
 
     __init__(
@@ -256,6 +257,7 @@ class Type(OwnedValue):
         *,
         color,
         shape=None,
+        mechanical_center=None,
         magnetic_center=None,
         magnetic_length=None,
         magnetic_curvature=None,
@@ -280,7 +282,7 @@ class Type(OwnedValue):
     add_frame(self, name: str, frame: Frame) -> Frame
     rename_frame(self, frame: Frame | str, new_name: str) -> Frame
     pop_frame(self, name: str) -> Frame
-    get_frame(self, name: str = "center") -> Pose
+    get_frame(self, name: str = "anchor") -> Pose
 
 
 class Object(OwnedValue):
@@ -304,8 +306,8 @@ class Object(OwnedValue):
     remove_beam_axis(self) -> Self
     set_type(self, type: str | Type) -> Self
     set_position(self, position: Position) -> Self
-    ref(self, frame: str | Frame = "center") -> ObjectReference
-    get_frame(self, frame: str | Frame = "center") -> Pose
+    ref(self, frame: str | Frame = "anchor") -> ObjectReference
+    get_frame(self, frame: str | Frame = "anchor") -> Pose
     plot_web(self, *, magnetic_axis=False, beam_axis=False, frames=False,
              selection=None, fit=None, show=False, width="100%", height=720,
              visibility=None, **viewer_kwargs) -> WebViewer
@@ -316,7 +318,7 @@ class Frame(OwnedValue):
     reference: Reference | None
     operations: ManagedSequence[Operation]
 
-    __init__(self, reference: Reference | Curve | Object | str | None = None, *, operations=())
+    __init__(self, reference: Reference | Curve | Object | Frame | str | None = None, *, operations=())
     tx(self, distance: float) -> Self
     ty(self, distance: float) -> Self
     ts(self, distance: float) -> Self
@@ -332,19 +334,19 @@ class Frame(OwnedValue):
     as_position(
         self,
         *,
-        target: str | Frame = "center",
+        target: str | Frame = "anchor",
         reference_curve: str | Curve | None = None,
     ) -> Position
 
 
 class Position(OwnedValue):
     reference: Frame
-    target: str | Frame = "center"
+    target: str | Frame = "anchor"
     reference_curve: str | Curve | None = None
     reference_curve_name: str | None         # read-only serialized name
     operations: ManagedSequence[Operation]   # alias of reference.operations
 
-    __init__(self, reference: FrameLike, *, target="center", reference_curve=None)
+    __init__(self, reference: FrameLike, *, target="anchor", reference_curve=None)
     set(self, **changes) -> Self
     set_reference(self, reference: FrameLike) -> Self
     set_target(self, target: str | Frame) -> Self
@@ -380,13 +382,21 @@ class CurveReference(Reference):
     __init__(self, curve: str | Curve)
 
 
+class LocalFrameReference(Reference):
+    frame: str | Frame
+    frame_name: str | None
+    kind: Literal["local_frame"] = "local_frame"
+
+    __init__(self, frame: str | Frame = "anchor")
+
+
 class ObjectReference(Reference):
     kind: Literal["object_frame"]
     object: str | Object
-    frame: str | Frame = "center"
+    frame: str | Frame = "anchor"
     object_name: str | None                  # read-only serialized names
     frame_name: str | None
-    __init__(self, object: str | Object, frame: str | Frame = "center")
+    __init__(self, object: str | Object, frame: str | Frame = "anchor")
 ```
 
 `EntityMap` is an ordered, controlled mapping of names to live values.
@@ -399,10 +409,12 @@ Every argument typed as `ReferenceLike` accepts these forms:
 | String | Meaning |
 | --- | --- |
 | `"world"` | The world frame; this word is reserved in shorthand syntax. |
+| `"anchor"` | The same-instance anchor, for feature placements. |
 | `"curve:main"` | Curve `main`, explicitly namespaced. |
 | `"Q1->magnetic_exit"` | Frame `magnetic_exit` of object `Q1`. |
 | `"Q1->beam_exit"` | Frame `beam_exit` of object `Q1`. |
-| `"Q1->center"` | The implicit center frame of object `Q1`. |
+| `"local:mechanical_center"` | The mechanical-center frame on the same object instance. |
+| `"Q1->anchor"` | The implicit anchor frame of object `Q1`. |
 
 A bare string is not accepted in a generic reference position: `"main"` could
 later denote either a curve or an object, and a detached value has no layout in
@@ -410,12 +422,14 @@ which to decide. Bare names remain valid where the parameter already fixes the
 namespace, such as `type="quadrupole"`, `target="magnetic_entry"`,
 `reference_curve="main"`, and `get_frame("exit")`.
 
-Shortcut parsing tests exact `world`, then a non-empty `curve:` suffix, then
-exactly one non-empty `object->frame` pair. It is case-sensitive and input-only;
+Shortcut parsing recognizes exact `world` and `anchor` (also legacy `center`),
+non-empty `local:` and `curve:` suffixes, and exactly one non-empty
+`object->frame` pair. Local references are valid only for feature placements.
+Parsing is case-sensitive and input-only;
 serialization always emits the canonical structured reference object. Draft
 0.2 defines no escaping: use an explicit class or instance when an object or
 frame name contains `->`. A curve named `world` remains addressable as
-`"curve:world"`; an object named `world` as `"world->center"`. Operations are
+`"curve:world"`; an object named `world` as `"world->anchor"`. Operations are
 not encoded in strings, so forms such as `"curve:main@3.1"` are unsupported.
 
 ## Behavioral contract
@@ -481,11 +495,11 @@ snapshot or share one active resolver across threads.
 - Curve frame evaluation may extrapolate beyond the finite domain by straight
   tangent continuation; station inference never extrapolates.
 - Positioning aligns `Position.target` with the transformed reference frame and
-  derives the object center using the inverse local target pose.
+  derives the object anchor using the inverse local target pose.
 - Positive curve angle at zero roll bends toward local −x; positive roll turns
   that bend direction toward local −y.
 - `shape` is optional. When present, its `dz`, curvature, and roll define the
-  mechanical swept geometry centered on `center`; without it the type has no
+  mechanical swept geometry centered on `mechanical_center`; without it the type has no
   rendered surface.
 - The magnetic axis is an optional type-level four-field group. The beam
   interface is an optional object-level four-field group: center, positive
@@ -493,10 +507,10 @@ snapshot or share one active resolver across threads.
   If the object omits its group, all four effective values follow the type's
   magnetic axis dynamically. Without either group, beam frames do not exist.
 - Entry and exit are evaluated at `−length/2` and `+length/2` along the effective
-  feature axis. Center transformations use local mechanical-path `ts` semantics.
-- `Type.implicit_frames` contains `center` and the present magnetic triplet.
+  feature axis. Center placements use local mechanical-path `ts` semantics except when their reference is a curve.
+- `Type.implicit_frames` contains `anchor`, `mechanical_center` when a shape exists, and the present magnetic triplet.
   `Object.implicit_frames` additionally contains `beam_center`, `beam_entry`,
-  and `beam_exit` when explicit or inherited. All seven names remain forbidden
+  and `beam_exit` when explicit or inherited. All reserved names remain forbidden
   in `Type.frames`. Type-level queries do not resolve beam frames.
 - `Type.set_magnetic_axis()` updates the magnetic definition;
   `Object.set_beam_axis()` creates or updates an explicit interface. Creating an
@@ -516,6 +530,42 @@ snapshot or share one active resolver across threads.
 - Draft 0.1 deliberately omits `tz` and `rz`: `ts` is a path operation, `tt` is
   tangent translation, and longitudinal rotation is `rs`; a `tz` alias would
   hide this distinction.
+
+### Anchors and referenced feature placements
+
+`anchor` is the base frame determined by `Position`. `mechanical_center` is an
+optional `Frame` on `Type` that places its shape. It requires a shape and defaults
+to an empty transformation from the anchor. A magnetic center, object beam center,
+or stored named frame can likewise have a reference. Omitting it means the anchor.
+
+Use `Frame("local:<frame>")`, `Frame(LocalFrameReference("<frame>"))`, or
+`Frame(type_.frames["<frame>"])` to reference a frame on the same instance. JSON
+uses `{"kind": "local_frame", "frame": "<frame>"}`. World, curve, and other object
+references use their existing forms. This includes local references to the
+instance's explicit or inherited beam frames. Every reference must resolve for
+each actual instance, and the complete frame graph must be acyclic.
+
+On a curve reference, summed `ts` operations select the station. On all other
+feature references, operations execute sequentially and `ts` uses the type's
+mechanical curvature and roll. Feature placements do not use station inference;
+`reference_curve` remains specific to `Position`.
+
+```python
+type_.mechanical_center = Frame().tx(0.1)
+type_.magnetic_center.reference = "local:mechanical_center"
+type_.new_frame("survey", Frame("local:magnetic_exit").ty(0.02))
+```
+
+A positioning target must follow same-instance references back to the anchor.
+Its inverse local pose then determines that anchor. An externally rooted target
+is rejected because it cannot determine the anchor. `Type.get_frame()` likewise
+requires an anchor-relative chain; use `Object.get_frame()` for external references.
+Mechanical meshes use the resolved mechanical center. An inherited beam interface
+aliases the resolved magnetic frames, so references and edits propagate through it.
+
+Readers accept the former base-frame spelling `center` and normalize it to
+`anchor`; writers and frame lists use `anchor`. `mechanical_center` is reserved,
+including when no shape is present, as are the other implicit feature names.
 
 ### Lookup and IPython
 
@@ -554,7 +604,7 @@ quad.new_frame("survey_mark").tx(0.4)
 q1 = layout.new_object(
     "Q1",
     type=quad,
-    position=Position("curve:main", target="center").ts(3.1).tt(0.2),
+    position=Position("curve:main", target="anchor").ts(3.1).tt(0.2),
 )
 
 q2 = layout.new_object(

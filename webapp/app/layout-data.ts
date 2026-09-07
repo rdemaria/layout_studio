@@ -14,6 +14,8 @@ export type ObjectFrameReference = {
   frame: string;
 };
 export type Reference = WorldReference | CurveReference | ObjectFrameReference;
+export type LocalFrameReference = { kind: "local_frame"; frame: string };
+export type PlacementReference = Reference | LocalFrameReference;
 
 export type Transformation = {
   reference: Reference;
@@ -39,11 +41,13 @@ export type CylinderShape = ["cylinder", number, number, number, number];
 export type Shape = BoxShape | CylinderShape;
 
 export type LocalTransformation = {
+  reference?: PlacementReference;
   transformation: LocalTransformOperation[];
 };
 
 export type LayoutType = {
   shape?: Shape;
+  mechanical_center?: LocalTransformation;
   color: string;
   magnetic_center?: LocalTransformation;
   magnetic_length?: number;
@@ -71,6 +75,7 @@ export type LayoutDependencyKind = "curve" | "object";
 export type LayoutDependencyRelation =
   | "starting_frame"
   | "position_reference"
+  | "feature_reference"
   | "station_curve";
 export type LayoutDependencyNode = {
   id: string;
@@ -131,11 +136,12 @@ export const NON_CURVE_TRANSFORM_NAMES: NonCurveTransformName[] = [
   "rs",
 ];
 
-// Center is present for every object. The magnetic and beam frames are derived
+// Anchor is present for every object. The magnetic and beam frames are derived
 // when defined explicitly or (for objects) inherited from the magnetic axis. These names may not
 // be stored in the type frames mapping, even when the corresponding axis is absent.
 export const IMPLICIT_TYPE_FRAME_NAMES = [
-  "center",
+  "anchor",
+  "mechanical_center",
   "magnetic_center",
   "magnetic_entry",
   "magnetic_exit",
@@ -222,7 +228,7 @@ export const SAMPLE_LAYOUT: LayoutData = {
       beam_curvature: 0.22,
       beam_roll: 0,
       position: {
-        target: "center",
+        target: "anchor",
         reference: { kind: "curve", curve: "ring" },
         transformation: [["ts", 3.5]],
       },
@@ -230,7 +236,7 @@ export const SAMPLE_LAYOUT: LayoutData = {
     BPM1: {
       type: "monitor",
       position: {
-        target: "center",
+        target: "anchor",
         reference: { kind: "curve", curve: "ring" },
         transformation: [["ts", 8.4]],
       },
@@ -285,7 +291,12 @@ function hasOwn(dictionary: object, name: PropertyKey): boolean {
 export function isImplicitTypeFrameName(
   name: string,
 ): name is ImplicitTypeFrameName {
-  return (IMPLICIT_TYPE_FRAME_NAMES as readonly string[]).includes(name);
+  return name === "center" || (IMPLICIT_TYPE_FRAME_NAMES as readonly string[]).includes(name);
+}
+
+/** Import the former base-frame spelling without exporting it again. */
+export function canonicalFrameName(name: string): string {
+  return name === "center" ? "anchor" : name;
 }
 
 export function hasMagneticFeature(type: LayoutType): boolean {
@@ -315,7 +326,8 @@ export function effectiveBeamFeature(type: LayoutType, object: LayoutObject) {
 }
 
 export function typeFrameNames(type: LayoutType): string[] {
-  const implicit = ["center"];
+  const implicit = ["anchor"];
+  if (type.shape) implicit.push("mechanical_center");
   if (hasMagneticFeature(type)) {
     implicit.push("magnetic_center", ...MAGNETIC_BOUNDARY_FRAME_NAMES);
   }
@@ -325,13 +337,81 @@ export function typeFrameNames(type: LayoutType): string[] {
 export function objectFrameNames(type: LayoutType, object: LayoutObject): string[] {
   const names = typeFrameNames(type);
   if (effectiveBeamFeature(type, object)) {
-    names.splice(hasMagneticFeature(type) ? 4 : 1, 0, "beam_center", ...BEAM_BOUNDARY_FRAME_NAMES);
+    names.push("beam_center", ...BEAM_BOUNDARY_FRAME_NAMES);
   }
   return names;
 }
 
 export function hasTypeFrame(type: LayoutType, name: string): boolean {
-  return typeFrameNames(type).includes(name);
+  return typeFrameNames(type).includes(canonicalFrameName(name));
+}
+
+export type ObjectFrameDefinition = {
+  placement: LocalTransformation;
+  advance?: { length: number; curvature: number; roll: number };
+};
+
+/** The same recipe drives validation, target inversion, and world evaluation. */
+export function objectFrameDefinition(
+  type: LayoutType, object: LayoutObject, name: string,
+): ObjectFrameDefinition | undefined {
+  if (name === "mechanical_center" && type.shape) {
+    return { placement: type.mechanical_center ?? { transformation: [] } };
+  }
+  if (name === "magnetic_center" && hasMagneticFeature(type)) {
+    return { placement: type.magnetic_center! };
+  }
+  if (name === "beam_center" && effectiveBeamFeature(type, object)) {
+    return { placement: object.beam_center ?? {
+      reference: { kind: "local_frame", frame: "magnetic_center" }, transformation: [],
+    } };
+  }
+  for (const kind of ["magnetic", "beam"] as const) {
+    if (name !== `${kind}_entry` && name !== `${kind}_exit`) continue;
+    const axis = kind === "beam" ? effectiveBeamFeature(type, object)
+      : hasMagneticFeature(type) ? {
+        length: type.magnetic_length!, curvature: type.magnetic_curvature!, roll: type.magnetic_roll!,
+      } : undefined;
+    if (!axis) return undefined;
+    return {
+      placement: { reference: { kind: "local_frame", frame: `${kind}_center` }, transformation: [] },
+      advance: { length: (name.endsWith("_entry") ? -0.5 : 0.5) * axis.length,
+        curvature: axis.curvature, roll: axis.roll },
+    };
+  }
+  return hasOwn(type.frames, name) ? { placement: type.frames[name] } : undefined;
+}
+
+/** Only frames rigidly rooted in this anchor can determine its placement. */
+export function anchorRelativeFrameNames(type: LayoutType, object: LayoutObject, objectName?: string): string[] {
+  const state = new Map<string, boolean | "visiting">([["anchor", true]]);
+  const anchored = (name: string): boolean => {
+    if (state.has(name)) return state.get(name) === true;
+    state.set(name, "visiting");
+    const definition = objectFrameDefinition(type, object, name);
+    const reference = definition?.placement.reference;
+    const result = Boolean(definition) && (!reference ||
+      (reference.kind === "local_frame" && anchored(reference.frame)) ||
+      (reference.kind === "object_frame" && reference.object === objectName && anchored(reference.frame)));
+    state.set(name, result);
+    return result;
+  };
+  return objectFrameNames(type, object).filter(anchored);
+}
+
+export function forEachPlacement(
+  layout: LayoutData,
+  callback: (placement: LocalTransformation, label: string, owner: {kind: "type" | "object"; name: string}) => void,
+) {
+  for (const [name, type] of Object.entries(layout.types)) {
+    const owner = { kind: "type" as const, name };
+    if (type.mechanical_center) callback(type.mechanical_center, `type ${name} mechanical_center`, owner);
+    if (type.magnetic_center) callback(type.magnetic_center, `type ${name} magnetic_center`, owner);
+    for (const [frameName, placement] of Object.entries(type.frames)) callback(placement, `type ${name} frame ${frameName}`, owner);
+  }
+  for (const [name, object] of Object.entries(layout.objects)) {
+    if (object.beam_center) callback(object.beam_center, `object ${name} beam_center`, {kind: "object", name});
+  }
 }
 
 function finite(value: unknown, label: string): number {
@@ -357,7 +437,7 @@ function parseReference(value: unknown, label: string): Reference {
     typeof value.frame === "string" && value.frame
   ) {
     assertOnlyKeys(value, label, ["kind", "object", "frame"]);
-    return { kind: "object_frame", object: value.object, frame: value.frame };
+    return { kind: "object_frame", object: value.object, frame: canonicalFrameName(value.frame) };
   }
   throw new Error(`${label} has an invalid reference`);
 }
@@ -406,7 +486,7 @@ function parseObjectPosition(value: unknown, label: string): ObjectPosition {
     "transformation",
   ]);
   if (typeof value.target !== "string" || !value.target) {
-    throw new Error(`${label}.target must be center or a named frame`);
+    throw new Error(`${label}.target must be anchor or a named frame`);
   }
   const reference = parseReference(value.reference, `${label}.reference`);
   const transformation = parseTransformOperations(value.transformation, label);
@@ -429,7 +509,7 @@ function parseObjectPosition(value: unknown, label: string): ObjectPosition {
     );
   }
   return {
-    target: value.target,
+    target: canonicalFrameName(value.target),
     reference,
     ...(reference_curve ? { reference_curve } : {}),
     transformation,
@@ -438,7 +518,18 @@ function parseObjectPosition(value: unknown, label: string): ObjectPosition {
 
 function parseLocalTransformation(value: unknown, label: string): LocalTransformation {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
-  assertOnlyKeys(value, label, ["transformation"]);
+  assertOnlyKeys(value, label, ["reference", "transformation"]);
+  let reference: PlacementReference | undefined;
+  if (value.reference !== undefined) {
+    const raw = value.reference;
+    if (isRecord(raw) && raw.kind === "local_frame") {
+      assertOnlyKeys(raw, `${label}.reference`, ["kind", "frame"]);
+      if (typeof raw.frame !== "string" || !raw.frame) {
+        throw new Error(`${label}.reference.frame must be a non-empty frame name`);
+      }
+      reference = { kind: "local_frame", frame: canonicalFrameName(raw.frame) };
+    } else reference = parseReference(raw, `${label}.reference`);
+  }
   if (!Array.isArray(value.transformation)) {
     throw new Error(`${label}.transformation must be an array`);
   }
@@ -458,7 +549,7 @@ function parseLocalTransformation(value: unknown, label: string): LocalTransform
       ];
     },
   );
-  return { transformation };
+  return { ...(reference ? { reference } : {}), transformation };
 }
 
 function parseShape(value: unknown, label: string): Shape {
@@ -567,6 +658,11 @@ export function forEachTransformation(
   for (const [name, object] of Object.entries(layout.objects)) {
     callback(object.position, `object ${name}`);
   }
+  forEachPlacement(layout, (placement, label) => {
+    if (placement.reference && placement.reference.kind !== "local_frame") {
+      callback(placement as Transformation, label);
+    }
+  });
 }
 
 function dependencyNodeId(kind: LayoutDependencyKind, name: string): string {
@@ -621,6 +717,14 @@ export function getLayoutDependencyGraph(
   for (const [name, object] of Object.entries(layout.objects)) {
     const from = dependencyNodeId("object", name);
     addReferenceEdge(from, object.position.reference, "position_reference");
+    const type = layout.types[object.type];
+    for (const frame of objectFrameNames(type, object)) {
+      const reference = objectFrameDefinition(type, object, frame)?.placement.reference;
+      if (reference && reference.kind !== "local_frame" &&
+          !(reference.kind === "object_frame" && reference.object === name)) {
+        addReferenceEdge(from, reference, "feature_reference");
+      }
+    }
     if (
       object.position.reference.kind !== "curve" &&
       object.position.reference_curve &&
@@ -637,18 +741,65 @@ export function getLayoutDependencyGraph(
   return { nodes, edges };
 }
 
-function validateDependencyCycles(layout: LayoutData) {
-  const graph = getLayoutDependencyGraph(layout);
-  const dependencies = new Map(
-    graph.nodes.map((node) => [node.id, [] as string[]]),
-  );
-  for (const edge of graph.edges) {
-    const nodeDependencies = dependencies.get(edge.from);
-    if (nodeDependencies && !nodeDependencies.includes(edge.to)) {
-      nodeDependencies.push(edge.to);
+export function layoutFrameNodeId(object: string, frame: string): string {
+  return canonicalFrameName(frame) === "anchor" ? `object:${object}` : `frame:${JSON.stringify([object, canonicalFrameName(frame)])}`;
+}
+
+export function getLayoutFrameDependencies(layout: LayoutData): Map<string, string[]> {
+  // Track individual frames: an externally placed feature need not depend on
+  // its object's anchor, so collapsing everything to objects creates false cycles.
+  const dependencies = new Map<string, string[]>();
+  const frameId = layoutFrameNodeId;
+  const referenceId = (reference: PlacementReference | undefined, owner?: string): string | undefined => {
+    if (!reference || reference.kind === "local_frame") {
+      return owner === undefined ? undefined : frameId(owner, reference?.frame ?? "anchor");
+    }
+    if (reference.kind === "world") return undefined;
+    return reference.kind === "curve" ? `curve:${reference.curve}` : frameId(reference.object, reference.frame);
+  };
+  for (const [name, curve] of Object.entries(layout.reference_curves)) {
+    const dependency = referenceId(curve.starting_frame.reference);
+    dependencies.set(`curve:${name}`, dependency ? [dependency] : []);
+  }
+  for (const [name, object] of Object.entries(layout.objects)) {
+    const type = layout.types[object.type];
+    const available = objectFrameNames(type, object);
+    const positionDependency = referenceId(object.position.reference);
+    const anchorDependencies = positionDependency ? [positionDependency] : [];
+    if (object.position.reference_curve && object.position.transformation.some(([op]) => op === "ts")) {
+      anchorDependencies.push(`curve:${object.position.reference_curve}`);
+    }
+    dependencies.set(frameId(name, "anchor"), anchorDependencies);
+    for (const frame of available) {
+      if (frame === "anchor") continue;
+      const reference = objectFrameDefinition(type, object, frame)!.placement.reference;
+      if (reference?.kind === "local_frame" && !available.includes(reference.frame)) {
+        throw new Error(`Object ${name} frame ${frame} references unknown local frame ${reference.frame}`);
+      }
+      const dependency = referenceId(reference, name);
+      dependencies.set(frameId(name, frame), dependency ? [dependency] : []);
+    }
+  }
+  // Also reject broken local chains on uninstantiated types. Beam frames may
+  // be supplied by future instances and are checked against each actual object.
+  for (const [name, type] of Object.entries(layout.types)) {
+    const object: LayoutObject = {type: name, position: {target: "anchor", reference: {kind: "world"}, transformation: []}};
+    const available = new Set([...objectFrameNames(type, object), "beam_center", "beam_entry", "beam_exit"]);
+    for (const frame of typeFrameNames(type)) {
+      if (frame === "anchor") continue;
+      const reference = objectFrameDefinition(type, object, frame)!.placement.reference;
+      if (reference?.kind === "local_frame") {
+        if (!available.has(reference.frame)) throw new Error(`Type ${name} frame ${frame} references unknown local frame ${reference.frame}`);
+        dependencies.set(`type-frame:${JSON.stringify([name, frame])}`, [`type-frame:${JSON.stringify([name, reference.frame])}`]);
+      }
     }
   }
 
+  return dependencies;
+}
+
+function validateDependencyCycles(layout: LayoutData) {
+  const dependencies = getLayoutFrameDependencies(layout);
   const state = new Map<string, "visiting" | "visited">();
   const stack: string[] = [];
   const label = (node: string) => {
@@ -714,6 +865,7 @@ export function parseLayout(value: unknown): LayoutData {
     }
     assertOnlyKeys(raw, `types.${name}`, [
       "shape",
+      "mechanical_center",
       "color",
       "magnetic_center",
       "magnetic_length",
@@ -722,6 +874,9 @@ export function parseLayout(value: unknown): LayoutData {
       "frames",
     ]);
     const label = `types.${name}`;
+    if (raw.mechanical_center !== undefined && raw.shape === undefined) {
+      throw new Error(`${label}.mechanical_center requires a shape`);
+    }
     const magnetic = parseOptionalAxisFeature(raw, label, "magnetic");
     const frames: Record<string, LocalTransformation> = {};
     if (!isRecord(raw.frames)) {
@@ -746,6 +901,9 @@ export function parseLayout(value: unknown): LayoutData {
         ? {}
         : { shape: parseShape(raw.shape, `types.${name}.shape`) }),
       color: parseColor(raw.color, `types.${name}.color`),
+      ...(raw.mechanical_center === undefined ? {} : {
+        mechanical_center: parseLocalTransformation(raw.mechanical_center, `${label}.mechanical_center`),
+      }),
       ...(magnetic
         ? {
             magnetic_center: magnetic.center,
@@ -818,6 +976,11 @@ export function parseLayout(value: unknown): LayoutData {
     }
   });
   validateDependencyCycles(result);
+  for (const [name, object] of Object.entries(objects)) {
+    if (!anchorRelativeFrameNames(types[object.type], object, name).includes(object.position.target)) {
+      throw new Error(`objects.${name}.position.target must be rooted in its own anchor through local frame references`);
+    }
+  }
   return result;
 }
 

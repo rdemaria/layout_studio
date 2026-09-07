@@ -74,7 +74,7 @@ function canonicalLayout() {
       Q1: {
         type: "magnet",
         position: {
-          target: "center",
+          target: "anchor",
           reference: { kind: "curve", curve: "main" },
           transformation: [["ts", 10]],
         },
@@ -82,7 +82,7 @@ function canonicalLayout() {
       Q2: {
         type: "magnet",
         position: {
-          target: "center",
+          target: "anchor",
           reference: { kind: "curve", curve: "main" },
           transformation: [
             ["ts", 20],
@@ -93,7 +93,7 @@ function canonicalLayout() {
       downstream: {
         type: "marker",
         position: {
-          target: "center",
+          target: "anchor",
           reference: { kind: "object_frame", object: "Q1", frame: "exit" },
           transformation: [["tt", 2]],
         },
@@ -236,7 +236,7 @@ test("keeps structurally identical types distinct when their names differ", () =
   input.objects.Q3 = {
     type: "magnet_copy",
     position: {
-      target: "center",
+      target: "anchor",
       reference: { kind: "curve", curve: "main" },
       transformation: [["ts", 30]],
     },
@@ -510,10 +510,7 @@ test("validates complete magnetic and beam feature values", () => {
 
   const explicitReference = canonicalLayout();
   explicitReference.types.magnet.magnetic_center.reference = { kind: "world" };
-  assert.throws(
-    () => parseLayout(explicitReference),
-    /types\.magnet\.magnetic_center contains unsupported fields: reference/,
-  );
+  assert.doesNotThrow(() => parseLayout(explicitReference));
 
   const ordered = canonicalLayout();
   ordered.types.magnet.magnetic_center.transformation = [
@@ -528,7 +525,7 @@ test("validates complete magnetic and beam feature values", () => {
 
 test("reserves all conditional implicit frame names", () => {
   for (const name of [
-    "center",
+    "anchor",
     "magnetic_center",
     "magnetic_entry",
     "magnetic_exit",
@@ -603,7 +600,7 @@ test("accepts the implicit center as an object-frame reference for every type", 
   input.objects.downstream.position.reference = {
     kind: "object_frame",
     object: "Q1",
-    frame: "center",
+    frame: "anchor",
   };
 
   const parsed = parseLayout(input);
@@ -613,7 +610,7 @@ test("accepts the implicit center as an object-frame reference for every type", 
   approximatelyEqual(downstream.frame.o, [0, 0, 12]);
   assert.equal(
     scene.frames.some(
-      (namedFrame) => namedFrame.object === "Q1" && namedFrame.name === "center",
+      (namedFrame) => namedFrame.object === "Q1" && namedFrame.name === "anchor",
     ),
     false,
     "the implicit center must not be emitted as a stored named frame",
@@ -629,7 +626,8 @@ test("exposes only the implicit frames supplied by optional features", () => {
     beam_roll: 0,
   });
   const expectedReferenceZ = {
-    center: 12,
+    anchor: 12,
+    mechanical_center: 12,
     magnetic_center: 12,
     magnetic_entry: 11,
     magnetic_exit: 13,
@@ -651,7 +649,7 @@ test("exposes only the implicit frames supplied by optional features", () => {
   }
 
   for (const target of [
-    "center",
+    "anchor",
     "magnetic_center",
     "magnetic_entry",
     "magnetic_exit",
@@ -698,18 +696,15 @@ test("requires each object position to target its center or a declared local fra
   named.objects.Q1.position.target = "entrance";
   assert.equal(parseLayout(named).objects.Q1.position.target, "entrance");
 
-  // "center" is the built-in target and need not appear in the type's frames.
+  // "anchor" is the built-in target and need not appear in the type's frames.
   const centered = canonicalLayout();
-  assert.equal(parseLayout(centered).objects.Q1.position.target, "center");
+  assert.equal(parseLayout(centered).objects.Q1.position.target, "anchor");
 });
 
-test("keeps type frames reference-free and allows local curved-path ts", () => {
+test("allows explicit feature references and local curved-path ts", () => {
   const explicitReference = canonicalLayout();
   explicitReference.types.magnet.frames.exit.reference = { kind: "world" };
-  assert.throws(
-    () => parseLayout(explicitReference),
-    /types\.magnet\.frames\.exit contains unsupported fields: reference/,
-  );
+  assert.doesNotThrow(() => parseLayout(explicitReference));
 
   const pathShift = canonicalLayout();
   pathShift.types.magnet.frames.exit.transformation = [["ts", 1]];
@@ -815,7 +810,7 @@ function transverseProjectionLayout(segments, anchorPosition) {
       anchor: {
         type: "marker",
         position: {
-          target: "center",
+          target: "anchor",
           reference: { kind: "world" },
           transformation: anchorPosition,
         },
@@ -823,11 +818,11 @@ function transverseProjectionLayout(segments, anchorPosition) {
       projected: {
         type: "marker",
         position: {
-          target: "center",
+          target: "anchor",
           reference: {
             kind: "object_frame",
             object: "anchor",
-            frame: "center",
+            frame: "anchor",
           },
           reference_curve: "main",
           transformation: [["ts", 0]],
@@ -852,7 +847,7 @@ test("infers a unique transverse plane on an exact curved segment", () => {
   input.objects.control = {
     type: "marker",
     position: {
-      target: "center",
+      target: "anchor",
       reference: { kind: "curve", curve: "main" },
       transformation: [["ts", station + shift]],
     },
@@ -877,7 +872,7 @@ test("infers s on a rolled negative-angle arc", () => {
     [],
   );
   input.objects.anchor.position = {
-    target: "center",
+    target: "anchor",
     reference: { kind: "curve", curve: "main" },
     transformation: [["ts", station]],
   };
@@ -885,7 +880,7 @@ test("infers s on a rolled negative-angle arc", () => {
   input.objects.control = {
     type: "marker",
     position: {
-      target: "center",
+      target: "anchor",
       reference: { kind: "curve", curve: "main" },
       transformation: [["ts", station + shift]],
     },
@@ -1032,7 +1027,7 @@ test("evaluates local ts in order and tt along the resolved tangent", () => {
       C: {
         type: "curved",
         position: {
-          target: "center",
+          target: "anchor",
           reference: { kind: "world" },
           transformation: [],
         },
@@ -1074,7 +1069,7 @@ test("derives curved magnetic entry and exit frames and aligns magnetic targets"
       A: {
         type: "sector",
         position: {
-          target: "center",
+          target: "anchor",
           reference: { kind: "world" },
           transformation: [],
         },
@@ -1163,7 +1158,7 @@ test("keeps mechanical, magnetic and beam paths independent", () => {
         beam_curvature: 0,
         beam_roll: -0.3,
         position: {
-          target: "center",
+          target: "anchor",
           reference: { kind: "world" },
           transformation: [],
         },
@@ -1279,13 +1274,13 @@ test("beam-only objects expose only their own frames and reject type-level beam 
   const input = {
     reference_curves: {}, types: { bare: { color: "#112233", frames: {} } },
     objects: {
-      A: { type: "bare", position: { target: "center", reference: { kind: "world" }, transformation: [] },
+      A: { type: "bare", position: { target: "anchor", reference: { kind: "world" }, transformation: [] },
         beam_center: { transformation: [["ts", 0.5]] }, beam_length: 2, beam_curvature: 0, beam_roll: 0 },
-      B: { type: "bare", position: { target: "center", reference: { kind: "world" }, transformation: [] } },
+      B: { type: "bare", position: { target: "anchor", reference: { kind: "world" }, transformation: [] } },
     },
   };
   const parsed = parseLayout(input);
-  assert.deepEqual(objectFrameNames(parsed.types.bare, parsed.objects.B), ["center"]);
+  assert.deepEqual(objectFrameNames(parsed.types.bare, parsed.objects.B), ["anchor"]);
   const scene = buildScene(parsed);
   assert.equal(scene.beamAxes.length, 1);
   approximatelyEqual(scene.beamFrames.find((frame) => frame.name === "beam_entry").frame.o, [0, 0, -0.5]);
@@ -1302,7 +1297,7 @@ test("beam-only objects expose only their own frames and reject type-level beam 
   }
   const nonlocal = structuredClone(input);
   nonlocal.objects.A.beam_center.reference = { kind: "world" };
-  assert.throws(() => parseLayout(nonlocal), /unsupported fields: reference/);
+  assert.doesNotThrow(() => parseLayout(nonlocal));
 });
 
 test("represents a shapeless object by its center frame", () => {
@@ -1320,7 +1315,7 @@ test("represents a shapeless object by its center frame", () => {
       A: {
         type: "marker",
         position: {
-          target: "center",
+          target: "anchor",
           reference: { kind: "world" },
           transformation: [["tx", 3]],
         },
@@ -1368,7 +1363,7 @@ test("uses shape roll for the local bend plane", () => {
       C: {
         type: "rolled",
         position: {
-          target: "center",
+          target: "anchor",
           reference: { kind: "world" },
           transformation: [],
         },
@@ -1376,7 +1371,7 @@ test("uses shape roll for the local bend plane", () => {
       N: {
         type: "negative",
         position: {
-          target: "center",
+          target: "anchor",
           reference: { kind: "world" },
           transformation: [],
         },
@@ -1423,7 +1418,7 @@ test("sweeps box and cylinder cross-sections along their curved centrelines", ()
       Box: {
         type: "box",
         position: {
-          target: "center",
+          target: "anchor",
           reference: { kind: "world" },
           transformation: [],
         },
@@ -1431,7 +1426,7 @@ test("sweeps box and cylinder cross-sections along their curved centrelines", ()
       Cylinder: {
         type: "cylinder",
         position: {
-          target: "center",
+          target: "anchor",
           reference: { kind: "world" },
           transformation: [],
         },
@@ -1516,7 +1511,7 @@ test("aligns a curved target frame by inverting its local path", () => {
       A: {
         type: "curved",
         position: {
-          target: "center",
+          target: "anchor",
           reference: { kind: "curve", curve: "main" },
           transformation: [["ts", 10]],
         },
@@ -1571,7 +1566,7 @@ test("aligns B.start to a transformed A.end, including frame and placement rotat
   input.objects.A = {
     type: "link",
     position: {
-      target: "center",
+      target: "anchor",
       reference: { kind: "curve", curve: "main" },
       transformation: [["ts", 30]],
     },
@@ -1624,7 +1619,7 @@ test("rejects self and mutual object-frame dependency cycles", () => {
   selfReference.objects.Q1.position.transformation = [];
   assert.throws(
     () => parseLayout(selfReference),
-    /Reference dependency cycle: object Q1 -> object Q1/,
+    /Reference dependency cycle: object Q1 -> frame .* -> object Q1/,
   );
 
   const mutualReference = canonicalLayout();
@@ -1642,7 +1637,7 @@ test("rejects self and mutual object-frame dependency cycles", () => {
   mutualReference.objects.Q2.position.transformation = [];
   assert.throws(
     () => parseLayout(mutualReference),
-    /Reference dependency cycle: object Q1 -> object Q2 -> object Q1/,
+    /Reference dependency cycle: object Q1 -> frame .* -> object Q2 -> frame .* -> object Q1/,
   );
 });
 
@@ -1656,14 +1651,14 @@ test("rejects dependency cycles spanning a curve and an object", () => {
 
   assert.throws(
     () => parseLayout(input),
-    /Reference dependency cycle: curve main -> object Q1 -> curve main/,
+    /Reference dependency cycle: curve main -> frame .* -> object Q1 -> curve main/,
   );
 });
 
 test("rejects cycles through an object position's projection curve", () => {
   const input = canonicalLayout();
   input.objects.Q1.position = {
-    target: "center",
+    target: "anchor",
     reference: { kind: "world" },
     transformation: [["tt", 10]],
   };
@@ -1673,7 +1668,7 @@ test("rejects cycles through an object position's projection curve", () => {
     reference: {
       kind: "object_frame",
       object: "downstream",
-      frame: "center",
+      frame: "anchor",
     },
     transformation: [],
   };
@@ -1790,7 +1785,7 @@ test("finds entry and exit crossings of a matching curved swept shape", () => {
     Q1: {
       type: "magnet",
       position: {
-        target: "center",
+        target: "anchor",
         reference: { kind: "curve", curve: "main" },
         transformation: [["ts", 2]],
       },

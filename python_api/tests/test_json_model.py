@@ -103,7 +103,7 @@ def test_python_shortcuts_serialize_to_canonical_json():
         "transformation": [["tx", 1.0]],
     }
     assert document["objects"]["thing"]["position"] == {
-        "target": "center",
+        "target": "anchor",
         "reference": {"kind": "curve", "curve": "main"},
         "transformation": [["ts", 0.5]],
     }
@@ -119,7 +119,7 @@ def test_python_shortcuts_serialize_to_canonical_json():
         lambda d: d["reference_curves"]["main"].update(segments=[[1.0, 0.0]]),
         lambda d: d["types"]["magnet"].update(shape=["box", 1.0, 2.0, 3.0]),
         lambda d: d["types"]["magnet"]["frames"]["survey"].update(
-            reference={"kind": "world"}
+            reference={"kind": "local_frame", "frame": ""}
         ),
         lambda d: d["objects"]["Q1"]["position"].pop("target"),
         lambda d: d["objects"]["Q1"]["position"]["reference"].update(extra=True),
@@ -132,7 +132,7 @@ def test_python_shortcuts_serialize_to_canonical_json():
         "curve-missing",
         "segment-arity",
         "shape-arity",
-        "local-frame-reference",
+        "empty-local-frame",
         "position-missing-target",
         "reference-extra",
         "unknown-operation",
@@ -320,7 +320,7 @@ def test_owned_values_cannot_be_reused_without_clone():
 
 def test_frame_as_position_adopts_the_same_detached_frame():
     frame = Frame("world").tx(0.25)
-    position = frame.as_position(target="center")
+    position = frame.as_position(target="anchor")
 
     assert position.reference is frame
     assert frame.owner is position

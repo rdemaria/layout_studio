@@ -54,6 +54,8 @@ OPERATION_NAMES = frozenset({"tx", "ty", "ts", "tt", "rx", "ry", "rs"})
 RESERVED_TYPE_FRAMES = frozenset(
     {
         "center",
+        "anchor",
+        "mechanical_center",
         "magnetic_center",
         "magnetic_entry",
         "magnetic_exit",
@@ -639,6 +641,10 @@ def _reference_info(reference: Any) -> tuple[str, Any, Any]:
     if reference is None:
         raise EvaluationError("missing frame reference")
     if isinstance(reference, str):
+        if reference in {"anchor", "center"}:
+            return "local_frame", None, "anchor"
+        if reference.startswith("local:") and reference[6:]:
+            return "local_frame", None, reference[6:]
         if reference == "world":
             return "world", None, None
         if reference.startswith("curve:") and reference[6:]:
@@ -651,6 +657,8 @@ def _reference_info(reference: Any) -> tuple[str, Any, Any]:
         raise EvaluationError(f"ambiguous or malformed reference {reference!r}")
     if isinstance(reference, Mapping):
         kind = _reference_kind_value(reference.get("kind", ""))
+        if kind == "local_frame":
+            return kind, None, reference.get("frame")
         if kind == "world":
             return kind, None, None
         if kind == "curve":
@@ -659,13 +667,15 @@ def _reference_info(reference: Any) -> tuple[str, Any, Any]:
             return (
                 "object_frame",
                 reference.get("object"),
-                reference.get("frame", "center"),
+                reference.get("frame", "anchor"),
             )
         raise EvaluationError(f"unknown reference kind {kind!r}")
 
     kind = getattr(reference, "kind", None)
     if kind is not None:
         kind = _reference_kind_value(kind)
+        if kind == "local_frame":
+            return kind, None, getattr(reference, "frame", None)
         if kind == "world":
             return kind, None, None
         if kind == "curve":
@@ -679,7 +689,7 @@ def _reference_info(reference: Any) -> tuple[str, Any, Any]:
                 object_ = getattr(reference, "object_name", None)
             frame = getattr(reference, "frame", None)
             if frame is None:
-                frame = getattr(reference, "frame_name", "center")
+                frame = getattr(reference, "frame_name", "anchor")
             return "object_frame", object_, frame
         raise EvaluationError(f"unknown reference kind {kind!r}")
 
@@ -687,7 +697,7 @@ def _reference_info(reference: Any) -> tuple[str, Any, Any]:
     if hasattr(reference, "segments") and hasattr(reference, "starting_frame"):
         return "curve", reference, None
     if hasattr(reference, "position") and hasattr(reference, "type"):
-        return "object_frame", reference, "center"
+        return "object_frame", reference, "anchor"
     raise EvaluationError(f"unsupported reference {reference!r}")
 
 
@@ -748,7 +758,9 @@ class Resolver:
         ] = {}
         self._curve_station_geometry_cache: dict[int, _CurveStationGeometry] = {}
         self._station_inference_cache: dict[tuple[int, bytes], float] = {}
-        self._object_centers: dict[int, FloatMatrix] = {}
+        self._object_anchors: dict[int, FloatMatrix] = {}
+        self._frame_cache: dict[tuple[int, str], FloatMatrix] = {}
+        self._local_frame_cache: dict[tuple[int, int, str], FloatMatrix] = {}
         self._active: list[tuple[str, str]] = []
         self._explicit_sessions: list[Any] = []
 
@@ -779,7 +791,9 @@ class Resolver:
             self._curve_data_cache = {}
             self._curve_station_geometry_cache = {}
             self._station_inference_cache = {}
-            self._object_centers = {}
+            self._object_anchors = {}
+            self._frame_cache = {}
+            self._local_frame_cache = {}
             self._active = []
             if self.layout is not None:
                 layout_validate = getattr(self.layout, "validate", None)
@@ -802,7 +816,9 @@ class Resolver:
                 self._curve_data_cache.clear()
                 self._curve_station_geometry_cache.clear()
                 self._station_inference_cache.clear()
-                self._object_centers.clear()
+                self._object_anchors.clear()
+                self._frame_cache.clear()
+                self._local_frame_cache.clear()
                 self._active.clear()
 
     def __enter__(self) -> Self:
@@ -993,11 +1009,6 @@ class Resolver:
                 if axis is None:
                     continue
                 center, _, _, _ = axis
-                if getattr(center, "reference", None) is not None:
-                    raise ValidationError(
-                        f"type-local {feature}_center cannot have an explicit reference",
-                        path=f"{base}.{feature}_center.reference",
-                    )
                 self._validation_operations(
                     _operations(center), f"{base}.{feature}_center.transformation"
                 )
@@ -1010,11 +1021,6 @@ class Resolver:
                 if frame_name in RESERVED_TYPE_FRAMES:
                     raise ValidationError(
                         f"{frame_name!r} is a reserved frame name", path=frame_path
-                    )
-                if getattr(frame, "reference", None) is not None:
-                    raise ValidationError(
-                        "type-local frames cannot have an explicit reference",
-                        path=f"{frame_path}.reference",
                     )
                 self._validation_operations(
                     _operations(frame), f"{frame_path}.transformation"
@@ -1093,7 +1099,7 @@ class Resolver:
                     "object requires a position", path=f"{base}.position"
                 )
             try:
-                self._object_frame_operations(object_, getattr(position, "target", "center"))
+                self._object_frame_operations(object_, getattr(position, "target", "anchor"))
             except UnknownEntityError as exc:
                 raise DanglingReferenceError(
                     str(exc), path=f"{base}.position.target"
@@ -1140,29 +1146,7 @@ class Resolver:
             if has_ts and ref_kind != "curve" and inferred_curve is not None:
                 edges[node].append(("curve", self._name_for("curve", inferred_curve)))
 
-        state: dict[tuple[str, str], int] = {}
-        stack: list[tuple[str, str]] = []
-
-        def visit(node: tuple[str, str]) -> None:
-            mark = state.get(node, 0)
-            if mark == 2:
-                return
-            if mark == 1:
-                start = stack.index(node)
-                cycle = stack[start:] + [node]
-                text = " -> ".join(f"{kind}:{name}" for kind, name in cycle)
-                raise ReferenceCycleError(
-                    f"reference cycle detected: {text}", path=self._node_path(node)
-                )
-            state[node] = 1
-            stack.append(node)
-            for dependency in edges.get(node, ()):
-                visit(dependency)
-            stack.pop()
-            state[node] = 2
-
-        for node in edges:
-            visit(node)
+        self._validate_frame_dependencies()
 
     @staticmethod
     def _node_path(node: tuple[str, str]) -> str:
@@ -1424,103 +1408,208 @@ class Resolver:
             value = position.get("reference_curve", value)
         return value
 
-    def _type_frame_operations(self, type_: Any, frame: Any) -> list[tuple[str, float]]:
-        frames = getattr(type_, "frames", None)
-        if frame is None:
-            frame = "center"
-        if not isinstance(frame, str):
-            for name, candidate in _mapping_items(frames):
-                if candidate is frame:
-                    frame = name
-                    break
-            else:
-                owner = getattr(frame, "owner", None)
-                if owner is not None and owner is not type_:
-                    raise UnknownEntityError("frame belongs to a different type")
-                raise UnknownEntityError("frame is not a stored frame of this type")
+    def _validate_frame_dependencies(self) -> None:
+        """Validate the frame DAG without evaluating any geometry."""
+        edges: dict[tuple[str, ...], list[tuple[str, ...]]] = {}
+        available: dict[str, set[str]] = {}
+        for name, object_ in _mapping_items(self._objects):
+            available[name] = self._frame_names(self._object_type(object_), object_)
 
-        if frame == "center":
-            return []
-        for feature in ("magnetic",):
-            if frame not in {
-                f"{feature}_center",
-                f"{feature}_entry",
-                f"{feature}_exit",
-            }:
+        def frame_id(object_name: str, frame_name: str) -> tuple[str, ...]:
+            return ("object", object_name) if frame_name == "anchor" else ("frame", object_name, frame_name)
+
+        def dependency(reference: Any, object_: Any = None, *, path: str) -> tuple[str, ...] | None:
+            if reference is None:
+                return None if object_ is None else frame_id(self._name_for("object", object_), "anchor")
+            kind, entity, frame = _reference_info(reference)
+            if kind == "local_frame":
+                if object_ is None:
+                    raise ValidationError("local frame reference requires an object feature", path=path)
+                name = self._name_for("object", object_)
+                local_name = self._frame_name(self._object_type(object_), frame)
+                if local_name not in available[name]:
+                    raise DanglingReferenceError(f"unknown local frame {local_name!r}", path=path)
+                return frame_id(name, local_name)
+            kind, entity, frame = self._validate_reference(reference, path)
+            if kind == "world":
+                return None
+            if kind == "curve":
+                return ("curve", self._name_for("curve", entity))
+            return frame_id(self._name_for("object", entity), self._frame_name(self._object_type(entity), frame))
+
+        for name, curve in _mapping_items(self._curves):
+            reference, _ = _transform_parts(getattr(curve, "starting_frame", None))
+            dep = dependency(reference, path=f"reference_curves.{name}.starting_frame.reference")
+            edges[("curve", name)] = [] if dep is None else [dep]
+        for name, object_ in _mapping_items(self._objects):
+            type_ = self._object_type(object_)
+            position = getattr(object_, "position", None)
+            reference, operations = _transform_parts(position)
+            dep = dependency(reference, path=f"objects.{name}.position.reference")
+            anchor_deps = [] if dep is None else [dep]
+            curve = self._position_reference_curve(position)
+            if curve is not None and any(_operation_parts(op)[0] == "ts" for op in operations):
+                curve = self._resolve_curve(curve, reference=True)
+                anchor_deps.append(("curve", self._name_for("curve", curve)))
+            edges[frame_id(name, "anchor")] = anchor_deps
+            for frame in available[name] - {"anchor"}:
+                definition, _ = self._frame_definition(type_, frame, object_)
+                reference, _ = _transform_parts(definition)
+                dep = dependency(reference, object_, path=f"objects.{name}.frames.{frame}.reference")
+                edges[frame_id(name, frame)] = [] if dep is None else [dep]
+
+        # Reusable types can name object beam frames, which are checked on each
+        # instance. Validate their stored local chains even before instantiation.
+        for name, type_ in _mapping_items(self._types):
+            names = self._frame_names(type_)
+            valid = names | {"beam_center", "beam_entry", "beam_exit"}
+            for frame in names - {"anchor"}:
+                definition, _ = self._frame_definition(type_, frame)
+                reference, _ = _transform_parts(definition)
+                if reference is None:
+                    continue
+                kind, _, local_frame = _reference_info(reference)
+                if kind != "local_frame":
+                    self._validate_reference(reference, f"types.{name}.frames.{frame}.reference")
+                    continue
+                local_name = self._frame_name(type_, local_frame)
+                if local_name not in valid:
+                    raise DanglingReferenceError(f"unknown local frame {local_name!r}", path=f"types.{name}.frames.{frame}")
+                edges[("type_frame", name, frame)] = [("type_frame", name, local_name)]
+
+        state: dict[tuple[str, ...], int] = {}
+        trail: list[tuple[str, ...]] = []
+        def visit(node: tuple[str, ...]) -> None:
+            if state.get(node) == 2:
+                return
+            if state.get(node) == 1:
+                cycle = trail[trail.index(node):] + [node]
+                raise ReferenceCycleError("reference dependency cycle: " + " -> ".join(":".join(item) for item in cycle))
+            state[node] = 1
+            trail.append(node)
+            for dep in edges.get(node, ()):
+                visit(dep)
+            trail.pop()
+            state[node] = 2
+        for node in edges:
+            visit(node)
+
+        for name, object_ in _mapping_items(self._objects):
+            type_ = self._object_type(object_)
+            target = self._frame_name(type_, getattr(getattr(object_, "position", None), "target", "anchor"))
+            seen: set[str] = set()
+            while target != "anchor":
+                if target in seen:
+                    raise ReferenceCycleError(f"target local frame cycle: {name}.{target}")
+                seen.add(target)
+                definition, _ = self._frame_definition(type_, target, object_)
+                reference, _ = _transform_parts(definition)
+                if reference is None:
+                    break
+                kind, entity, frame = _reference_info(reference)
+                if kind == "local_frame" or (kind == "object_frame" and self._resolve_object(entity, reference=True) is object_):
+                    target = self._frame_name(type_, frame)
+                    continue
+                raise ValidationError("position target must be rooted in its own anchor through local frame references", path=f"objects.{name}.position.target")
+
+    @staticmethod
+    def _frame_name(type_: Any, frame: Any) -> str:
+        if frame is None or isinstance(frame, str):
+            return "anchor" if frame is None or frame == "center" else frame
+        for name, candidate in _mapping_items(getattr(type_, "frames", None)):
+            if candidate is frame:
+                return name
+        raise UnknownEntityError("frame is not a stored frame of this type")
+
+    def _frame_names(self, type_: Any, object_: Any = None) -> set[str]:
+        names = {"anchor", *[name for name, _ in _mapping_items(getattr(type_, "frames", None))]}
+        if getattr(type_, "shape", None) is not None:
+            names.add("mechanical_center")
+        if _axis_feature_values(type_, "magnetic") is not None:
+            names.update(("magnetic_center", "magnetic_entry", "magnetic_exit"))
+        if object_ is not None and self._object_beam_values(object_) is not None:
+            names.update(("beam_center", "beam_entry", "beam_exit"))
+        return names
+
+    def _frame_definition(self, type_: Any, frame: Any, object_: Any = None) -> tuple[Any, tuple[float, float, float] | None]:
+        name = self._frame_name(type_, frame)
+        def local(reference: str) -> dict[str, Any]:
+            return {"reference": {"kind": "local_frame", "frame": reference}, "transformation": []}
+        if name == "anchor":
+            return {"transformation": []}, None
+        if name == "mechanical_center" and getattr(type_, "shape", None) is not None:
+            return getattr(type_, "mechanical_center", None) or {"transformation": []}, None
+        for kind in ("magnetic", "beam"):
+            if name not in {f"{kind}_center", f"{kind}_entry", f"{kind}_exit"}:
                 continue
-            axis = _axis_feature_values(type_, feature)
+            axis = (_axis_feature_values(type_, "magnetic") if kind == "magnetic"
+                    else self._object_beam_values(object_) if object_ is not None else None)
             if axis is None:
-                raise UnknownEntityError(f"type has no {feature} axis")
-            center, _, _, _ = axis
-            return [
-                _operation_parts(operation) for operation in _operations(center)
-            ]
-        stored = _mapping_get(frames, frame)
+                raise UnknownEntityError(f"no {kind} axis for frame {name!r}")
+            center, length, curvature, roll = axis
+            if name == f"{kind}_center":
+                if kind == "beam" and _axis_feature_values(object_, "beam") is None:
+                    return local("magnetic_center"), None
+                return center, None
+            return local(f"{kind}_center"), ((-0.5 if name.endswith("_entry") else 0.5) * length, curvature, roll)
+        stored = _mapping_get(getattr(type_, "frames", None), name)
         if stored is None:
-            raise UnknownEntityError(f"unknown type frame {frame!r}")
-        return [_operation_parts(operation) for operation in _operations(stored)]
+            raise UnknownEntityError(f"unknown type frame {name!r}")
+        return stored, None
 
-    def _type_frame_matrix(self, type_: Any, frame: Any = "center") -> FloatMatrix:
-        frame_name = frame
-        if not isinstance(frame_name, str):
-            frames = getattr(type_, "frames", None)
-            for name, candidate in _mapping_items(frames):
-                if candidate is frame_name:
-                    frame_name = name
-                    break
-        curvature, roll = _type_path_values(type_)
-        operations = self._type_frame_operations(type_, frame)
-        center = apply_type_operations(identity_matrix(), operations, curvature, roll)
-        for feature in ("magnetic",):
-            if frame_name not in {f"{feature}_entry", f"{feature}_exit"}:
-                continue
-            axis = _axis_feature_values(type_, feature)
-            if axis is None:  # _type_frame_operations already reports this clearly.
-                raise UnknownEntityError(f"type has no {feature} axis")
-            _, length, feature_curvature, feature_roll = axis
-            direction = -0.5 if frame_name == f"{feature}_entry" else 0.5
-            return advance(
-                center,
-                direction * length,
-                feature_curvature,
-                feature_roll,
-            )
-        return center
+    def _type_frame_operations(self, type_: Any, frame: Any) -> list[tuple[str, float]]:
+        definition, _ = self._frame_definition(type_, frame)
+        return [_operation_parts(operation) for operation in _operations(definition)]
 
-    def type_frame(self, type_: Type | str, frame: Any = "center") -> Pose:
-        """Return a named or implicit frame in type-local coordinates."""
+    def _frame_local_matrix(self, type_: Any, frame: Any, object_: Any = None) -> FloatMatrix:
+        name = self._frame_name(type_, frame)
+        if name == "anchor":
+            return identity_matrix()
+        key = (id(type_), id(object_), name)
+        if key in self._local_frame_cache:
+            return self._local_frame_cache[key]
+        path = f"types.{self._name_for('type', type_)}.frames.{name}"
+        with self._resolving(("local_frame", str(key)), path=path):
+            definition, boundary = self._frame_definition(type_, name, object_)
+            reference, operations = _transform_parts(definition)
+            base = identity_matrix()
+            if reference is not None:
+                kind, entity, local_name = _reference_info(reference)
+                if kind == "object_frame" and object_ is not None:
+                    same_object = self._resolve_object(entity, path=path, reference=True) is object_
+                else:
+                    same_object = False
+                if kind != "local_frame" and not same_object:
+                    raise EvaluationError(f"frame {name!r} is not rooted in its own anchor; evaluate it on an object", path=path)
+                base = self._frame_local_matrix(type_, local_name, object_)
+            curvature, roll = _type_path_values(type_)
+            matrix = apply_type_operations(base, operations, curvature, roll)
+            if boundary is not None:
+                matrix = advance(matrix, *boundary)
+        self._local_frame_cache[key] = matrix
+        return matrix
 
+    def _type_frame_matrix(self, type_: Any, frame: Any = "anchor") -> FloatMatrix:
+        return self._frame_local_matrix(type_, frame)
+
+    def type_frame(self, type_: Type | str, frame: Any = "anchor") -> Pose:
+        """Return an anchor-relative frame; external references need an object."""
         with self._session():
-            resolved = self._resolve_type(type_)
-            return _make_pose(self._type_frame_matrix(resolved, frame), "type_local")
+            return _make_pose(self._type_frame_matrix(self._resolve_type(type_), frame), "type_local")
 
     def _object_beam_values(self, object_: Any) -> tuple[Any, float, float, float] | None:
         explicit = _axis_feature_values(object_, "beam")
         return explicit if explicit is not None else _axis_feature_values(self._object_type(object_), "magnetic")
 
     def _object_frame_operations(self, object_: Any, frame: Any) -> list[tuple[str, float]]:
-        if isinstance(frame, str) and frame in {"beam_center", "beam_entry", "beam_exit"}:
-            axis = self._object_beam_values(object_)
-            if axis is None:
-                raise UnknownEntityError("object has no beam interface or magnetic axis to inherit")
-            return [_operation_parts(operation) for operation in _operations(axis[0])]
-        return self._type_frame_operations(self._object_type(object_), frame)
+        definition, _ = self._frame_definition(self._object_type(object_), frame, object_)
+        return [_operation_parts(operation) for operation in _operations(definition)]
 
     def _object_local_frame_matrix(self, object_: Any, frame: Any) -> FloatMatrix:
-        type_ = self._object_type(object_)
-        if isinstance(frame, str) and frame in {"beam_center", "beam_entry", "beam_exit"}:
-            operations = self._object_frame_operations(object_, frame)
-            curvature, roll = _type_path_values(type_)
-            center = apply_type_operations(identity_matrix(), operations, curvature, roll)
-            if frame == "beam_center":
-                return center
-            _, length, beam_curvature, beam_roll = self._object_beam_values(object_)
-            return advance(center, (-0.5 if frame == "beam_entry" else 0.5) * length,
-                           beam_curvature, beam_roll)
-        return self._type_frame_matrix(type_, frame)
+        return self._frame_local_matrix(self._object_type(object_), frame, object_)
 
-    def _object_center_matrix(self, object_: Any) -> FloatMatrix:
-        cached = self._object_centers.get(id(object_))
+    def _object_anchor_matrix(self, object_: Any) -> FloatMatrix:
+        cached = self._object_anchors.get(id(object_))
         if cached is not None:
             return cached
         name = self._name_for("object", object_)
@@ -1536,23 +1625,44 @@ class Resolver:
                 reference_curve=self._position_reference_curve(position),
                 path=path,
             )
-            target = getattr(position, "target", "center")
+            target = getattr(position, "target", "anchor")
             target_local = self._object_local_frame_matrix(object_, target)
             center = desired @ _rigid_inverse(target_local)
-        self._object_centers[id(object_)] = center
+        self._object_anchors[id(object_)] = center
         return center
 
-    def _object_named_frame_matrix(
-        self, object_: Any, frame: Any = "center"
-    ) -> FloatMatrix:
-        center = self._object_center_matrix(object_)
-        if frame is None or frame == "center":
-            return center.copy()
-        return center @ self._object_local_frame_matrix(object_, frame)
+    def _object_named_frame_matrix(self, object_: Any, frame: Any = "anchor") -> FloatMatrix:
+        type_ = self._object_type(object_)
+        frame_name = self._frame_name(type_, frame)
+        if frame_name == "anchor":
+            return self._object_anchor_matrix(object_)
+        key = (id(object_), frame_name)
+        if key in self._frame_cache:
+            return self._frame_cache[key]
+        path = f"objects.{self._name_for('object', object_)}.frames.{frame_name}"
+        with self._resolving(("frame", str(key)), path=path):
+            definition, boundary = self._frame_definition(type_, frame_name, object_)
+            reference, operations = _transform_parts(definition)
+            if reference is None:
+                base = self._object_anchor_matrix(object_)
+                kind = "local_frame"
+            else:
+                kind, entity, local_name = _reference_info(reference)
+                if kind == "local_frame":
+                    base = self._object_named_frame_matrix(object_, local_name)
+                elif kind == "curve":
+                    base = self._resolve_transformation(definition, allow_inference=False, reference_curve=None, path=path)
+                else:
+                    _, base = self._reference_base_matrix(reference, path=path)
+            curvature, roll = _type_path_values(type_)
+            matrix = base if kind == "curve" else apply_type_operations(base, operations, curvature, roll)
+            if boundary is not None:
+                matrix = advance(matrix, *boundary)
+        self._frame_cache[key] = matrix
+        return matrix
 
-    def object_frame(self, object_: Object | str, frame: Any = "center") -> Pose:
-        """Return an object's world center or another named/implicit frame."""
-
+    def object_frame(self, object_: Object | str, frame: Any = "anchor") -> Pose:
+        """Return an object's world anchor or a referenced feature frame."""
         with self._session():
             resolved = self._resolve_object(object_)
             return _make_pose(self._object_named_frame_matrix(resolved, frame), "world")
@@ -1808,7 +1918,7 @@ class Resolver:
             )
             mesh = _swept_mesh(
                 getattr(type_, "shape", None),
-                self._object_center_matrix(resolved),
+                self._object_named_frame_matrix(resolved, "mechanical_center") if getattr(type_, "shape", None) is not None else self._object_anchor_matrix(resolved),
                 resolution=resolution,
                 radial_resolution=radial_resolution,
                 include_metadata=include_metadata,
@@ -2008,9 +2118,12 @@ def swept_type_mesh(
 ) -> dict[str, Any]:
     """Triangulate a type's swept shape in type-local or supplied coordinates."""
 
+    resolver = Resolver(getattr(type_, "layout", None))
+    with resolver._session():
+        placement = resolver._type_frame_matrix(type_, "mechanical_center") if getattr(type_, "shape", None) is not None else identity_matrix()
     mesh = _swept_mesh(
         getattr(type_, "shape", None),
-        identity_matrix() if matrix is None else matrix,
+        placement if matrix is None else _matrix4(matrix) @ placement,
         resolution=resolution,
         radial_resolution=radial_resolution,
         include_metadata=include_metadata,

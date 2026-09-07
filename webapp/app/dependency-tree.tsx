@@ -26,7 +26,7 @@ type DependencyTreeProps = {
 
 function relationLabel(edge: LayoutDependencyEdge): string {
   if (edge.relation === "station_curve") return "ts station curve";
-  const relation = edge.relation === "starting_frame"
+  const relation = edge.relation === "feature_reference" ? "feature reference" : edge.relation === "starting_frame"
     ? "starting frame"
     : "position reference";
   return edge.frame ? `${relation} · ${edge.frame}` : relation;
@@ -194,7 +194,7 @@ function DependencyBranch({
                     <Waypoints className="dependency-kind-icon" aria-hidden="true" />
                     <span className="dependency-node-copy">
                       <span className="dependency-node-name">{child.name}</span>
-                      <span className="dependency-relation">cycle</span>
+                      <span className="dependency-relation">already shown</span>
                     </span>
                   </div>
                 </li>

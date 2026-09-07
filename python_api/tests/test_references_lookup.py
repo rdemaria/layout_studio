@@ -57,7 +57,7 @@ def add_type(layout: Layout, name: str = "magnet"):
         (
             "world->center",
             ObjectReference,
-            {"kind": "object_frame", "object": "world", "frame": "center"},
+            {"kind": "object_frame", "object": "world", "frame": "anchor"},
         ),
         ("curve:world", CurveReference, {"kind": "curve", "curve": "world"}),
     ],
@@ -132,7 +132,7 @@ def test_instance_bound_references_follow_root_and_frame_renames():
     second = layout.new_object(
         "Q2",
         type=type_,
-        position=Position(first.ref(tail), target="center"),
+        position=Position(first.ref(tail), target="anchor"),
     )
 
     assert layout.rename(curve, "beam") is curve

@@ -98,13 +98,13 @@ def test_object_without_magnet_can_supply_a_beam_interface():
     type_ = layout.new_type("bare", color="#112233")
     first = layout.new_object("A", type_, Position("world"))
     assert first.effective_beam_axis is None
-    assert first.implicit_frames == frozenset({"center"})
+    assert first.implicit_frames == frozenset({"anchor"})
     with pytest.raises(UnknownEntityError):
         first.get_frame("beam_center")
     first.set_beam_axis(center=Frame().ts(0.5), length=2)
     np.testing.assert_allclose(first.get_frame("beam_entry").origin, [0, 0, -0.5])
     first.remove_beam_axis()
-    assert first.implicit_frames == frozenset({"center"})
+    assert first.implicit_frames == frozenset({"anchor"})
 
 
 def test_removing_magnetic_axis_protects_inherited_beam_references_only():
@@ -153,7 +153,7 @@ def test_object_beam_edits_are_atomic_and_protect_last_frame():
     assert old_center.owner is first
 
 
-def test_rejects_type_beam_fields_partial_groups_and_nonlocal_centers():
+def test_rejects_type_beam_fields_and_partial_groups_but_allows_referenced_centers():
     layout, _, first, _ = example()
     first.set_beam_axis(length=1)
     doc = layout.to_dict()
@@ -170,10 +170,10 @@ def test_rejects_type_beam_fields_partial_groups_and_nonlocal_centers():
         with pytest.raises(ValidationError, match="all present"):
             Layout.from_dict(partial)
     position = Position("world")
-    with pytest.raises(ValidationError):
-        Object(type="magnet", position=position, beam_center=Frame("world"),
-               beam_length=1, beam_curvature=0, beam_roll=0)
-    assert position.owner is None
+    obj = Object(type="magnet", position=position, beam_center=Frame("world"),
+                 beam_length=1, beam_curvature=0, beam_roll=0)
+    assert position.owner is obj
+    position = Position("world")
     with pytest.raises(AttachmentError):
         Object(type="magnet", position=position, beam_center=first.beam_center,
                beam_length=1, beam_curvature=0, beam_roll=0)

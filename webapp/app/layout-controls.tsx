@@ -36,7 +36,8 @@ import type {
 import {
   NON_CURVE_TRANSFORM_NAMES,
   TRANSFORM_NAMES,
-  getLayoutDependencyGraph,
+  getLayoutFrameDependencies,
+  layoutFrameNodeId,
   objectFrameNames,
 } from "./layout-data";
 
@@ -370,14 +371,16 @@ export function ReferenceEditor({
 }) {
   const reverseDependencies = useMemo(() => {
     const dependents = new Map<string, string[]>();
-    for (const edge of getLayoutDependencyGraph(layout).edges) {
-      const list = dependents.get(edge.to) ?? [];
-      list.push(edge.from);
-      dependents.set(edge.to, list);
+    for (const [from, dependencies] of getLayoutFrameDependencies(layout)) {
+      for (const to of dependencies) {
+        const list = dependents.get(to) ?? [];
+        list.push(from);
+        dependents.set(to, list);
+      }
     }
     return dependents;
   }, [layout]);
-  const { curveNames, objectNames } = useMemo(() => {
+  const { curveNames, objectNames, objectFrames } = useMemo(() => {
     const unsafeReferences = new Set<string>();
     const pending = [`${owner.kind}:${owner.name}`];
     while (pending.length) {
@@ -388,19 +391,19 @@ export function ReferenceEditor({
         pending.push(dependent);
       }
     }
+    const objectFrames = new Map(Object.entries(layout.objects).map(([name, object]) => [name,
+      objectFrameNames(layout.types[object.type], object).filter(
+        (frame) => !unsafeReferences.has(layoutFrameNodeId(name, frame))),
+    ]));
     return {
       curveNames: Object.keys(layout.reference_curves).filter(
         (name) => !unsafeReferences.has(`curve:${name}`),
       ),
-      objectNames: Object.keys(layout.objects).filter(
-        (name) => !unsafeReferences.has(`object:${name}`),
-      ),
+      objectNames: [...objectFrames].filter(([, frames]) => frames.length > 0).map(([name]) => name),
+      objectFrames,
     };
   }, [layout, owner.kind, owner.name, reverseDependencies]);
-  const frameNamesForObject = (objectName: string) => {
-    const type = layout.types[layout.objects[objectName]?.type];
-    return type ? objectFrameNames(type, layout.objects[objectName]) : ["center"];
-  };
+  const frameNamesForObject = (objectName: string) => objectFrames.get(objectName) ?? [];
   const reference = value.reference;
   const referenceCurve = owner.kind === "object" ? value.reference_curve : undefined;
   const hasPathLookup = value.transformation.some(([name]) => name === "ts");

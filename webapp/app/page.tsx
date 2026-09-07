@@ -58,14 +58,15 @@ import {
   Field,
   NamePicker,
   NumberInput,
-  OperationsEditor,
   ReferenceEditor,
 } from "./layout-controls";
 import {
   createEmptyLayout,
   forEachTransformation,
+  forEachPlacement,
+  anchorRelativeFrameNames,
+  typeFrameNames,
   isImplicitTypeFrameName,
-  LOCAL_TRANSFORM_NAMES,
   parseLayout,
   SAMPLE_LAYOUT,
   shapePath,
@@ -78,6 +79,7 @@ import {
   type Reference,
   type SelectedEntity,
 } from "./layout-data";
+import { FeaturePlacementEditor } from "./feature-placement-editor";
 import { DependencyTree } from "./dependency-tree";
 import { CurveSegmentEditor, SEGMENT_PAGE_SIZE } from "./curve-segment-editor";
 import {
@@ -817,8 +819,11 @@ export default function Home() {
   const frameNames = Object.keys(typeDefinition?.frames ?? {});
   const frameDefinition = typeDefinition?.frames[selectedTypeFrame];
   const objectTargetNames = object
-    ? objectFrameNames(layout.types[object.type], object)
-    : ["center"];
+    ? anchorRelativeFrameNames(layout.types[object.type], object, selectedObject)
+    : ["anchor"];
+  const typePlacementFrameNames = typeDefinition
+    ? [...new Set([...typeFrameNames(typeDefinition), "beam_center", "beam_entry", "beam_exit"])]
+    : ["anchor"];
   const typeInstances = objectNames.filter(
     (name) => layout.objects[name].type === selectedType,
   );
@@ -932,7 +937,13 @@ export default function Home() {
           reference.frame = to;
         }
       });
-      if (from !== "center") {
+      forEachPlacement(draft, (placement, _label, owner) => {
+        const sameType = owner.kind === "type" ? owner.name === typeName : draft.objects[owner.name]?.type === typeName;
+        if (sameType && placement.reference?.kind === "local_frame" && placement.reference.frame === from) {
+          placement.reference.frame = to;
+        }
+      });
+      if (from !== "anchor") {
         for (const object of Object.values(draft.objects)) {
           if (object.type === typeName && object.position.target === from) {
             object.position.target = to;
@@ -1072,7 +1083,7 @@ export default function Home() {
     update((draft) => {
       draft.objects[name] = {
         type,
-        position: { target: "center", reference, transformation: [] },
+        position: { target: "anchor", reference, transformation: [] },
       };
     });
     setSelectedObject(name);
@@ -1088,6 +1099,7 @@ export default function Home() {
     forEachTransformation(layout, (transformation, label) => {
       if (
         label !== `object ${selectedObject}` &&
+        label !== `object ${selectedObject} beam_center` &&
         transformation.reference.kind === "object_frame" &&
         transformation.reference.object === selectedObject
       ) {
@@ -1152,7 +1164,7 @@ export default function Home() {
       });
       return;
     }
-    update((draft) => {
+    updateValidated((draft) => {
       draft.objects[selectedObject].type = nextType;
     });
     setSelectedType(nextType);
@@ -1192,6 +1204,10 @@ export default function Home() {
       ) {
         usedBy = label;
       }
+    });
+    forEachPlacement(layout, (placement, label, owner) => {
+      const sameType = owner.kind === "type" ? owner.name === selectedType : layout.objects[owner.name]?.type === selectedType;
+      if (sameType && placement.reference?.kind === "local_frame" && placement.reference.frame === frameName) usedBy = label;
     });
     if (usedBy) {
       setStatus({
@@ -1271,7 +1287,7 @@ export default function Home() {
                           Reusable definitions with a color and optional mechanical geometry,
                           magnetic axis and named local frames. Mechanical and magnetic
                           paths have independent lengths, curvatures and rolls. Every
-                          instance has a center frame.
+                          instance has an anchor frame.
                         </dd>
                       </div>
                       <div>
@@ -1720,16 +1736,17 @@ export default function Home() {
                       <div className="subsection-title">
                         <div className="subsection-title-copy">
                           <h3>Mechanical geometry</h3>
-                          <span>shape and axis centered on the object center</span>
+                          <span>shape placed from mechanical_center</span>
                         </div>
                         <Button
                           type="button"
                           variant="outline"
                           size="xs"
                           onClick={() =>
-                            update((draft) => {
+                            updateValidated((draft) => {
                               if (draft.types[selectedType].shape) {
                                 delete draft.types[selectedType].shape;
+                                delete draft.types[selectedType].mechanical_center;
                               } else {
                                 draft.types[selectedType].shape = ["box", 1, 1, 1, 0, 0];
                               }
@@ -1742,6 +1759,12 @@ export default function Home() {
                       </div>
                       {typeDefinition.shape ? (
                         <>
+                          <FeaturePlacementEditor layout={layout}
+                            value={typeDefinition.mechanical_center ?? {transformation: []}}
+                            frameName="mechanical_center" frameNames={typePlacementFrameNames}
+                            onChange={(placement) => updateValidated((draft) => {
+                              draft.types[selectedType].mechanical_center = placement;
+                            })} />
                           <div className="shape-row">
                             <Field label="Primitive">
                               <NativeSelect
@@ -1851,7 +1874,7 @@ export default function Home() {
                         </>
                       ) : (
                         <p className="inline-empty">
-                          No mechanical shape. Instances remain selectable at their center.
+                          No mechanical shape. Instances remain selectable at their anchor.
                         </p>
                       )}
                     </div>
@@ -1931,19 +1954,15 @@ export default function Home() {
                             </Field>
                           </div>
                           <div className="implicit-reference">
-                            magnetic_center is relative to object center. Entry and exit
+                            Entry and exit
                             are derived at −Lmag/2 and +Lmag/2 along the magnetic axis.
                           </div>
-                          <OperationsEditor
-                            value={typeDefinition.magnetic_center.transformation}
-                            allowedNames={LOCAL_TRANSFORM_NAMES}
-                            onChange={(transformation) =>
-                              update((draft) => {
-                                const center = draft.types[selectedType].magnetic_center;
-                                if (center) center.transformation = transformation;
-                              })
-                            }
-                          />
+                          <FeaturePlacementEditor layout={layout}
+                            value={typeDefinition.magnetic_center} frameName="magnetic_center"
+                            frameNames={typePlacementFrameNames}
+                            onChange={(placement) => updateValidated((draft) => {
+                              draft.types[selectedType].magnetic_center = placement;
+                            })} />
                         </>
                       ) : (
                         <p className="inline-empty">No magnetic axis or magnetic frames.</p>
@@ -1963,7 +1982,7 @@ export default function Home() {
                               {frameNames.length.toLocaleString("en-US")}
                             </span>
                           </h3>
-                          <span>implicit reference: object center</span>
+                          <span>default reference: object anchor</span>
                         </div>
                         <div className="section-actions">
                           <Button
@@ -2024,20 +2043,14 @@ export default function Home() {
                                 </Button>
                               </div>
                               <div className="implicit-reference">
-                                Relative to the center frame · ts follows the type
-                                curve · tt moves straight along the current tangent
+                                ts follows the selected curve or the type’s mechanical path · tt moves straight along the current tangent
                               </div>
-                              <OperationsEditor
-                                value={frameDefinition.transformation}
-                                allowedNames={LOCAL_TRANSFORM_NAMES}
-                                onChange={(transformation) =>
-                                  update((draft) => {
-                                    draft.types[selectedType].frames[
-                                      selectedTypeFrame
-                                    ].transformation = transformation;
-                                  })
-                                }
-                              />
+                              <FeaturePlacementEditor layout={layout}
+                                value={frameDefinition} frameName={selectedTypeFrame}
+                                frameNames={typePlacementFrameNames}
+                                onChange={(placement) => updateValidated((draft) => {
+                                  draft.types[selectedType].frames[selectedTypeFrame] = placement;
+                                })} />
                             </div>
                           </div>
                         ) : null}
@@ -2243,19 +2256,15 @@ export default function Home() {
                             </Field>
                           </div>
                           <div className="implicit-reference">
-                            beam_center is relative to object center. Beam entry and exit
+                            Beam entry and exit
                             are derived at −Lbeam/2 and +Lbeam/2 along the Beam axis.
                           </div>
-                          <OperationsEditor
-                            value={object.beam_center.transformation}
-                            allowedNames={LOCAL_TRANSFORM_NAMES}
-                            onChange={(transformation) =>
-                              update((draft) => {
-                                const center = draft.objects[selectedObject].beam_center;
-                                if (center) center.transformation = transformation;
-                              })
-                            }
-                          />
+                          <FeaturePlacementEditor layout={layout}
+                            value={object.beam_center} frameName="beam_center"
+                            frameNames={objectFrameNames(layout.types[object.type], object)}
+                            onChange={(placement) => updateValidated((draft) => {
+                              draft.objects[selectedObject].beam_center = placement;
+                            })} />
                         </>
                       ) : (
                         <p className="inline-empty">

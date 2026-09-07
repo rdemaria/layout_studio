@@ -49,7 +49,7 @@ quadrupole.new_frame("survey_mark").tx(0.4)
 q1 = layout.new_object(
     "Q1",
     type=quadrupole,
-    position=Position("curve:main", target="center").ts(3.1).tt(0.2),
+    position=Position("curve:main", target="anchor").ts(3.1).tt(0.2),
 )
 
 q2 = layout.new_object(
@@ -105,10 +105,10 @@ compressed automatically; gzip-compressed byte input is also accepted through
 
 ## Optional geometry and object beam interfaces
 
-Every type and object always has an implicit `center` frame. All other physical
+Every type and object always has an implicit `anchor` frame; it need not be the center of any geometry. All other physical
 features are optional:
 
-- `shape` is the mechanical swept geometry centered on `center`; its existing
+- `shape` is the mechanical swept geometry centered on `mechanical_center`; its existing
   `dz`, curvature, and roll define its mechanical axis.
 - A magnetic axis exists only when `magnetic_center`, `magnetic_length`,
   `magnetic_curvature`, and `magnetic_roll` are all supplied.
@@ -138,8 +138,44 @@ print(q1.effective_beam_axis) # (center Frame, length, curvature, roll)
 `Object.beam_*` properties contain explicit values or `None`; the effective
 axis is available through `effective_beam_axis` and `get_frame("beam_entry")`,
 `get_frame("beam_center")`, or `get_frame("beam_exit")`. Inheritance is preserved
-in JSON by omitting the beam fields. All seven implicit names are reserved
+in JSON by omitting the beam fields. All implicit names are reserved
 from `Type.frames`, but beam frames resolve only on objects.
+
+### Anchors and referenced feature placements
+
+`anchor` is the base frame determined by `Position`. `mechanical_center` is an
+optional `Frame` on `Type` that places its shape. It requires a shape and defaults
+to an empty transformation from the anchor. A magnetic center, object beam center,
+or stored named frame can likewise have a reference. Omitting it means the anchor.
+
+Use `Frame("local:<frame>")`, `Frame(LocalFrameReference("<frame>"))`, or
+`Frame(type_.frames["<frame>"])` to reference a frame on the same instance. JSON
+uses `{"kind": "local_frame", "frame": "<frame>"}`. World, curve, and other object
+references use their existing forms. This includes local references to the
+instance's explicit or inherited beam frames. Every reference must resolve for
+each actual instance, and the complete frame graph must be acyclic.
+
+On a curve reference, summed `ts` operations select the station. On all other
+feature references, operations execute sequentially and `ts` uses the type's
+mechanical curvature and roll. Feature placements do not use station inference;
+`reference_curve` remains specific to `Position`.
+
+```python
+type_.mechanical_center = Frame().tx(0.1)
+type_.magnetic_center.reference = "local:mechanical_center"
+type_.new_frame("survey", Frame("local:magnetic_exit").ty(0.02))
+```
+
+A positioning target must follow same-instance references back to the anchor.
+Its inverse local pose then determines that anchor. An externally rooted target
+is rejected because it cannot determine the anchor. `Type.get_frame()` likewise
+requires an anchor-relative chain; use `Object.get_frame()` for external references.
+Mechanical meshes use the resolved mechanical center. An inherited beam interface
+aliases the resolved magnetic frames, so references and edits propagate through it.
+
+Readers accept the former base-frame spelling `center` and normalize it to
+`anchor`; writers and frame lists use `anchor`. `mechanical_center` is reserved,
+including when no shape is present, as are the other implicit feature names.
 
 Older beam definitions under a type must be moved to each object using that
 type and removed from the type. The reader rejects type-level beam fields.

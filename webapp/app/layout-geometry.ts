@@ -1,5 +1,7 @@
 import {
   BEAM_BOUNDARY_FRAME_NAMES,
+  canonicalFrameName,
+  objectFrameDefinition,
   effectiveBeamFeature,
   hasMagneticFeature,
   MAGNETIC_BOUNDARY_FRAME_NAMES,
@@ -195,55 +197,26 @@ function invertFrame(frame: Frame): Frame {
 }
 
 function localFrameForName(
-  type: LayoutType,
-  frameName: string,
-  object: LayoutObject,
-): Frame | undefined {
-  if (frameName === "center") return cloneFrame(IDENTITY);
-  const path = mechanicalPath(type);
-  if (
-    frameName === "magnetic_center" ||
-    frameName === "magnetic_entry" ||
-    frameName === "magnetic_exit"
-  ) {
-    if (!hasMagneticFeature(type)) return undefined;
-    const center = applyLocalOperations(
-      IDENTITY,
-      type.magnetic_center!.transformation,
-      path,
-    );
-    if (frameName === "magnetic_center") return center;
-    const direction = frameName === "magnetic_entry" ? -1 : 1;
-    return advanceLocalPath(center, direction * type.magnetic_length! / 2, {
-      curvature: type.magnetic_curvature!,
-      roll: type.magnetic_roll!,
-    });
+  type: LayoutType, frameName: string, object: LayoutObject,
+  objectName?: string, trail: string[] = [],
+): Frame {
+  frameName = canonicalFrameName(frameName);
+  if (frameName === "anchor") return cloneFrame(IDENTITY);
+  if (trail.includes(frameName)) throw new Error(`Local frame reference cycle: ${[...trail, frameName].join(" -> ")}`);
+  const definition = objectFrameDefinition(type, object, frameName);
+  if (!definition) throw new Error(`Unknown frame ${frameName}`);
+  const { placement, advance } = definition;
+  const reference = placement.reference;
+  let base = IDENTITY;
+  if (reference) {
+    if (reference.kind !== "local_frame" &&
+        !(reference.kind === "object_frame" && reference.object === objectName)) {
+      throw new Error(`Target frame ${frameName} is not rooted in its own anchor`);
+    }
+    base = localFrameForName(type, reference.frame, object, objectName, [...trail, frameName]);
   }
-  if (
-    frameName === "beam_center" ||
-    frameName === "beam_entry" ||
-    frameName === "beam_exit"
-  ) {
-    const beam = effectiveBeamFeature(type, object);
-    if (!beam) return undefined;
-    const center = applyLocalOperations(
-      IDENTITY,
-      beam.center.transformation,
-      path,
-    );
-    if (frameName === "beam_center") return center;
-    const direction = frameName === "beam_entry" ? -1 : 1;
-    return advanceLocalPath(center, direction * beam.length / 2, {
-      curvature: beam.curvature,
-      roll: beam.roll,
-    });
-  }
-  const definition = Object.prototype.hasOwnProperty.call(type.frames, frameName)
-    ? type.frames[frameName]
-    : undefined;
-  return definition
-    ? applyLocalOperations(IDENTITY, definition.transformation, path)
-    : undefined;
+  const frame = applyLocalOperations(base, placement.transformation, mechanicalPath(type));
+  return advance ? advanceLocalPath(frame, advance.length, advance) : frame;
 }
 
 function localToWorld(frame: Frame, local: Vec3): Vec3 {
@@ -294,6 +267,7 @@ export type ObjectGeometry = {
   typeName: string;
   type: LayoutType;
   frame: Frame;
+  mechanicalFrame?: Frame;
   vertices: Vec3[];
   faces: readonly (readonly number[])[];
   edges: readonly (readonly [number, number])[];
@@ -1194,7 +1168,7 @@ export function buildScene(
   const resolveObject = (name: string, stack: string[]): Frame => {
     const cached = objectCache.get(name);
     if (cached) return cached;
-    if (stack.includes(`object:${name}`)) return cloneFrame(IDENTITY);
+    if (stack.includes(`object:${name}`)) throw new Error(`Reference dependency cycle: object ${name}`);
     const object = layout.objects[name];
     if (!object) return cloneFrame(IDENTITY);
     const targetFrame = resolveObjectPosition(
@@ -1207,6 +1181,7 @@ export function buildScene(
       type,
       object.position.target,
       object,
+      name,
     );
     const frame = targetLocalFrame !== undefined
       ? composeFrames(targetFrame, invertFrame(targetLocalFrame))
@@ -1220,19 +1195,31 @@ export function buildScene(
     frameName: string,
     stack: string[],
   ): Frame => {
+    frameName = canonicalFrameName(frameName);
+    if (frameName === "anchor") return resolveObject(objectName, stack);
     const key = JSON.stringify([objectName, frameName]);
     const cached = namedFrameCache.get(key);
     if (cached) return cached;
-    if (stack.includes(`frame:${key}`)) return cloneFrame(IDENTITY);
+    if (stack.includes(`frame:${key}`)) throw new Error(`Reference dependency cycle: frame ${objectName}.${frameName}`);
     const object = layout.objects[objectName];
     const type = layout.types[object?.type];
-    if (!type) return resolveObject(objectName, stack);
-    const localFrame = localFrameForName(type, frameName, object);
-    if (localFrame === undefined) return resolveObject(objectName, stack);
-    const frame = composeFrames(
-      resolveObject(objectName, [...stack, `frame:${key}`]),
-      localFrame,
-    );
+    if (!type) throw new Error(`Unknown object ${objectName}`);
+    const definition = objectFrameDefinition(type, object, frameName);
+    if (!definition) throw new Error(`Unknown frame ${objectName}.${frameName}`);
+    const nextStack = [...stack, `frame:${key}`];
+    const {placement, advance} = definition;
+    const reference = placement.reference;
+    let frame: Frame;
+    if (reference?.kind === "curve") {
+      frame = resolveTransformation({...placement, reference}, nextStack);
+    } else {
+      const base = !reference ? resolveObject(objectName, nextStack)
+        : reference.kind === "local_frame" ? resolveFrame(objectName, reference.frame, nextStack)
+        : reference.kind === "object_frame" ? resolveFrame(reference.object, reference.frame, nextStack)
+        : IDENTITY;
+      frame = applyLocalOperations(base, placement.transformation, mechanicalPath(type));
+    }
+    if (advance) frame = advanceLocalPath(frame, advance.length, advance);
     namedFrameCache.set(key, frame);
     return frame;
   };
@@ -1267,6 +1254,7 @@ export function buildScene(
           edges: [],
         };
       }
+      const mechanicalFrame = resolveFrame(name, "mechanical_center", []);
       const steps = sweepStepCount(type);
       if (type.shape[0] === "box") {
         const [, dx, dy, dz] = type.shape;
@@ -1280,7 +1268,7 @@ export function buildScene(
         for (let layer = 0; layer <= steps; layer += 1) {
           const path = -dz / 2 + (dz * layer) / steps;
           const sectionFrame = advanceLocalPath(
-            frame,
+            mechanicalFrame,
             path,
             mechanicalPath(type),
           );
@@ -1294,6 +1282,7 @@ export function buildScene(
           typeName: object.type,
           type,
           frame,
+          mechanicalFrame,
           vertices,
           ...sweepTopology(4, steps),
         };
@@ -1305,7 +1294,7 @@ export function buildScene(
       for (let layer = 0; layer <= steps; layer += 1) {
         const path = -dz / 2 + (dz * layer) / steps;
         const sectionFrame = advanceLocalPath(
-          frame,
+          mechanicalFrame,
           path,
           mechanicalPath(type),
         );
@@ -1324,6 +1313,7 @@ export function buildScene(
         typeName: object.type,
         type,
         frame,
+        mechanicalFrame,
         vertices,
         ...sweepTopology(sides, steps, true),
       };

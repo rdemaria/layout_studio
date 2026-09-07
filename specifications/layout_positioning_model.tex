@@ -49,7 +49,7 @@
 
 \title{A Curve-Referenced Positioning Model for Beam-Line Layouts}
 \author{}
-\date{Prototype specification --- 5 September 2026}
+\date{Prototype specification --- 7 September 2026}
 
 \begin{document}
 \maketitle
@@ -89,8 +89,8 @@ from a subsequently derived accelerator model.  This specification defines
 geometry and placement; it does not prescribe how a MAD-X sequence or its
 misalignments are fitted to that geometry.
 
-The JSON format described here is the canonical prototype format.  There is no
-legacy migration layer.  All stored lengths are in metres, curvatures in
+The JSON format described here is the canonical prototype format.  Readers normalize the former base-frame name \texttt{center} to
+\texttt{anchor}; writers emit only the new spelling.  All stored lengths are in metres, curvatures in
 metres$^{-1}$, and angles in radians.  A user interface may display degrees or
 different step sizes without changing the stored units.
 
@@ -245,14 +245,14 @@ and is used for a curve's starting frame.  In a general transformation,
 An object position extends it with a required target:
 \begin{lstlisting}
 {
-  "target": "center or named frame",
+  "target": "anchor or anchor-relative named frame",
   "reference": <reference>,
   "reference_curve": "optional curve name",
   "transformation": [[<operation>, <finite number>], ...]
 }
 \end{lstlisting}
 The field \texttt{target} is required in the canonical JSON.  The conventional
-target is \texttt{center}.  The optional \texttt{reference\_curve} has meaning
+target is \texttt{anchor}.  The optional \texttt{reference\_curve} has meaning
 only when a world or object-frame reference is combined with \texttt{ts}; in
 that case it is required and supports the station-inference rule of
 Section~\ref{sec:s-inference}.  It is forbidden when the primary reference is
@@ -279,13 +279,14 @@ A type is a reusable definition:
 \begin{lstlisting}
 {
   "shape": <optional shape tuple>,
+  "mechanical_center": <optional feature placement>,
   "color": "#RRGGBB",
-  "magnetic_center": <optional local transformation>,
+  "magnetic_center": <optional feature placement>,
   "magnetic_length": <optional positive number>,
   "magnetic_curvature": <optional finite number>,
   "magnetic_roll": <optional finite number>,
   "frames": {
-    "name": {"transformation": [...]}
+    "name": <feature placement>
   }
 }
 \end{lstlisting}
@@ -296,22 +297,24 @@ When present, its shape is exactly one of
 \end{align*}
 The dimensions are positive.  The longitudinal value $d_z$ is centerline arc
 length, $\kappa$ is signed constant curvature, and $\omega$ is the constant
-bend-plane roll.  The type's center frame is at local path coordinate zero, so
+bend-plane roll. The mechanical-center frame is at shape path coordinate zero, so
 the physical shape spans $[-d_z/2,d_z/2]$ along its curved centerline.
 
 The four magnetic fields form one optional group: either all four are present
-or all four are absent. The transformations in \texttt{magnetic\_center} and
-\texttt{frames} have no explicit reference: their implicit reference is the
-type center. An absent magnetic group contributes no magnetic frames. An
-absent shape or feature group is represented by omitted JSON members;
-explicit \texttt{null} values are invalid. Beam-interface fields are not
-permitted on types.
+or all four are absent. Mechanical geometry, magnetic geometry, and stored
+named frames use the feature-placement rules below. An absent magnetic group
+contributes no magnetic frames. An absent shape or feature group is represented
+by omitted JSON members; explicit \texttt{null} values are invalid.
+Beam-interface fields are not permitted on types. The optional
+\texttt{mechanical\_center} requires a shape; omission means an empty
+placement from the anchor. Moving the mechanical center changes the shape,
+and affects another feature only if that feature references it.
 
 Stored frame names may not use any reserved implicit frame name, whether or
 not the corresponding optional group is present:
 \begin{equation}
   \begin{aligned}
-  &\texttt{center},\quad
+  &\texttt{anchor},\quad\texttt{mechanical\_center},\quad
    \texttt{magnetic\_center},\quad
    \texttt{magnetic\_entry},\quad
    \texttt{magnetic\_exit},\\
@@ -320,11 +323,43 @@ not the corresponding optional group is present:
    \texttt{beam\_exit}.
   \end{aligned}
 \end{equation}
-The frame \texttt{center} always exists.  The three \texttt{magnetic\_*}
+The frame \texttt{anchor} always exists. The frame
+\texttt{mechanical\_center} exists when the shape is present. The legacy
+name \texttt{center} is also reserved. The three \texttt{magnetic\_*}
 frames exist exactly when the magnetic group is present; the three
 \texttt{beam\_*} frames belong to objects and exist when an explicit object
 beam group or an inherited magnetic axis is available. A type-level frame
 query has no beam frames.
+
+\subsection{Feature placements}
+
+Mechanical centers, magnetic centers, object beam centers, and stored named
+frames share this form:
+\begin{lstlisting}
+{
+  "reference": <optional placement reference>,
+  "transformation": [[<operation>, <finite number>], ...]
+}
+\end{lstlisting}
+An omitted reference means the anchor of the object being instantiated.
+Besides world, curve, and object-frame references, a placement may use
+\begin{lstlisting}
+{"kind": "local_frame", "frame": "anchor or another frame name"}
+\end{lstlisting}
+to name a frame on that same object. This is an instance-relative reference,
+so a reusable type does not need to know its objects' names. Local references
+can chain through mechanical, magnetic, beam, and stored named frames.
+Every referenced frame must exist on each actual instance; beam frames in a
+type definition are resolved using that instance's explicit or inherited
+interface. Local-frame references are not permitted on curve starting frames
+or the primary reference of an object position.
+
+For a curve reference, \texttt{ts} selects a station using the ordinary
+curve-reference rule. For every other feature reference, operations execute
+sequentially; \texttt{ts} advances using the type's mechanical curvature and
+roll from the current frame, with a straight fallback for a shapeless type.
+Feature placements do not perform the position-specific station-inference
+rule and have no \texttt{reference\_curve} field.
 
 \subsection{Objects}
 
@@ -334,7 +369,7 @@ interface:
 {
   "type": "typeName",
   "position": <object position>,
-  "beam_center": <optional local transformation>,
+  "beam_center": <optional feature placement>,
   "beam_length": <optional positive number>,
   "beam_curvature": <optional finite number>,
   "beam_roll": <optional finite number>
@@ -342,9 +377,7 @@ interface:
 \end{lstlisting}
 The four beam fields must be supplied together or omitted together; explicit
 \texttt{null} values and partial groups are invalid. The beam-center
-transformation has no explicit reference: it starts at the object's center.
-Its local \texttt{ts} operations use the type's mechanical path, just as for
-other local center transformations.
+transformation is a feature placement and defaults to the object's anchor.
 
 If all four beam fields are omitted, the object's effective beam interface
 is the type's magnetic axis: its center transformation, length, curvature,
@@ -358,7 +391,7 @@ beam frames exist.
 Shape, color, magnetic data, and stored named frames remain properties of the
 type. Objects sharing one type may have distinct beam interfaces. An object
 with no beam override whose type has no optional geometry or stored frames
-has only its implicit \texttt{center} frame.
+has only its implicit \texttt{anchor} frame.
 
 To migrate an older document with beam fields on a type, move the complete
 group to each object using that type and remove it from the type. The updated
@@ -541,102 +574,76 @@ For a cylinder, a useful surface parameterization is
   \quad 0\le\varphi<2\pi.
   \label{eq:cylinder-sweep}
 \end{equation}
-For an object with world center frame $\Frame_O^W$, the world surface follows
+For an object with resolved mechanical-center frame $\Frame_{O.c}^W$, the world surface follows
 from Equation~\eqref{eq:local-to-world}, or equivalently by replacing
-$\identity$ with $\Frame_O^W$ in the type path operator.
+$\identity$ with $\Frame_{O.c}^W$ in the type path operator.
 If the type has no shape, it contributes no surface or volume; this does not
-remove its \texttt{center} frame or prevent it from being positioned.
+remove its \texttt{anchor} frame or prevent it from being positioned.
 
-\subsection{Stored and implicit local frames}
+\subsection{Referenced feature frames}
 
-Every stored entry in \texttt{frames} is an operation list $\ops_f$ from the
-type center.  Its local frame is
+Let $P_f$ be the placement of feature or stored frame $f$, and let
+$\Frame_{R_f}^W$ be its resolved reference, defaulting to the object's anchor
+$\Frame_O^W$. For a non-curve reference,
 \begin{equation}
-  \Frame_{T.f}=\Apply_T(\identity,\ops_f).
+  \Frame_{O.f}^W=\Apply_T(\Frame_{R_f}^W,\ops_f).
   \label{eq:named-local-frame}
 \end{equation}
-The reserved local center frame is
-$\Frame_{T.\mathrm{center}}=\identity$.
+For a curve reference use Equation~\eqref{eq:curve-reference} instead.
+The reserved anchor is the instance's base frame, not necessarily a geometric
+center. Its pose in its own coordinates is the identity.
 
-For feature $j\in\{m,b\}$, denoting the type magnetic axis and an object's
-effective beam interface respectively, define its path operator by
+For feature $j\in\{m,b\}$, denoting the magnetic axis and the effective beam
+interface, define
 \begin{equation}
-  \Path_j(\Frame,d)
-  =\operatorname{Advance}(\Frame,d,\kappa_j d,\omega_j),
+  \Path_j(\Frame,d)=\operatorname{Advance}(\Frame,d,\kappa_j d,\omega_j),
   \label{eq:feature-path}
 \end{equation}
-where $\ell_j>0$, $\kappa_j$, and $\omega_j$ are the feature's effective
-length, curvature, and roll. Magnetic values belong to $T$; beam values belong
-to $O$ or are inherited from $T$.  These values are independent of the optional shape's
-mechanical path.  The finite feature axis is the locus of frame origins
-$\operatorname{origin}(\Path_j(\Frame_j,u))$ for
-$-\ell_j/2\le u\le\ell_j/2$.
-
-Let $\ops_m$ be the magnetic-center transformation.  When the magnetic group
-is present, its local frames are
+where $\ell_j>0$, $\kappa_j$, and $\omega_j$ are the feature's length,
+curvature, and roll. These are independent of the mechanical path parameters.
+After resolving the corresponding center placement, the boundary frames are
 \begin{align}
-  \Frame_{T.\mathrm{magnetic\_center}}
-    &=\Apply_T(\identity,\ops_m),\\
-  \Frame_{T.\mathrm{magnetic\_entry}}
-    &=\Path_m\!\left(
-       \Frame_{T.\mathrm{magnetic\_center}},-\ell_m/2\right),\\
-  \Frame_{T.\mathrm{magnetic\_exit}}
-    &=\Path_m\!\left(
-       \Frame_{T.\mathrm{magnetic\_center}},+\ell_m/2\right).
-  \label{eq:magnetic-frames}
-\end{align}
-
-For object $O$ of type $T$, let $\ops_b$ be its effective beam-center
-transformation. Its beam frames, in object-local coordinates, are
-\begin{align}
-  \Frame_{O.\mathrm{beam\_center}}^{L}
-    &=\Apply_T(\identity,\ops_b),\\
-  \Frame_{O.\mathrm{beam\_entry}}^{L}
-    &=\Path_b\!\left(
-       \Frame_{O.\mathrm{beam\_center}}^{L},-\ell_b/2\right),\\
-  \Frame_{O.\mathrm{beam\_exit}}^{L}
-    &=\Path_b\!\left(
-       \Frame_{O.\mathrm{beam\_center}}^{L},+\ell_b/2\right).
+  \Frame_{O.\mathrm{magnetic\_entry}}^W
+    &=\Path_m(\Frame_{O.\mathrm{magnetic\_center}}^W,-\ell_m/2),\\
+  \Frame_{O.\mathrm{magnetic\_exit}}^W
+    &=\Path_m(\Frame_{O.\mathrm{magnetic\_center}}^W,+\ell_m/2),
+  \label{eq:magnetic-frames}\\
+  \Frame_{O.\mathrm{beam\_entry}}^W
+    &=\Path_b(\Frame_{O.\mathrm{beam\_center}}^W,-\ell_b/2),\\
+  \Frame_{O.\mathrm{beam\_exit}}^W
+    &=\Path_b(\Frame_{O.\mathrm{beam\_center}}^W,+\ell_b/2).
   \label{eq:beam-frames}
 \end{align}
+The finite axis is the locus of origins of $\Path_j(\Frame_j^W,u)$ for
+$-\ell_j/2\le u\le\ell_j/2$. Entry and exit planes are spanned by their
+local $x,y$ axes. Boundary advancement uses the feature's own curvature and
+roll, regardless of how its center was placed.
 
-When the object beam group is omitted and the magnetic group exists,
-$\ops_b=\ops_m$ and $(\ell_b,\kappa_b,\omega_b)=(\ell_m,\kappa_m,\omega_m)$.
-Consequently, for $q\in\{\mathrm{center},\mathrm{entry},\mathrm{exit}\}$,
+When the beam group is omitted and a magnetic group exists, the effective
+beam frames alias the resolved magnetic frames:
 \begin{equation}
-  \Frame_{O.\mathrm{beam\_}q}^{L}
-  =\Frame_{T.\mathrm{magnetic\_}q}.
+  \Frame_{O.\mathrm{beam\_}q}^W=\Frame_{O.\mathrm{magnetic\_}q}^W,
+  \qquad q\in\{\mathrm{center},\mathrm{entry},\mathrm{exit}\}.
   \label{eq:beam-inheritance}
 \end{equation}
-
-The center transformations in these equations use $\Apply_T$ and therefore
-follow the mechanical type path for any \texttt{ts}, with the straight fallback
-defined above when there is no shape.  In contrast, each boundary advance uses
-its own feature path from its already-resolved center.  Appending a \texttt{ts}
-operation to a center transformation would be incorrect whenever the feature
-and mechanical curvatures or rolls differ.
-
-Each entry or exit plane passes through the corresponding origin and is
-spanned by its local $\mathbf{x}$ and $\mathbf{y}$ axes; its normal is the
-local tangent $\mathbf{t}$.  Neither feature length is required to equal or
-fit within the physical shape length.  The feature-center transformations may
-include offsets and rotations. An absent magnetic group removes its three
-magnetic frames. Beam frames and their finite axis exist exactly when the
-object has an explicit beam group or can inherit a magnetic group.
+Inheritance therefore follows referenced magnetic placements as well as
+length, curvature, and roll. It neither copies nor reparents their definitions.
+All feature-frame dependencies, including inherited aliases, must be acyclic.
 
 \section{Object positioning by target alignment}
 \label{sec:object-alignment}
 
 Let object $O$ instantiate type $T$, and let its requested target frame be
-$a$ (for example \texttt{center}, \texttt{magnetic\_entry}, \texttt{beam\_entry}, or a stored named
+$a$ (for example \texttt{anchor}, \texttt{magnetic\_entry}, \texttt{beam\_entry}, or a stored named
 frame).  First resolve the object's position specification to a desired world
 target frame $\Frame_D^W$. Then obtain the target's complete object-local
-frame $\Frame_{O.a}^{L}$ using Section~\ref{sec:type-local}. For stored and
-magnetic frames this equals $\Frame_{T.a}$; beam frames use the object's
-effective interface. A conditional implicit frame is a valid target only
+frame $\Frame_{O.a}^{L}$ using Section~\ref{sec:type-local}. The target's reference chain must end at this object's anchor and contain
+only same-instance frame references. Evaluate that chain with the anchor set
+to the identity to obtain the local pose. A target rooted in world, a curve,
+or another object cannot determine the anchor and is rejected. A conditional implicit frame is a valid target only
 when it exists, including through magnetic inheritance.
 
-The object center world frame is the unique frame satisfying, in homogeneous
+The object anchor world frame is the unique frame satisfying, in homogeneous
 notation,
 \begin{equation}
   [\Frame_O^W][\Frame_{O.a}^{L}]=[\Frame_D^W].
@@ -650,18 +657,22 @@ It is computed as
 This is the formal meaning of a statement such as ``place \texttt{B.start} at
 a transformation from \texttt{A.end}.''  The reference and position operations
 determine $\Frame_D^W$; inverting the local transform of \texttt{B.start}
-determines the center of object $B$.
+determines the anchor of object $B$.
 
-Once the object center is known, the world frame of any local frame $f$ is
+For a frame whose chain is rooted in the object anchor, the world frame of any local frame $f$ is
 \begin{equation}
   \boxed{[\Frame_{O.f}^W]=[\Frame_O^W][\Frame_{O.f}^{L}]}
   \label{eq:frame-world-frame}
 \end{equation}
-For a stored frame, $\Frame_{O.f}^{L}=\Frame_{T.f}$ is given by
-Equation~\eqref{eq:named-local-frame}; for a feature frame it is given by
-Equation~\eqref{eq:magnetic-frames} or~\eqref{eq:beam-frames}.  If a shape is
-present, all its points follow from Equations~\eqref{eq:box-sweep} or
-\eqref{eq:cylinder-sweep} with $\Frame_O^W$ as the initial frame.
+Frames rooted in external references are instead evaluated directly using
+the referenced placement rules. If a shape is present, its initial sweep
+frame is always the resolved \texttt{mechanical\_center}.
+
+Validation tracks curves, object anchors, and individual feature frames.
+An object-level dependency cycle alone is insufficient evidence of a frame
+cycle: an external feature may be independent of its object's anchor.
+Caches must be scoped to one evaluation snapshot so changing a placement or
+reference immediately affects all its dependents.
 
 \section{Inferring a curve station from a world point}
 \label{sec:s-inference}
@@ -775,11 +786,13 @@ The following algorithm is normative at the semantic level.
 \begin{enumerate}
   \item Validate the canonical structure, finite numbers, positive dimensions
         and lengths, colors, operation names, target names, and all references.
-  \item Construct a dependency graph whose nodes are named curves and objects.
-        A curve depends on the curve or object named by its starting-frame
-        reference.  An object depends on the curve or object named by its
-        position reference; a non-curve object position containing \texttt{ts}
-        additionally depends on its \texttt{reference\_curve}.
+  \item Construct a dependency graph of curves, object anchors, and feature
+        frames. Starting frames and anchors depend on their exact references;
+        position station inference also depends on its projection curve.
+        Feature frames depend on their reference, defaulting to their anchor;
+        boundaries depend on their feature center, and inherited beam frames
+        depend on the matching magnetic frame. Check target chains separately
+        in anchor coordinates to avoid an artificial anchor--target cycle.
   \item Reject the layout if that graph contains a directed cycle.
   \item Resolve nodes in topological order, or use memoized recursion with an
         active-resolution stack.
@@ -797,23 +810,26 @@ The following algorithm is normative at the semantic level.
                 \eqref{eq:inferred-position}.
         \end{itemize}
   \item Align the object's target using Equation~\eqref{eq:object-frame}.
-  \item Resolve its stored, magnetic, and beam-interface frames that actually
-        exist using Equation~\eqref{eq:frame-world-frame}.  If the type has a
+  \item Resolve existing mechanical, stored, magnetic, and beam-interface
+        frames from their selected references using Equation~\eqref{eq:named-local-frame}.  If the type has a
         shape, sweep it in world coordinates using
         Section~\ref{sec:type-local}.
 \end{enumerate}
 
 The following identities summarize the output of the algorithm:
 \begin{align}
-  \text{object centre:}\quad
+  \text{object anchor:}\quad
   [\Frame_O^W]&=[\Frame_D^W][\Frame_{O.a}^{L}]^{-1},\\
-  \text{named frame:}\quad
+  \text{anchor-relative frame:}\quad
   [\Frame_{O.f}^W]&=[\Frame_O^W][\Frame_{O.f}^{L}],\\
   \text{world shape point:}\quad
   \begin{bmatrix}\mathbf{p}_W\\1\end{bmatrix}
-  &=[\Frame_O^W]
+  &=[\Frame_{O.c}^W]
     \begin{bmatrix}\mathbf{p}_T\\1\end{bmatrix}.
 \end{align}
+Here $c$ denotes \texttt{mechanical\_center}, and $\mathbf{p}_T$ is a point
+in the unplaced mechanical sweep. Externally referenced frames follow
+Equation~\eqref{eq:named-local-frame} or the curve-reference rule directly.
 
 \section{Validity and failure conditions}
 
@@ -879,7 +895,7 @@ authoritative pose.
 
 \section{Canonical example}
 
-The following layout places \texttt{Q1.center} at $s=10$ m on a straight
+The following layout places \texttt{Q1.anchor} at $s=10$ m on a straight
 reference curve.  The reusable type has a mechanical shape, independent
 a magnetic axis and two stored local frames. The object inherits the magnetic
 axis as its beam interface. All three axes
@@ -915,7 +931,7 @@ are straight in this compact example.
     "Q1": {
       "type": "magnet",
       "position": {
-        "target": "center",
+        "target": "anchor",
         "reference": {"kind": "curve", "curve": "main"},
         "transformation": [["ts", 10.0]]
       }
@@ -926,15 +942,15 @@ are straight in this compact example.
 
 For this example,
 \begin{align*}
- \Frame_{Q1.\mathrm{center}}^W&=\Frame_{\mathrm{main}}(10),\\
+ \Frame_{Q1.\mathrm{anchor}}^W&=\Frame_{\mathrm{main}}(10),\\
  \Frame_{Q1.\mathrm{start}}^W
-   &=\Path_{\mathrm{magnet}}(\Frame_{Q1.\mathrm{center}}^W,-1),\\
+   &=\Path_{\mathrm{magnet}}(\Frame_{Q1.\mathrm{anchor}}^W,-1),\\
  \Frame_{Q1.\mathrm{end}}^W
-   &=\Path_{\mathrm{magnet}}(\Frame_{Q1.\mathrm{center}}^W,+1).
+   &=\Path_{\mathrm{magnet}}(\Frame_{Q1.\mathrm{anchor}}^W,+1).
 \end{align*}
 The magnetic and beam entry frames also have origin $(0,0,9)$ m, and their
 exit frames have origin $(0,0,11)$ m.  Since every curvature is zero, the
-center, stored-frame, magnetic, and beam-frame orientations are identical.
+anchor, stored-frame, magnetic, and beam-frame orientations are identical.
 In particular, the three stored-frame origins above are
 $(0,0,10)$ m, $(0,0,9)$ m, and $(0,0,11)$ m respectively, with identical
 orientations.

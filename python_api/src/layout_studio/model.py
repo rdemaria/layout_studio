@@ -63,6 +63,8 @@ _SEARCH_KINDS = frozenset((*_ROOT_KINDS, "frame"))
 _RESERVED_FRAME_NAMES = frozenset(
     (
         "center",
+        "anchor",
+        "mechanical_center",
         "magnetic_center",
         "magnetic_entry",
         "magnetic_exit",
@@ -562,6 +564,10 @@ class Reference(JsonValue):
             raise TypeError("reference shorthand must be a string")
         if text == "world":
             return WorldReference()
+        if text in {"anchor", "center"}:
+            return LocalFrameReference("anchor")
+        if text.startswith("local:") and text[len("local:"):]:
+            return LocalFrameReference(text[len("local:"):])
         if (
             text.startswith("curve:")
             and text[len("curve:") :] != ""
@@ -573,7 +579,7 @@ class Reference(JsonValue):
             if object_name and frame_name:
                 return ObjectReference(object_name, frame_name)
         raise _fail(
-            "invalid reference shorthand; use 'world', 'curve:<name>', or '<object>-><frame>'"
+            "invalid reference shorthand; use 'world', 'local:<frame>', 'curve:<name>', or '<object>-><frame>'"
         )
 
     @classmethod
@@ -588,6 +594,9 @@ class Reference(JsonValue):
         elif kind == "curve":
             exact = _mapping(dct, required=("kind", "curve"))
             result = CurveReference(_name(exact["curve"], "curve name"))
+        elif kind == "local_frame":
+            exact = _mapping(dct, required=("kind", "frame"))
+            result = LocalFrameReference(_name(exact["frame"], "frame name"))
         elif kind == "object_frame":
             exact = _mapping(dct, required=("kind", "object", "frame"))
             result = ObjectReference(
@@ -718,19 +727,61 @@ class CurveReference(Reference):
         return f"CurveReference({self.curve_name!r})"
 
 
+class LocalFrameReference(Reference):
+    """A frame on the same object instance as a feature placement."""
+
+    __slots__ = ("_frame", "_context")
+    kind: Literal["local_frame"] = "local_frame"
+
+    def __init__(self, frame: str | Frame = "anchor") -> None:
+        if isinstance(frame, str):
+            frame = "anchor" if frame == "center" else _name(frame, "frame name")
+        elif not isinstance(frame, Frame):
+            raise TypeError("frame must be a frame name or Frame")
+        self._frame = frame
+        self._context: Frame | None = None
+
+    @property
+    def frame(self) -> str | Frame:
+        return self._frame
+
+    @property
+    def frame_name(self) -> str | None:
+        return _link_name(self._frame)
+
+    def _copy_for(self, context: Frame | None) -> LocalFrameReference:
+        result = LocalFrameReference(self._frame)
+        result._context = context
+        return result
+
+    def to_dict(self) -> dict[str, object]:
+        if self.frame_name is None:
+            raise DanglingReferenceError("unnamed local frame cannot be serialized")
+        return {"kind": "local_frame", "frame": self.frame_name}
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, LocalFrameReference) and self._frame == other._frame
+
+    def __hash__(self) -> int:
+        return hash(("local_frame", self._frame if isinstance(self._frame, str) else id(self._frame)))
+
+    def __repr__(self) -> str:
+        return f"LocalFrameReference({self.frame_name!r})"
+
+
 class ObjectReference(Reference):
     """Anchor on a complete frame belonging to an object instance."""
 
     __slots__ = ("_context", "_frame", "_object")
     kind: Literal["object_frame"] = "object_frame"
 
-    def __init__(self, object: str | Object, frame: str | Frame = "center") -> None:
+    def __init__(self, object: str | Object, frame: str | Frame = "anchor") -> None:
         if isinstance(object, str):
             _name(object, "object name")
         elif not isinstance(object, Object):
             raise TypeError("object must be an object name or Object")
         if isinstance(frame, str):
-            _name(frame, "frame name")
+            frame = "anchor" if frame == "center" else _name(frame, "frame name")
         elif not isinstance(frame, Frame):
             raise TypeError("frame must be a frame name or Frame")
         self._object = object
@@ -1034,6 +1085,8 @@ def _coerce_reference(
         return CurveReference(value)._copy_for(context)
     if isinstance(value, Object):
         return ObjectReference(value)._copy_for(context)
+    if isinstance(value, Frame):
+        return LocalFrameReference(value)._copy_for(context)
     if isinstance(value, str):
         return Reference.parse(value)._copy_for(context)
     raise TypeError(
@@ -1046,7 +1099,7 @@ class Frame(OwnedValue):
 
     def __init__(
         self,
-        reference: Reference | Curve | Object | str | None = None,
+        reference: Reference | Curve | Object | Frame | str | None = None,
         *,
         operations: Iterable[Operation | Sequence[object]] = (),
     ) -> None:
@@ -1059,7 +1112,7 @@ class Frame(OwnedValue):
         return self._reference
 
     @reference.setter
-    def reference(self, value: Reference | Curve | Object | str | None) -> None:
+    def reference(self, value: Reference | Curve | Object | Frame | str | None) -> None:
         candidate = _coerce_reference(value, context=self)
         _check_link_for_owner(candidate, self)
         self._reference = candidate
@@ -1160,7 +1213,7 @@ class Frame(OwnedValue):
     def as_position(
         self,
         *,
-        target: str | Frame = "center",
+        target: str | Frame = "anchor",
         reference_curve: str | Curve | None = None,
     ) -> Position:
         if self.is_owned:
@@ -1180,6 +1233,8 @@ class Frame(OwnedValue):
             )
         elif isinstance(self.reference, WorldReference):
             reference = WorldReference()
+        elif isinstance(self.reference, LocalFrameReference):
+            reference = LocalFrameReference(_clone_link(self.reference._frame))
         else:
             reference = None
         return Frame(reference, operations=self.operations)
@@ -1202,7 +1257,7 @@ class Position(OwnedValue):
         self,
         reference: Frame | Reference | Curve | Object | str,
         *,
-        target: str | Frame = "center",
+        target: str | Frame = "anchor",
         reference_curve: str | Curve | None = None,
     ) -> None:
         super().__init__()
@@ -1227,7 +1282,7 @@ class Position(OwnedValue):
     @staticmethod
     def _prepare_target(value: str | Frame) -> str | Frame:
         if isinstance(value, str):
-            return _name(value, "target frame name")
+            return "anchor" if value == "center" else _name(value, "target frame name")
         if isinstance(value, Frame):
             return value
         raise TypeError("target must be a frame name or Frame")
@@ -1690,6 +1745,7 @@ class Type(OwnedValue):
         *,
         color: str,
         shape: Box | Cylinder | Sequence[object] | None = None,
+        mechanical_center: Frame | None = None,
         magnetic_center: Frame | None = None,
         magnetic_length: float | None = None,
         magnetic_curvature: float | None = None,
@@ -1699,6 +1755,10 @@ class Type(OwnedValue):
         super().__init__()
         shape_value = None if shape is None else _coerce_shape(shape)
         color_value = _color(color)
+        if mechanical_center is not None:
+            if shape_value is None:
+                raise _fail("mechanical_center requires a shape")
+            self._prepare_local_frame(mechanical_center, "mechanical_center")
         magnetic = self._prepare_axis_feature(
             "magnetic",
             magnetic_center,
@@ -1713,7 +1773,7 @@ class Type(OwnedValue):
             self._check_frame_name(frame_name)
             self._prepare_local_frame(frame, f"frame {frame_name!r}")
         all_frames = [
-            *(center for center in (magnetic[0],) if center is not None),
+            *(center for center in (mechanical_center, magnetic[0]) if center is not None),
             *(frame for _, frame in frame_values),
         ]
         if len({id(frame) for frame in all_frames}) != len(all_frames):
@@ -1722,6 +1782,9 @@ class Type(OwnedValue):
             )
         if magnetic[0] is not None:
             magnetic[0]._attach(self)
+        if mechanical_center is not None:
+            mechanical_center._attach(self)
+        self._mechanical_center = mechanical_center
         self._shape = shape_value
         self._color = color_value
         (
@@ -1741,8 +1804,6 @@ class Type(OwnedValue):
             raise TypeError(f"{label} must be a Frame")
         if value.is_owned:
             raise AttachmentError(f"{label} already has an owner")
-        if value.reference is not None:
-            raise _fail(f"{label} is local and cannot have an explicit reference")
         return value
 
     @classmethod
@@ -1782,7 +1843,9 @@ class Type(OwnedValue):
 
     @property
     def implicit_frames(self) -> frozenset[str]:
-        result = {"center"}
+        result = {"anchor"}
+        if self.shape is not None:
+            result.add("mechanical_center")
         if self.magnetic_center is not None:
             result.update(("magnetic_center", "magnetic_entry", "magnetic_exit"))
         return frozenset(result)
@@ -1802,6 +1865,14 @@ class Type(OwnedValue):
     @color.setter
     def color(self, value: str) -> None:
         self._color = _color(value)
+
+    @property
+    def mechanical_center(self) -> Frame | None:
+        return self._mechanical_center
+
+    @mechanical_center.setter
+    def mechanical_center(self, value: Frame | None) -> None:
+        self.set(mechanical_center=value)
 
     @property
     def magnetic_center(self) -> Frame | None:
@@ -1846,6 +1917,7 @@ class Type(OwnedValue):
             required=("color", "frames"),
             optional=(
                 "shape",
+                "mechanical_center",
                 "magnetic_center",
                 "magnetic_length",
                 "magnetic_curvature",
@@ -1876,6 +1948,7 @@ class Type(OwnedValue):
                 if "shape" in mapping
                 else None
             ),
+            mechanical_center=Frame.from_dict(mapping["mechanical_center"]) if "mechanical_center" in mapping else None,
             magnetic_center=(
                 Frame.from_dict(mapping["magnetic_center"])
                 if "magnetic_center" in mapping
@@ -1897,6 +1970,8 @@ class Type(OwnedValue):
         }
         if self.shape is not None:
             result["shape"] = self.shape.to_dict()
+        if self.mechanical_center is not None:
+            result["mechanical_center"] = self.mechanical_center.to_dict()
         if self.magnetic_center is not None:
             result.update(
                 {
@@ -1911,6 +1986,7 @@ class Type(OwnedValue):
     def set(self, **changes: object) -> Type:
         allowed = {
             "shape",
+            "mechanical_center",
             "color",
             "magnetic_center",
             "magnetic_length",
@@ -1928,6 +2004,12 @@ class Type(OwnedValue):
             else _coerce_shape(changes.get("shape", self.shape))
         )
         color = _color(changes["color"]) if "color" in changes else self.color
+        mechanical_center = changes.get("mechanical_center", self.mechanical_center)
+        if mechanical_center is not None:
+            if shape is None:
+                raise _fail("mechanical_center requires a shape; remove its placement with the shape")
+            if mechanical_center is not self.mechanical_center:
+                self._prepare_local_frame(mechanical_center, "mechanical_center")
         magnetic = self._prepare_axis_feature(
             "magnetic",
             changes.get("magnetic_center", self.magnetic_center),
@@ -1937,7 +2019,7 @@ class Type(OwnedValue):
             current_center=self.magnetic_center,
         )
         all_frames = [
-            *(center for center in (magnetic[0],) if center is not None),
+            *(center for center in (mechanical_center, magnetic[0]) if center is not None),
             *self.frames.values(),
         ]
         if len({id(frame) for frame in all_frames}) != len(all_frames):
@@ -1945,6 +2027,11 @@ class Type(OwnedValue):
 
         layout = self.layout
         if layout is not None:
+            for candidate in (mechanical_center, magnetic[0]):
+                if candidate is not None:
+                    layout._check_foreign_links(candidate)
+            if self.shape is not None and shape is None:
+                layout._ensure_implicit_frames_not_in_use(self, {"mechanical_center"})
             if self.magnetic_center is not None and magnetic[0] is None:
                 layout._ensure_implicit_frames_not_in_use(
                     self,
@@ -1957,6 +2044,12 @@ class Type(OwnedValue):
                 self.magnetic_center._detach(self)
             if magnetic[0] is not None:
                 magnetic[0]._attach(self)
+        if mechanical_center is not self.mechanical_center:
+            if self.mechanical_center is not None:
+                self.mechanical_center._detach(self)
+            if mechanical_center is not None:
+                mechanical_center._attach(self)
+        self._mechanical_center = mechanical_center
         self._shape = shape
         self._color = color
         (
@@ -1971,7 +2064,7 @@ class Type(OwnedValue):
         return self.set(shape=shape)
 
     def remove_shape(self) -> Type:
-        return self.set(shape=None)
+        return self.set(shape=None, mechanical_center=None)
 
     def set_magnetic_axis(
         self,
@@ -2036,6 +2129,7 @@ class Type(OwnedValue):
         if frame_name in self.frames:
             raise NameConflictError(f"frame {frame_name!r} already exists")
         self._prepare_local_frame(frame, f"frame {frame_name!r}")
+        _check_link_for_owner(frame, self)
         frame._attach(self, frame_name)
         self.frames._insert(frame_name, frame)
         return frame
@@ -2082,6 +2176,7 @@ class Type(OwnedValue):
         if old is value:
             return
         self._prepare_local_frame(value, f"frame {frame_name!r}")
+        _check_link_for_owner(value, self)
         if old is not None and self.layout is not None:
             self.layout._ensure_frame_not_in_use(self, old)
         if old is not None:
@@ -2094,7 +2189,7 @@ class Type(OwnedValue):
             raise TypeError("Type only owns frame maps")
         self.pop_frame(name)
 
-    def get_frame(self, name: str | Frame = "center") -> Pose:
+    def get_frame(self, name: str | Frame = "anchor") -> Pose:
         layout = _require_bound(self)
         from .resolver import Resolver
 
@@ -2104,6 +2199,7 @@ class Type(OwnedValue):
         return Type(
             shape=self.shape,
             color=self.color,
+            mechanical_center=self.mechanical_center.clone() if self.mechanical_center is not None else None,
             magnetic_center=(
                 None if self.magnetic_center is None else self.magnetic_center.clone()
             ),
@@ -2226,7 +2322,7 @@ class Object(OwnedValue):
     @property
     def implicit_frames(self) -> frozenset[str]:
         type_value = self.type
-        result = set(type_value.implicit_frames) if isinstance(type_value, Type) else {"center"}
+        result = set(type_value.implicit_frames) if isinstance(type_value, Type) else {"anchor"}
         if self.effective_beam_axis is not None:
             result.update(("beam_center", "beam_entry", "beam_exit"))
         return frozenset(result)
@@ -2301,6 +2397,8 @@ class Object(OwnedValue):
         _check_link_for_owner(type_value, self)
         if self.layout is not None:
             self.layout._check_foreign_links(position)
+            if beam[0] is not None:
+                self.layout._check_foreign_links(beam[0])
             candidate_type = self.layout.types.get(type_value) if isinstance(type_value, str) else type_value
             if (self.effective_beam_axis is not None and beam[0] is None
                     and getattr(candidate_type, "magnetic_center", None) is None):
@@ -2359,10 +2457,10 @@ class Object(OwnedValue):
     def set_position(self, position: Position) -> Object:
         return self.set(position=position)
 
-    def ref(self, frame: str | Frame = "center") -> ObjectReference:
+    def ref(self, frame: str | Frame = "anchor") -> ObjectReference:
         return ObjectReference(self, frame)
 
-    def get_frame(self, frame: str | Frame = "center") -> Pose:
+    def get_frame(self, frame: str | Frame = "anchor") -> Pose:
         layout = _require_bound(self)
         from .resolver import Resolver
 
@@ -2768,7 +2866,7 @@ class Layout(JsonValue):
                 return ObjectReference(obj, frame)
         except DanglingReferenceError as exc:
             raise UnknownEntityError(str(exc), path=exc.path) from exc
-        raise AssertionError("unknown reference subclass")
+        raise ValidationError("a local frame reference requires an object or type context")
 
     def _resolve_curve(self, value: str | Curve, path: str) -> Curve:
         if isinstance(value, str):
@@ -2870,11 +2968,10 @@ class Layout(JsonValue):
         type_local: bool = False,
     ) -> RootEntity | None:
         if type_local:
-            if frame.reference is not None:
-                raise ValidationError(
-                    "local frame cannot have a reference", path=f"{path}.reference"
-                )
-            return None
+            self._check_foreign_links(frame)
+            if frame.reference is None or isinstance(frame.reference, LocalFrameReference):
+                return None
+            return self._validate_reference(frame.reference, f"{path}.reference")
         if frame.reference is None:
             if require_reference:
                 raise DanglingReferenceError(
@@ -2916,7 +3013,10 @@ class Layout(JsonValue):
                 type_value.magnetic_roll,
                 current_center=type_value.magnetic_center,
             )
+            if type_value.mechanical_center is not None and type_value.shape is None:
+                raise ValidationError("mechanical_center requires a shape", path=f"types.{type_name}.mechanical_center")
             for feature, center in (
+                ("mechanical", type_value.mechanical_center),
                 ("magnetic", type_value.magnetic_center),
             ):
                 if center is not None:
@@ -3012,32 +3112,16 @@ class Layout(JsonValue):
                     f"objects.{object_name}.position.reference_curve",
                 )
 
-        state: dict[tuple[RootKind, str], int] = {}
-        trail: list[tuple[RootKind, str]] = []
-
-        def visit(node: tuple[RootKind, str]) -> None:
-            marker = state.get(node, 0)
-            if marker == 2:
-                return
-            if marker == 1:
-                start = trail.index(node)
-                cycle = trail[start:] + [node]
-                rendered = " -> ".join(f"{kind}:{name}" for kind, name in cycle)
-                raise ReferenceCycleError(f"reference dependency cycle: {rendered}")
-            state[node] = 1
-            trail.append(node)
-            for dependency in dependencies.get(node, ()):
-                visit(dependency)
-            trail.pop()
-            state[node] = 2
-
-        for node in dependencies:
-            visit(node)
+        # Position/feature references must be checked at frame granularity.
+        # Whole-object edges would reject acyclic, independently placed features.
+        Resolver(self)._validate_frame_dependencies()
 
     def _iter_frames(self) -> Iterator[tuple[RootEntity, Frame]]:
         for curve in self.curves.values():
             yield curve, curve.starting_frame
         for type_value in self.types.values():
+            if type_value.mechanical_center is not None:
+                yield type_value, type_value.mechanical_center
             if type_value.magnetic_center is not None:
                 yield type_value, type_value.magnetic_center
             for frame in type_value.frames.values():
@@ -3059,6 +3143,8 @@ class Layout(JsonValue):
         elif isinstance(value, ObjectReference):
             check_link(value._object)
             check_link(value._frame)
+        elif isinstance(value, LocalFrameReference):
+            check_link(value._frame)
         elif isinstance(value, Frame):
             self._check_foreign_links(value.reference)
         elif isinstance(value, Position):
@@ -3073,6 +3159,8 @@ class Layout(JsonValue):
             if value.beam_center is not None:
                 self._check_foreign_links(value.beam_center)
         elif isinstance(value, Type):
+            if value.mechanical_center is not None:
+                self._check_foreign_links(value.mechanical_center)
             if value.magnetic_center is not None:
                 self._check_foreign_links(value.magnetic_center)
             for frame in value.frames.values():
@@ -3119,9 +3207,22 @@ class Layout(JsonValue):
                         path=f"objects.{object_name}.position.reference_curve",
                     )
 
+    def _placement_type(self, owner: RootEntity) -> Type | None:
+        if isinstance(owner, Type):
+            return owner
+        if isinstance(owner, Object):
+            return self._resolve_type(owner._type, "object.type")
+        return None
+
     def _ensure_frame_not_in_use(self, type_value: Type, frame: Frame) -> None:
         for structural_root, candidate in self._iter_frames():
             reference = candidate.reference
+            if isinstance(reference, LocalFrameReference):
+                if self._placement_type(structural_root) is type_value and (
+                    reference._frame is frame or reference.frame_name == frame.name
+                ):
+                    raise ReferenceInUseError(f"frame {frame.name!r} is still referenced")
+                continue
             if not isinstance(reference, ObjectReference):
                 continue
             try:
@@ -3166,8 +3267,21 @@ class Layout(JsonValue):
             # Removing a type's magnetic axis only removes inherited beam frames.
             return not (name.startswith("beam_") and obj.beam_center is not None)
 
-        for _, candidate in self._iter_frames():
+        for structural_root, candidate in self._iter_frames():
             reference = candidate.reference
+            if isinstance(reference, LocalFrameReference):
+                if reference.frame_name not in frame_names:
+                    continue
+                if isinstance(owner, Type):
+                    affected_local = self._placement_type(structural_root) is owner
+                    if reference.frame_name.startswith("beam_") and isinstance(structural_root, Object) and structural_root.beam_center is not None:
+                        affected_local = False
+                else:
+                    affected_local = structural_root is owner or (
+                        isinstance(structural_root, Type) and self._placement_type(owner) is structural_root)
+                if affected_local:
+                    raise ReferenceInUseError(f"frame {reference.frame_name!r} is still referenced")
+                continue
             if not isinstance(reference, ObjectReference):
                 continue
             if isinstance(owner, Object) and replacement_position is not None and candidate is owner.position.reference:
@@ -3217,8 +3331,12 @@ class Layout(JsonValue):
     def _rewrite_frame_name(
         self, type_value: Type, old_name: str, new_name: str
     ) -> None:
-        for _, frame in self._iter_frames():
+        for structural_root, frame in self._iter_frames():
             reference = frame.reference
+            if isinstance(reference, LocalFrameReference):
+                if reference._frame == old_name and self._placement_type(structural_root) is type_value:
+                    reference._frame = new_name
+                continue
             if (
                 not isinstance(reference, ObjectReference)
                 or reference._frame != old_name

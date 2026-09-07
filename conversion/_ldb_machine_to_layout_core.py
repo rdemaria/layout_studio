@@ -67,7 +67,7 @@ import numpy as np
 
 POINT_TO_LAYOUT_FRAME: dict[str, str] = {
     "MECHANICAL START": "mechanical_start",
-    "MECHANICAL MIDDLE": "center",
+    "MECHANICAL MIDDLE": "anchor",
     "MECHANICAL END": "mechanical_end",
     "OPTIC START": "beam_entry",
     "OPTIC MIDDLE": "beam_center",
@@ -87,6 +87,8 @@ LDB_OPERATION_MAP: dict[str, tuple[str, float, bool]] = {
 HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 IMPLICIT_FRAMES = {
     "center",
+    "anchor",
+    "mechanical_center",
     "magnetic_center",
     "magnetic_entry",
     "magnetic_exit",
@@ -361,7 +363,7 @@ def _span_local_frames(tf: Any, center_station: float, path: Any) -> tuple:
     frames = []
     for point in POINT_TO_LAYOUT_FRAME:
         name = _frame_name(tf, point, span=True)
-        if name == "center":
+        if name == "anchor":
             continue
         offset = _point_offset(tf, point)
         if offset == 0:
@@ -615,7 +617,7 @@ def machine_to_layout(
 
         try:
             target_frame = _frame_name(tf, str(tf.target_point), span=object_name in span_names)
-            reference_frame = ("center" if str(tf.ref) == root_name else _frame_name(
+            reference_frame = ("anchor" if str(tf.ref) == root_name else _frame_name(
                 transformations[str(tf.ref)], str(tf.ref_point), span=str(tf.ref) in span_names))
         except KeyError as exc:
             raise ConversionError(
@@ -747,7 +749,9 @@ def validate_layout_json(layout: Mapping[str, Any]) -> None:
 
     def frame_names(obj: Mapping) -> set[str]:
         type_ = types_[obj["type"]]
-        names = {"center", *type_["frames"]}
+        names = {"anchor", *type_["frames"]}
+        if "shape" in type_:
+            names.add("mechanical_center")
         if "magnetic_center" in type_:
             names.update(("magnetic_center", "magnetic_entry", "magnetic_exit"))
         if "beam_center" in obj or "magnetic_center" in type_:

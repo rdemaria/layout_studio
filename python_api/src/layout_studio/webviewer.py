@@ -1271,7 +1271,9 @@ def _implicit_object_frames(type_value: object, object_value: object) -> frozens
         return (field in value if isinstance(value, Mapping)
                 else getattr(value, field, None) is not None)
 
-    result = {"center"}
+    result = {"anchor"}
+    if ("shape" in type_value if isinstance(type_value, Mapping) else getattr(type_value, "shape", None) is not None):
+        result.add("mechanical_center")
     magnetic = has_center(type_value, "magnetic")
     if magnetic:
         result.update(("magnetic_center", "magnetic_entry", "magnetic_exit"))

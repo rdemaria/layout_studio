@@ -52,7 +52,7 @@ def canonical_layout_dict() -> dict[str, object]:
                 "beam_curvature": -0.1,
                 "beam_roll": -0.25,
                 "position": {
-                    "target": "center",
+                    "target": "anchor",
                     "reference": {"kind": "curve", "curve": "main"},
                     "transformation": [["ts", 2.0]],
                 },

@@ -1,0 +1,203 @@
+{
+  "reference_curves": {
+    "arc": {
+      "color": "#123456",
+      "starting_frame": {
+        "reference": {
+          "kind": "world"
+        },
+        "transformation": []
+      },
+      "segments": [
+        [
+          20,
+          0.8,
+          0.2
+        ]
+      ]
+    }
+  },
+  "types": {
+    "magnet": {
+      "color": "#d18a24",
+      "shape": [
+        "box",
+        1,
+        2,
+        3,
+        0.05,
+        0.3
+      ],
+      "mechanical_center": {
+        "reference": {
+          "kind": "local_frame",
+          "frame": "mount"
+        },
+        "transformation": [
+          [
+            "ty",
+            2
+          ]
+        ]
+      },
+      "magnetic_center": {
+        "reference": {
+          "kind": "local_frame",
+          "frame": "mechanical_center"
+        },
+        "transformation": [
+          [
+            "tt",
+            0.5
+          ]
+        ]
+      },
+      "magnetic_length": 2,
+      "magnetic_curvature": 0.2,
+      "magnetic_roll": 0.3,
+      "frames": {
+        "mount": {
+          "transformation": [
+            [
+              "tx",
+              1
+            ]
+          ]
+        },
+        "after_magnet": {
+          "reference": {
+            "kind": "local_frame",
+            "frame": "magnetic_exit"
+          },
+          "transformation": [
+            [
+              "tt",
+              0.25
+            ]
+          ]
+        },
+        "survey_world": {
+          "reference": {
+            "kind": "world"
+          },
+          "transformation": [
+            [
+              "tx",
+              100
+            ]
+          ]
+        },
+        "survey_curve": {
+          "reference": {
+            "kind": "curve",
+            "curve": "arc"
+          },
+          "transformation": [
+            [
+              "ts",
+              5
+            ],
+            [
+              "tx",
+              1
+            ]
+          ]
+        },
+        "survey_other": {
+          "reference": {
+            "kind": "object_frame",
+            "object": "B",
+            "frame": "anchor"
+          },
+          "transformation": [
+            [
+              "ty",
+              0.2
+            ]
+          ]
+        }
+      }
+    },
+    "marker": {
+      "color": "#123456",
+      "frames": {}
+    }
+  },
+  "objects": {
+    "A": {
+      "type": "magnet",
+      "position": {
+        "target": "mechanical_center",
+        "reference": {
+          "kind": "world"
+        },
+        "transformation": [
+          [
+            "tx",
+            10
+          ]
+        ]
+      },
+      "beam_center": {
+        "reference": {
+          "kind": "object_frame",
+          "object": "B",
+          "frame": "anchor"
+        },
+        "transformation": [
+          [
+            "ts",
+            0.2
+          ],
+          [
+            "ry",
+            0.1
+          ]
+        ]
+      },
+      "beam_length": 1.4,
+      "beam_curvature": 0.1,
+      "beam_roll": -0.1
+    },
+    "B": {
+      "type": "marker",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "world"
+        },
+        "transformation": [
+          [
+            "tx",
+            20
+          ],
+          [
+            "ty",
+            3
+          ],
+          [
+            "ry",
+            0.3
+          ]
+        ]
+      }
+    },
+    "C": {
+      "type": "magnet",
+      "position": {
+        "target": "mount",
+        "reference": {
+          "kind": "object_frame",
+          "object": "A",
+          "frame": "after_magnet"
+        },
+        "transformation": [
+          [
+            "tt",
+            2
+          ]
+        ]
+      }
+    }
+  }
+}

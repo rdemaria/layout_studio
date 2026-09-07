@@ -694,7 +694,7 @@ test("edits type geometry and each object's beam interface independently", async
   assert.match(objectsCard, /Use magnetic axis/);
   assert.match(source, /delete type\.magnetic_center;[\s\S]*delete type\.magnetic_roll;/);
   assert.match(source, /delete object\.beam_center;[\s\S]*delete object\.beam_roll;/);
-  assert.match(source, /No mechanical shape\. Instances remain selectable at their center\./);
+  assert.match(source, /No mechanical shape\. Instances remain selectable at their anchor\./);
 });
 
 test("orients the dependency hierarchy outward from World", async () => {
