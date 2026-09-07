@@ -204,7 +204,7 @@ test("builds URL suggestions from local paths in list.json", async () => {
   assert.match(html, /aria-label="Available layout JSON files"/);
   assert.match(html, /No JSON catalog/);
   assert.match(html, /accept="\.json,application\/json"/);
-  assert.match(html, /Load layout/);
+  assert.doesNotMatch(html, /Load layout|class="url-loader"/);
 
   const pickerHtml = renderToStaticMarkup(
     React.createElement(LayoutUrlPicker, {

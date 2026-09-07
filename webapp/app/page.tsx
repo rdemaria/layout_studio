@@ -9,7 +9,6 @@ import {
   Download,
   FileJson,
   Focus,
-  Link,
   Plus,
   Shapes,
   Trash2,
@@ -216,7 +215,6 @@ export function LayoutUrlPicker({
     <NativeSelect
       aria-label="Available layout JSON files"
       className="url-suggestion-select"
-      size="sm"
       value={value}
       disabled={disabled || suggestions.length === 0}
       onChange={(event) => onSelect(event.target.value)}
@@ -266,9 +264,6 @@ export default function Home() {
   const [urlSuggestions, setUrlSuggestions] = useState<
     LayoutUrlSuggestion[]
   >([]);
-  const selectedLayout = urlSuggestions.find(
-    (suggestion) => suggestion.href === selectedLayoutUrl,
-  );
   const [status, setStatus] = useState<Status>({
     kind: "idle",
     message: "Ready",
@@ -397,6 +392,7 @@ export default function Home() {
       if (!signal?.aborted) loadValue(value, source);
     } catch (error) {
       if (signal?.aborted) return;
+      setSelectedLayoutUrl("");
       setStatus({
         kind: "error",
         message:
@@ -1362,31 +1358,23 @@ export default function Home() {
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
-            <div className="url-loader">
-              <Link aria-hidden="true" />
-              <LayoutUrlPicker
-                suggestions={urlSuggestions}
-                value={selectedLayoutUrl}
-                disabled={status.kind === "loading"}
-                onSelect={setSelectedLayoutUrl}
-              />
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                disabled={!selectedLayout || status.kind === "loading"}
-                onClick={() => {
-                  if (selectedLayout) {
-                    void importUrl(
-                      selectedLayout.href,
-                      selectedLayout.label ?? selectedLayout.path,
-                    );
-                  }
-                }}
-              >
-                Load layout
-              </Button>
-            </div>
+            <LayoutUrlPicker
+              suggestions={urlSuggestions}
+              value={selectedLayoutUrl}
+              disabled={status.kind === "loading"}
+              onSelect={(url) => {
+                setSelectedLayoutUrl(url);
+                const selectedLayout = urlSuggestions.find(
+                  (suggestion) => suggestion.href === url,
+                );
+                if (selectedLayout) {
+                  void importUrl(
+                    selectedLayout.href,
+                    selectedLayout.label ?? selectedLayout.path,
+                  );
+                }
+              }}
+            />
             <Input
               ref={fileInputRef}
               className="sr-only"

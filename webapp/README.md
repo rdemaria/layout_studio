@@ -64,8 +64,9 @@ wheel. Do not add a second generated HTML copy under `python_api`.
 ## Loading layouts
 
 The dropdown lists layouts from the optional same-origin `list.json` next to the
-served page. Select an entry and click **Load layout**. In a source development
-server this file comes from `public/list.json`. The compact form is:
+served page. Selecting an entry loads it immediately; there is no separate Load
+button or URL text field. In a source development server this file comes from
+`public/list.json`. The compact form is:
 
 ```json
 ["layouts/SPS--LS3.json", "layouts/sample-layout.json"]
