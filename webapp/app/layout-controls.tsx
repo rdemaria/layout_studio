@@ -377,7 +377,7 @@ export function ReferenceEditor({
     value: Transformation & Partial<Pick<ObjectPosition, "reference_curve">>,
   ) => void;
 }) {
-  const candidates = useMemo(() => referenceCandidates(layout, owner), [layout, owner.kind, owner.name]);
+  const candidates = useMemo(() => referenceCandidates(layout, {kind: owner.kind, name: owner.name}), [layout, owner.kind, owner.name]);
   const curveNames = useMemo(() => Object.keys(layout.reference_curves).filter(candidates.curveAllowed), [layout.reference_curves, candidates]);
   const objectNames = useMemo(() => Object.keys(layout.objects), [layout.objects]);
   const frameNamesForObject = candidates.frames;

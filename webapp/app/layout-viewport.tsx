@@ -1306,10 +1306,7 @@ export function LayoutViewport({
     }
   }, [fit, scene]);
 
-  /* eslint-disable react-hooks/set-state-in-effect -- The command prop is an
-     external command stream. Applying a committed command here is the
-     synchronization boundary, and the follow-up effect acknowledges its
-     resulting render. */
+  // Apply external commands after commit; acknowledge the resulting render below.
   useEffect(() => {
     const scopeKey = scope.kind === "layout"
       ? "layout"
@@ -1945,6 +1942,7 @@ export function LayoutViewport({
     camera,
     hovered,
     visibleLayers.frames,
+    scene.deferred,
     selection,
     showBeamAxis,
     showCurves,
@@ -2682,7 +2680,6 @@ export function LayoutViewport({
     reportedCommandRef.current = commandResult.id;
     onCommandApplied(commandResult.id, commandResult.error || geometryError || undefined);
   }, [commandResult, onCommandApplied, currentScene, buildProgress, layersLoading, layerResult, scene, geometryError, showFrames, showMagneticAxis, showBeamAxis]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   return (
     <div className="viewport-shell">

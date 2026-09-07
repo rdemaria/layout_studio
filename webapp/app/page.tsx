@@ -312,7 +312,9 @@ export default function Home() {
 
   const pendingEditRef = useRef<LayoutData | null>(null);
   const editingRef = useRef<AbortController | null>(null);
+  const loadingRef = useRef<AbortController | null>(null);
   useEffect(() => () => editingRef.current?.abort(), []);
+  useEffect(() => () => loadingRef.current?.abort(), []);
   const update = (mutate: (draft: LayoutData) => void) => {
     if (pendingEditRef.current) { updateValidated(mutate); return; }
     loadingRef.current?.abort();
@@ -401,9 +403,6 @@ export default function Home() {
     }
     setStatus({ kind: "success", message: `Loaded ${source}` });
   }, []);
-
-  const loadingRef = useRef<AbortController | null>(null);
-  useEffect(() => () => loadingRef.current?.abort(), []);
 
   const importUrl = useCallback(async (
     url: string,
