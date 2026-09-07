@@ -2,5 +2,13 @@
   {
     "path": "layouts/sample-layout.json",
     "label": "Sample layout"
+  },
+  {
+    "path": "layouts/SPS--LS3.json.gz",
+    "label": "SPS LS3"
+  },
+  {
+    "path": "layouts/M2--LS3.json.gz",
+    "label": "M2 LS3"
   }
 ]

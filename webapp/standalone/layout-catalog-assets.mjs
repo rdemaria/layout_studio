@@ -74,7 +74,7 @@ export function localLayoutCatalogAssetPaths(value) {
     const lowerPath = relativePath.toLowerCase();
     if (
       !relativePath ||
-      (!lowerPath.endsWith(".json") && !lowerPath.endsWith(".json.gz")) ||
+      (!lowerPath.endsWith(".json") && !lowerPath.endsWith(".gz")) ||
       seen.has(relativePath)
     ) {
       continue;

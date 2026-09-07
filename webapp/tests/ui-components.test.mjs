@@ -155,9 +155,9 @@ test("builds URL suggestions from local paths in list.json", async () => {
   const suggestions = parseLayoutUrlList(
     {
       files: [
-        "layouts/sps.json",
+        "layouts/sps.json.gz",
         { path: "/layouts/lhc.json", label: "LHC" },
-        "layouts/sps.json",
+        "layouts/sps.json.gz",
         "https://elsewhere.example/layout.json",
         "data:application/json,{}",
         "  ",
@@ -168,8 +168,8 @@ test("builds URL suggestions from local paths in list.json", async () => {
 
   assert.deepEqual(suggestions, [
     {
-      href: "https://layout.example/tools/studio/layouts/sps.json",
-      path: "layouts/sps.json",
+      href: "https://layout.example/tools/studio/layouts/sps.json.gz",
+      path: "layouts/sps.json.gz",
     },
     {
       href: "https://layout.example/layouts/lhc.json",
@@ -200,22 +200,22 @@ test("builds URL suggestions from local paths in list.json", async () => {
     "/app/page.tsx",
   );
   const html = renderToStaticMarkup(React.createElement(Home));
-  assert.match(html, /list="layout-url-suggestions"/);
-  assert.match(html, /<datalist id="layout-url-suggestions"><\/datalist>/);
+  assert.doesNotMatch(html, /<datalist|aria-label="Layout JSON URL"|inputMode="url"/);
   assert.match(html, /aria-label="Available layout JSON files"/);
   assert.match(html, /No JSON catalog/);
-  assert.match(html, /inputMode="url"/);
-  assert.match(html, /Load URL/);
+  assert.match(html, /accept="\.json,\.gz,application\/json,application\/gzip,application\/x-gzip"/);
+  assert.match(html, /Load layout/);
 
   const pickerHtml = renderToStaticMarkup(
     React.createElement(LayoutUrlPicker, {
       suggestions,
+      value: suggestions[0].href,
       onSelect() {},
     }),
   );
-  assert.match(pickerHtml, /Available JSON…/);
-  assert.match(pickerHtml, /value="layouts\/sps.json"/);
-  assert.match(pickerHtml, /value="\/layouts\/lhc.json"/);
+  assert.match(pickerHtml, /Choose a layout…/);
+  assert.match(pickerHtml, /value="https:\/\/layout.example\/tools\/studio\/layouts\/sps.json.gz" selected=""/);
+  assert.match(pickerHtml, /value="https:\/\/layout.example\/layouts\/lhc.json"/);
   assert.match(pickerHtml, /LHC — \/layouts\/lhc.json/);
 });
 

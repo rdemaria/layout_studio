@@ -251,10 +251,10 @@ textarea {
 
 .url-loader {
   display: grid;
-  grid-template-columns: auto minmax(150px, 1fr) minmax(160px, 210px) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 4px;
-  width: min(760px, 100%);
+  width: min(460px, 100%);
   min-width: 250px;
   padding-left: 10px;
   border: 1px solid var(--input);
@@ -267,16 +267,8 @@ textarea {
   color: #6e7c84;
 }
 
-.url-loader input {
-  border: 0;
-  box-shadow: none;
-}
-
-.url-loader input:focus-visible {
-  box-shadow: none;
-}
-
 .url-loader [data-slot="native-select-wrapper"] {
+  min-width: 0;
   width: 100%;
 }
 
@@ -1681,26 +1673,6 @@ textarea {
 
   .import-cluster > button {
     flex: 1;
-  }
-
-  .url-loader {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    padding-block: 4px;
-  }
-
-  .url-loader > svg {
-    grid-row: 1 / span 2;
-  }
-
-  .url-loader [data-slot="native-select-wrapper"] {
-    grid-column: 2;
-    grid-row: 2;
-  }
-
-  .url-loader > button {
-    grid-column: 3;
-    grid-row: 1 / span 2;
-    align-self: stretch;
   }
 
   .reference-row,

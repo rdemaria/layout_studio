@@ -15,6 +15,7 @@ test("selects only portable local JSON assets from a catalog", () => {
       files: [
         "layouts/one.json",
         { path: "./layouts/two.json.gz?download=1#latest" },
+        "layouts/three.gz",
         "layouts/one.json?duplicate=1",
         "../outside.json",
         "/absolute.json",
@@ -24,7 +25,7 @@ test("selects only portable local JSON assets from a catalog", () => {
         { label: "Missing path" },
       ],
     }),
-    ["layouts/one.json", "layouts/two.json.gz"],
+    ["layouts/one.json", "layouts/two.json.gz", "layouts/three.gz"],
   );
 });
 
@@ -44,6 +45,7 @@ test("standalone build contains list.json and every local catalog asset", async 
 
   for (const assetPath of assetPaths) {
     const content = await readFile(resolve(webappRoot, "build", assetPath));
+    assert.deepEqual(content, await readFile(resolve(webappRoot, "public", assetPath)));
     const json = assetPath.toLowerCase().endsWith(".gz")
       ? gunzipSync(content).toString("utf8")
       : content.toString("utf8");

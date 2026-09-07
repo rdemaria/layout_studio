@@ -1582,7 +1582,7 @@ def _resolve_catalog_file(
         or relative_path == "list.json"
         or "\0" in relative_path
         or "\\" in relative_path
-        or not relative_path.lower().endswith((".json", ".json.gz"))
+        or not relative_path.lower().endswith((".json", ".gz"))
     ):
         return None
 

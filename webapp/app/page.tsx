@@ -95,10 +95,11 @@ import {
 } from "./python-bridge";
 import {
   layoutCatalogUrl,
+  layoutUrlFromQuery,
   parseLayoutUrlList,
-  resolveLayoutUrl,
   type LayoutUrlSuggestion,
 } from "./layout-url-catalog";
+import { fetchLayoutJson, readLayoutJson } from "./layout-import";
 
 type Status = {
   kind: "idle" | "loading" | "success" | "error";
@@ -199,11 +200,15 @@ function fitTargetIsInScope(
 
 type LayoutUrlPickerProps = {
   suggestions: LayoutUrlSuggestion[];
-  onSelect: (path: string) => void;
+  value: string;
+  disabled?: boolean;
+  onSelect: (url: string) => void;
 };
 
 export function LayoutUrlPicker({
   suggestions,
+  value,
+  disabled = false,
   onSelect,
 }: LayoutUrlPickerProps) {
   return (
@@ -211,17 +216,15 @@ export function LayoutUrlPicker({
       aria-label="Available layout JSON files"
       className="url-suggestion-select"
       size="sm"
-      value=""
-      disabled={suggestions.length === 0}
-      onChange={(event) => {
-        if (event.target.value) onSelect(event.target.value);
-      }}
+      value={value}
+      disabled={disabled || suggestions.length === 0}
+      onChange={(event) => onSelect(event.target.value)}
     >
       <NativeSelectOption value="">
-        {suggestions.length > 0 ? "Available JSON…" : "No JSON catalog"}
+        {suggestions.length > 0 ? "Choose a layout…" : "No JSON catalog"}
       </NativeSelectOption>
       {suggestions.map((suggestion) => (
-        <NativeSelectOption key={suggestion.href} value={suggestion.path}>
+        <NativeSelectOption key={suggestion.href} value={suggestion.href}>
           {suggestion.label
             ? `${suggestion.label} — ${suggestion.path}`
             : suggestion.path}
@@ -257,10 +260,13 @@ export default function Home() {
     kind: "object",
     name: "QF1",
   });
-  const [url, setUrl] = useState("");
+  const [selectedLayoutUrl, setSelectedLayoutUrl] = useState("");
   const [urlSuggestions, setUrlSuggestions] = useState<
     LayoutUrlSuggestion[]
   >([]);
+  const selectedLayout = urlSuggestions.find(
+    (suggestion) => suggestion.href === selectedLayoutUrl,
+  );
   const [status, setStatus] = useState<Status>({
     kind: "idle",
     message: "Ready",
@@ -294,7 +300,7 @@ export default function Home() {
           parseLayoutUrlList(await response.json(), catalogUrl),
         );
       } catch {
-        // The catalog is optional; free-form URLs remain available without it.
+        // File imports and the debug query URL work without an optional catalog.
       }
     })();
 
@@ -325,7 +331,7 @@ export default function Home() {
     }
   };
 
-  const loadValue = (
+  const loadValue = useCallback((
     value: unknown,
     source: string,
     options: LoadValueOptions = {},
@@ -375,17 +381,19 @@ export default function Home() {
       setSelection(null);
     }
     setStatus({ kind: "success", message: `Loaded ${source}` });
-  };
+  }, []);
 
-  const importUrl = async () => {
-    if (!url.trim()) return;
-    setStatus({ kind: "loading", message: "Loading URL…" });
+  const importUrl = useCallback(async (
+    url: string,
+    source = "URL",
+    signal?: AbortSignal,
+  ) => {
+    setStatus({ kind: "loading", message: `Loading ${source}…` });
     try {
-      const catalogUrl = layoutCatalogUrl(document.baseURI);
-      const response = await fetch(resolveLayoutUrl(url, catalogUrl));
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      loadValue(await response.json(), "URL");
+      const value = await fetchLayoutJson(url, signal);
+      if (!signal?.aborted) loadValue(value, source);
     } catch (error) {
+      if (signal?.aborted) return;
       setStatus({
         kind: "error",
         message:
@@ -394,13 +402,30 @@ export default function Home() {
             : "Could not load URL",
       });
     }
-  };
+  }, [loadValue]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const initialUrl = layoutUrlFromQuery(window.location.href);
+        if (initialUrl) await importUrl(initialUrl, "URL", controller.signal);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setStatus({
+          kind: "error",
+          message: error instanceof Error ? error.message : "Invalid layout URL",
+        });
+      }
+    })();
+    return () => controller.abort();
+  }, [importUrl]);
 
   const importFile = async (file: File | undefined) => {
     if (!file) return;
     setStatus({ kind: "loading", message: `Reading ${file.name}…` });
     try {
-      loadValue(JSON.parse(await file.text()), file.name);
+      loadValue(await readLayoutJson(file), file.name);
     } catch (error) {
       setStatus({
         kind: "error",
@@ -439,7 +464,7 @@ export default function Home() {
     setViewportFitRequest(null);
     setViewerRevision((current) => current + 1);
     setSelection(null);
-    setUrl("");
+    setSelectedLayoutUrl("");
     if (fileInputRef.current) fileInputRef.current.value = "";
     setStatus({ kind: "success", message: "Started an empty layout" });
   };
@@ -1332,47 +1357,34 @@ export default function Home() {
             </AlertDialog>
             <div className="url-loader">
               <Link aria-hidden="true" />
-              <Input
-                aria-label="Layout JSON URL"
-                type="text"
-                inputMode="url"
-                autoComplete="off"
-                list="layout-url-suggestions"
-                placeholder="layouts/example.json or https://…"
-                value={url}
-                onChange={(event) => setUrl(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void importUrl();
-                }}
-              />
-              <datalist id="layout-url-suggestions">
-                {urlSuggestions.map((suggestion) => (
-                  <option
-                    key={suggestion.href}
-                    value={suggestion.path}
-                    label={suggestion.label}
-                  />
-                ))}
-              </datalist>
               <LayoutUrlPicker
                 suggestions={urlSuggestions}
-                onSelect={setUrl}
+                value={selectedLayoutUrl}
+                disabled={status.kind === "loading"}
+                onSelect={setSelectedLayoutUrl}
               />
               <Button
                 type="button"
                 variant="secondary"
                 size="sm"
-                disabled={!url.trim() || status.kind === "loading"}
-                onClick={() => void importUrl()}
+                disabled={!selectedLayout || status.kind === "loading"}
+                onClick={() => {
+                  if (selectedLayout) {
+                    void importUrl(
+                      selectedLayout.href,
+                      selectedLayout.label ?? selectedLayout.path,
+                    );
+                  }
+                }}
               >
-                Load URL
+                Load layout
               </Button>
             </div>
             <Input
               ref={fileInputRef}
               className="sr-only"
               type="file"
-              accept="application/json,.json"
+              accept=".json,.gz,application/json,application/gzip,application/x-gzip"
               onChange={(event) => void importFile(event.target.files?.[0])}
             />
             <Button

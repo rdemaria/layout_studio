@@ -222,9 +222,11 @@ def test_standalone_asset_is_reused_at_a_tokenized_route(web_viewer, bridge_asse
     assert _request(web_viewer, "/viewer/list.json")[0] == 404
 
 
+@pytest.mark.parametrize("compressed_name", ["compressed.json.gz", "compressed.gz"])
 def test_standalone_catalog_serves_only_allowlisted_local_json(
     canonical_layout_dict,
     tmp_path,
+    compressed_name,
 ):
     standalone_dir = tmp_path / "standalone"
     layouts_dir = standalone_dir / "layouts"
@@ -239,7 +241,7 @@ def test_standalone_catalog_serves_only_allowlisted_local_json(
     sample_bytes = json.dumps(sample).encode()
     (layouts_dir / "sample layout.json").write_bytes(sample_bytes)
     compressed_bytes = gzip.compress(sample_bytes, mtime=0)
-    (layouts_dir / "compressed.json.gz").write_bytes(compressed_bytes)
+    (layouts_dir / compressed_name).write_bytes(compressed_bytes)
     (layouts_dir / "readme.txt").write_text("not JSON", encoding="utf-8")
     (standalone_dir / "unlisted.json").write_text("{}", encoding="utf-8")
     outside = tmp_path / "outside.json"
@@ -248,7 +250,7 @@ def test_standalone_catalog_serves_only_allowlisted_local_json(
     # they must not consume the server-side allow-list limit either.
     catalog = [None] * 500 + [
         {"path": "layouts/sample%20layout.json", "label": "Sample"},
-        "layouts/compressed.json.gz?version=1",
+        f"layouts/{compressed_name}?version=1",
         "layouts/readme.txt",
         "../outside.json",
         "/absolute.json",
@@ -280,7 +282,7 @@ def test_standalone_catalog_serves_only_allowlisted_local_json(
 
         status, headers, payload = _request(
             viewer,
-            "/viewer/layouts/compressed.json.gz?version=1",
+            f"/viewer/layouts/{compressed_name}?version=1",
         )
         assert status == 200
         assert headers["Content-Encoding"] == "gzip"
@@ -289,7 +291,7 @@ def test_standalone_catalog_serves_only_allowlisted_local_json(
 
         status, headers, payload = _request(
             viewer,
-            "/viewer/layouts/compressed.json.gz",
+            f"/viewer/layouts/{compressed_name}",
             method="HEAD",
         )
         assert status == 200

@@ -92,5 +92,23 @@ export function resolveLayoutUrl(
 ): string {
   const input = value.trim();
   if (!input) throw new TypeError("Layout URL is empty");
-  return new URL(input, catalogUrl).href;
+  const resolved = new URL(input, catalogUrl);
+  if (resolved.protocol !== "http:" && resolved.protocol !== "https:") {
+    throw new TypeError("Layout URL must use HTTP or HTTPS");
+  }
+  return resolved.href;
+}
+
+/** Optional debug override; unlike catalog entries, this may use another origin. */
+export function layoutUrlFromQuery(documentUrl: string | URL): string | null {
+  const pageUrl = new URL(documentUrl);
+  let value = pageUrl.searchParams.get("url")?.trim();
+  if (!value) return null;
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    value = value.slice(1, -1).trim();
+  }
+  return value ? resolveLayoutUrl(value, pageUrl) : null;
 }
