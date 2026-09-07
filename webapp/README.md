@@ -86,6 +86,11 @@ Pickers search the complete name list but display at most 50 matches. Large
 dependency trees start closed, page each branch in groups of 50, and expand one
 branch at a time.
 
+Dependency children sharing a reference curve and reference frame are ordered by
+their placement's curve station, using the sum of their `ts` shifts. Equal stations
+keep their original order; entries with other origins or no comparable station
+keep their existing slots. This display ordering requires no geometry resolution.
+
 Wheel zoom moves the camera toward the geometry under the pointer while keeping
 that detail at the same screen position. Rectangle zoom uses the depth of the
 geometry inside the box, preferring its center, and approaches that plane. Empty

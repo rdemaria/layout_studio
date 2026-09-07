@@ -11,6 +11,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import {
+  canonicalFrameName,
   getLayoutDependencyGraph,
   type LayoutData,
   type LayoutDependencyEdge,
@@ -66,6 +67,44 @@ function expandableBranchIds(
   return result;
 }
 
+function sortChildrenByPath(
+  edges: LayoutDependencyEdge[],
+  graphNodes: Map<string, LayoutDependencyNode>,
+  layout: LayoutData,
+) {
+  const groups = new Map<string, { edge: LayoutDependencyEdge; index: number; path: number }[]>();
+  edges.forEach((edge, index) => {
+    if (edge.relation === "feature_reference") return;
+    const node = graphNodes.get(edge.from);
+    if (!node) return;
+    const position = node.kind === "object" ? layout.objects[node.name]?.position : undefined;
+    const placement = node.kind === "curve"
+      ? layout.reference_curves[node.name]?.starting_frame : position;
+    if (!placement) return;
+    const reference = placement.reference;
+    const curve = reference.kind === "curve" ? reference.curve : position?.reference_curve;
+    const shifts = placement.transformation.filter(([operation]) => operation === "ts");
+    if (!curve || (reference.kind !== "curve" && shifts.length === 0)) return;
+    const path = shifts.reduce((sum, [, amount]) => sum + amount, 0);
+    if (!Number.isFinite(path)) return;
+    const origin = JSON.stringify([
+      curve, reference.kind,
+      reference.kind === "object_frame" ? reference.object : "",
+      reference.kind === "object_frame" ? canonicalFrameName(reference.frame) : "",
+    ]);
+    const group = groups.get(origin) ?? [];
+    group.push({ edge, index, path });
+    groups.set(origin, group);
+  });
+
+  // A common origin makes ts offsets comparable without resolving geometry.
+  // Keep other origins and unknown stations in their existing slots.
+  for (const group of groups.values()) {
+    const sorted = [...group].sort((a, b) => a.path - b.path);
+    group.forEach(({ index }, rank) => { edges[index] = sorted[rank].edge; });
+  }
+}
+
 export function buildLayoutDependencyHierarchy(layout: LayoutData) {
   const graph = getLayoutDependencyGraph(layout);
   const graphNodes = new Map(graph.nodes.map((node) => [node.id, node]));
@@ -100,6 +139,10 @@ export function buildLayoutDependencyHierarchy(layout: LayoutData) {
         : "position_reference",
     });
     dependentsByAnchor.set("world", edges);
+  }
+
+  for (const edges of dependentsByAnchor.values()) {
+    sortChildrenByPath(edges, graphNodes, layout);
   }
 
   return { graphNodes, dependentsByAnchor };

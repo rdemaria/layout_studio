@@ -704,8 +704,16 @@ test("orients the dependency hierarchy outward from World", async () => {
     "/app/layout-data.ts",
   );
   const layout = structuredClone(SAMPLE_LAYOUT);
+  layout.objects.QF1.position.transformation = [["ts", 6], ["ts", 2.5]];
   layout.objects.Detector.position.reference_curve = "ring";
   layout.objects.Detector.position.transformation = [["ts", 0]];
+  for (const name of ["OtherFrame", "NoStation", "Earlier", "Tied"]) {
+    layout.objects[name] = structuredClone(layout.objects.Detector);
+  }
+  layout.objects.OtherFrame.position.reference.frame = "anchor";
+  layout.objects.OtherFrame.position.transformation = [["ts", -1]];
+  layout.objects.NoStation.position.transformation = [["tt", -0.4]];
+  layout.objects.Earlier.position.transformation = [["ts", -0.3], ["ts", 0.1]];
 
   const { dependentsByAnchor } = buildLayoutDependencyHierarchy(
     parseLayout(layout),
@@ -720,8 +728,8 @@ test("orients the dependency hierarchy outward from World", async () => {
       edge.relation,
     ]),
     [
-      ["object:QF1", "position_reference"],
       ["object:BPM1", "position_reference"],
+      ["object:QF1", "position_reference"],
     ],
   );
   assert.deepEqual(
@@ -730,7 +738,13 @@ test("orients the dependency hierarchy outward from World", async () => {
       edge.relation,
       edge.frame,
     ]),
-    [["object:Detector", "position_reference", "magnetic_exit"]],
+    [
+      ["object:Earlier", "position_reference", "magnetic_exit"],
+      ["object:OtherFrame", "position_reference", "anchor"],
+      ["object:NoStation", "position_reference", "magnetic_exit"],
+      ["object:Detector", "position_reference", "magnetic_exit"],
+      ["object:Tied", "position_reference", "magnetic_exit"],
+    ],
   );
   assert.ok(getLayoutDependencyGraph(layout).edges.some((edge) =>
     edge.from === "object:Detector" && edge.to === "curve:ring" &&
