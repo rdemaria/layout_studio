@@ -49,7 +49,7 @@
 
 \title{A Curve-Referenced Positioning Model for Beam-Line Layouts}
 \author{}
-\date{Prototype specification --- 7 September 2026}
+\date{Implementation specification --- revision 1}
 
 \begin{document}
 \maketitle
@@ -59,8 +59,9 @@ This document specifies a three-dimensional positioning model intended to serve
 both installation geometry and beam-line modelling.  A layout contains named
 reference curves, reusable types, and positioned object instances.  Every
 position of interest is a right-handed frame, not merely a point.  Curves and
-type geometries may be curved; object placement can align any named target frame
-of an object with a transformed curve frame or with a frame on another object.
+type geometries may be curved; object placement aligns an anchor-relative target
+frame with a transformed world, curve, or object frame. Frame dependencies must
+be acyclic, and every required station inference must have a unique solution.
 The document defines the canonical data model and the mathematics required to
 obtain world frames, optional swept mechanical geometry, independent magnetic
 and beam-interface axes and boundary planes, and a curve station inferred from
@@ -77,7 +78,7 @@ The model separates three concerns:
   \item A \emph{reference curve} supplies a stable spatial path and a frame at
         every path coordinate.
   \item A \emph{type} owns optional reusable mechanical geometry, optional
-        magnetic geometry, and named local frames.
+        magnetic geometry, and named frames with reference dependencies.
   \item An \emph{object} is an instance of a type.  It owns its type name,
         a positioning rule, and an optional beam-interface definition.
         Without an explicit beam interface it uses the type's magnetic axis.
@@ -89,7 +90,13 @@ from a subsequently derived accelerator model.  This specification defines
 geometry and placement; it does not prescribe how a MAD-X sequence or its
 misalignments are fitted to that geometry.
 
-The JSON format described here is the canonical prototype format.  Readers normalize the former base-frame name \texttt{center} to
+The JSON format described here is the canonical format for revision 1. The
+companion \texttt{layout.schema.json} gives its structural grammar, and
+\texttt{conformance/cases.json} contains frozen input/output examples.
+Both companion files are distributed in the same directory as this document.
+The schema, equations, validation rules, and numerical policy form one contract.
+Passing the schema alone does not establish geometric validity.
+Readers normalize the former base-frame name \texttt{center} to
 \texttt{anchor}; writers emit only the new spelling.  All stored lengths are in metres, curvatures in
 metres$^{-1}$, and angles in radians.  A user interface may display degrees or
 different step sizes without changing the stored units.
@@ -220,6 +227,44 @@ A layout is a strict JSON object with exactly three name-indexed dictionaries:
 \end{equation}
 Names are non-empty strings and are unique within their dictionary.  Every
 symbolic reference must resolve.
+
+JSON object member names must be unique after decoding JSON string escapes,
+at every nesting level. Duplicate members are errors, even if their values
+are identical. Dictionary order has no semantic effect; array order does.
+Names are case-sensitive, without trimming or Unicode normalization, and
+the curve, type, and object namespaces are separate. A name such as
+\texttt{world} has no special meaning when used as a dictionary key.
+The \texttt{center} import alias applies only to referenced frame names and
+position targets; it does not rename objects, types, or curves.
+
+All numeric values are JSON numbers, converted to finite IEEE~754 binary64
+values. Strings and booleans are not numbers. Omission is distinct from
+\texttt{null}; no member in this format permits \texttt{null}. Unsupported
+members are errors. Empty root dictionaries and empty \texttt{frames} or
+\texttt{transformation} collections are valid; a curve's segment list is not
+empty. Writers preserve omitted optional groups and emit \texttt{anchor}
+instead of the legacy frame alias. Whitespace, numeric spelling, and dictionary
+member order need not survive serialization. Canonical text is UTF-8 JSON.
+
+\begin{center}
+\small
+\begin{tabular}{p{0.22\linewidth}p{0.68\linewidth}}
+\toprule
+Record & Required members and omission rules \\
+\midrule
+Layout & Exactly \texttt{reference\_curves}, \texttt{types}, \texttt{objects}. \\
+Curve & \texttt{color}, \texttt{starting\_frame}, \texttt{segments}. \\
+Curve starting frame & \texttt{reference}, \texttt{transformation}; no local-frame reference. \\
+Type & \texttt{color}, \texttt{frames}. Shape and its mechanical-center placement are optional; the latter requires a shape. Magnetic fields are one optional complete group. \\
+Feature placement & \texttt{transformation}; omitted \texttt{reference} means the instance anchor. \\
+Object & \texttt{type}, \texttt{position}; beam fields are one optional complete group. \\
+Object position & \texttt{target}, \texttt{reference}, \texttt{transformation}; \texttt{reference\_curve} follows the contextual rules below. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+No format-version member is inserted into a layout: revision identifiers
+belong to this specification, its schema, and its conformance corpus.
 
 \subsection{References and transformations}
 
@@ -354,12 +399,40 @@ type definition are resolved using that instance's explicit or inherited
 interface. Local-frame references are not permitted on curve starting frames
 or the primary reference of an object position.
 
+An uninstantiated type is a reusable template, not a set of world frames.
+Its local references and cycles are checked even before instantiation, except
+that the three beam frames may be supplied by a future object's interface.
+On every actual object, all references must resolve to frames that exist on
+that instance. An explicit object-frame reference to that same instance is
+equivalent to a local-frame reference for target-root checking.
+
 For a curve reference, \texttt{ts} selects a station using the ordinary
 curve-reference rule. For every other feature reference, operations execute
 sequentially; \texttt{ts} advances using the type's mechanical curvature and
 roll from the current frame, with a straight fallback for a shapeless type.
 Feature placements do not perform the position-specific station-inference
 rule and have no \texttt{reference\_curve} field.
+
+\begin{center}
+\small
+\begin{tabular}{p{0.40\linewidth}p{0.50\linewidth}}
+\toprule
+Context & Meaning of \texttt{ts} \\
+\midrule
+Any placement referencing a curve & Sum all \texttt{ts} values to select an absolute station, then apply the other operations in list order. \\
+Object position referencing world or an object frame & Require \texttt{reference\_curve}; infer a station from the unmodified reference origin, add summed \texttt{ts}, then apply the remaining operations. \\
+Feature placement with an omitted, local, world, or object-frame reference & Execute each \texttt{ts} in place using the owning type's mechanical curvature and roll, or a straight path if shapeless. \\
+Curve starting frame referencing world or an object frame & \texttt{ts} is invalid. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+For station-inferred object positions, the presence of any \texttt{ts}
+entry triggers inference, even if its value or their sum is zero. In particular,
+adding \texttt{["ts",0]} can change an off-curve reference frame into a curve
+frame. Operations preceding \texttt{ts} in the list do not alter the point
+used for inference. A feature's local \texttt{ts} always uses its owning
+type's mechanical path, regardless of the geometry of its reference frame.
 
 \subsection{Objects}
 
@@ -498,7 +571,7 @@ For a world reference, or an object-frame reference with no \texttt{ts},
     &=\Apply(\Frame_{A.f}^{W},\ops).
   \label{eq:ordinary-reference}
 \end{align}
-An object-frame reference containing \texttt{ts} uses the special projection
+In an object position, a world or object-frame reference containing \texttt{ts} uses the special projection
 semantics in Section~\ref{sec:s-inference}.
 
 The starting frame of a curve is obtained using the same rules.  It may refer
@@ -674,6 +747,58 @@ cycle: an external feature may be independent of its object's anchor.
 Caches must be scoped to one evaluation snapshot so changing a placement or
 reference immediately affects all its dependents.
 
+\subsection{Existence and uniqueness of the solution}
+\label{sec:uniqueness}
+
+For a fixed input snapshot, a successful full resolution must produce exactly
+one world frame for every object anchor and every existing instance frame,
+and one function $s\mapsto\Frame_C(s)$ for every reference curve. Unused
+frames and hidden viewer layers obey the same rules. A parser may return an
+unresolved document after structural and reference validation; it must not
+describe that result as a successfully solved layout. Geometric validity
+additionally requires every necessary station inference and every frame
+evaluation to succeed. Failure is explicit; a missing reference, cyclic
+dependency, or ambiguous station must never be replaced by an identity frame,
+a first-listed solution, or a solution selected by dictionary order.
+
+The following conditions establish uniqueness:
+\begin{enumerate}
+  \item Each named entity and frame has exactly one definition. Implicit frames
+        have the single derivation specified here; explicit beam data overrides
+        inheritance completely. No competing definition or additional alignment
+        equation is attached to the same frame.
+  \item The fixed world frame is the root datum. All actual reference chains
+        resolve in the finite, acyclic graph of curves, anchors, and individual
+        frames. Local target chains are evaluated separately with their own
+        anchor set to the identity.
+  \item Every positioning target is rooted in its own anchor. Its local pose
+        is a rigid, invertible transform, so Equation~\eqref{eq:object-frame}
+        fixes all six degrees of freedom of that anchor.
+  \item Each required station inference has a unique isolated closest solution
+        under Section~\ref{sec:s-inference} and the numerical policy below.
+\end{enumerate}
+
+To see sufficiency, evaluate the graph in topological order. The world frame
+is unique. Given unique predecessors, ordinary operations, type path advances,
+boundary derivations, and curve propagation are single-valued. A valid target
+has a unique inverse, and a successful station inference supplies one station.
+Every subsequent node is therefore unique by induction. Different valid
+topological orders give the same mathematical solution. There is no fitting,
+choice of an initial guess, or free global translation or rotation.
+
+A cyclic definition is rejected even if interpreting it as a system of
+implicit constraints might yield a solution. Local references need not form a
+single object-level tree: external features can make an object-level graph
+cyclic while the actual frame graph remains acyclic. It is the latter graph
+that controls validity.
+
+An externally referenced feature does not acquire an additional constraint
+from its owner's anchor. Moving an anchor moves precisely the features rooted
+in that anchor; externally rooted features follow their own references. A
+rigid piece of equipment can be described by rooting all its features in its
+anchor. These alternatives are explicit definitions, not alternative solutions
+of one definition.
+
 \section{Inferring a curve station from a world point}
 \label{sec:s-inference}
 
@@ -728,8 +853,10 @@ If $(A,B)\ne(0,0)$, all roots can be enumerated as
   \label{eq:arc-root-enumeration}
 \end{equation}
 retaining only those for which $u=\theta/\kappa$ is inside the segment.  If
-$A=B=0$, every station in the segment is a solution; geometrically, $P$ is at
-the circular arc's centre.  Identical roots at segment junctions are
+$A=B=0$, every station in the segment is a solution; geometrically, $P$ lies
+on the line through the circular arc's centre parallel to its binormal. This
+includes the centre itself and points displaced out of the bend plane.
+Identical roots at segment junctions are
 de-duplicated.
 
 \subsection{Closest-solution rule}
@@ -757,8 +884,16 @@ Accordingly:
   \item if a closest continuous interval exists, evaluation raises the same
         ambiguity exception.
 \end{itemize}
-Floating-point implementations shall use scale-aware distance and path
-tolerances both for equality and for junction de-duplication.
+The numerical policy in Section~\ref{sec:numerics} defines distance equality
+and junction de-duplication for binary64 implementations.
+
+This format does not declare periodic curves. Even if a curve closes in
+position and orientation, $s=0$ and $s=L_C$ remain distinct stations. They
+must not be merged by spatial coincidence or by a path tolerance. If both
+are closest, inference is ambiguous. Following either station by a path shift
+need not give the same result, because out-of-domain evaluation uses straight
+tangent continuation. An explicit curve reference with a specified station
+selects the intended branch without invoking inference.
 
 \subsection{Applying the inferred station}
 
@@ -854,13 +989,123 @@ A conforming reader rejects a layout when any of the following holds:
   \item a stored frame uses any reserved implicit name, including a name whose
         optional feature is absent;
   \item \texttt{ts} is used with a world or object-frame reference outside an
-        object position, or it is used in an object position without the
+        object position or feature placement (in particular on a curve's
+        starting frame), or it is used in an object position without the
         required \texttt{reference\_curve};
   \item \texttt{reference\_curve} is supplied with a primary curve reference;
   \item the reference dependency graph contains a cycle;
+  \item a target's reference chain is not rooted in its own object's anchor;
   \item station inference has no solution or has equidistant closest solutions,
-        including a closest continuous interval.
+        including a closest continuous interval;
+  \item arithmetic produces non-finite frames, an unrepresentable curvature,
+        or cumulative segment stations that fail to increase strictly.
 \end{itemize}
+
+Structural, reference, and cycle failures can be detected before geometry is
+evaluated. Missing-station, ambiguous-station, and numeric-range failures arise
+during resolution. Implementations may use different exception classes or
+messages, but must distinguish these failure categories from success.
+
+\section{Binary64 numerical policy}
+\label{sec:numerics}
+
+The equations above define the exact model. This section fixes the numerical
+decisions needed for interoperable binary64 implementations. Bitwise equality
+of different math libraries is not required; the conformance corpus states
+absolute and relative tolerances for output matrix entries. Dictionary order
+must not affect classification or geometry. Operation lists and sums of
+\texttt{ts} values are evaluated from left to right in their stored order.
+
+\subsection{Stable straight and arc evaluation}
+
+Only a zero bend angle denotes a straight curve segment. Small nonzero bends
+must retain their displacement and rotation. For signed distance $d$ and
+$\theta=\kappa d$, use the cancellation-free coefficients
+\begin{align}
+ a_t &= d\,\operatorname{sinc}(\theta),\\
+ a_n &= d\,\frac{\theta}{2}\,
+                 \operatorname{sinc}(\theta/2)^2,
+\end{align}
+where $\operatorname{sinc}(z)=\sin(z)/z$ and
+$\operatorname{sinc}(0)=1$. The displacement is $a_t\mathbf{t}+a_n\mathbf{n}$.
+For $|z|<10^{-4}$, the following polynomial is sufficient:
+\begin{equation}
+ \operatorname{sinc}(z)=1-z^2/6+z^4/120-z^6/5040.
+\end{equation}
+An algebraically equivalent stable evaluation is allowed. Direct subtraction
+of nearly equal values in $1-\cos\theta$ must not erase a resolvable bend.
+Rotations retain the same signed $\theta$, however small.
+
+\subsection{Station candidates and tolerances}
+
+Let $\epsilon=2^{-52}$, $G=\max(1,L_C)$, and let $H$ be the maximum of 1,
+the absolute Cartesian components of $P$, and those of all segment boundary
+origins including the curve's final endpoint. Lengths in these expressions
+are numerical values in metres. Define
+\begin{align}
+ \tau_x &= \max(10^{-10},10^{-12}G,32\epsilon H),\\
+ \tau_s &= 10^{-9}G.
+\end{align}
+The same $\tau_x$ is used for nearest-distance equality in both engines;
+no additional relative tolerance based on the distance to $P$ is added.
+For segment length $L_i$ and curvature $\kappa_i$, its endpoint tolerance is
+\begin{equation}
+ e_i=\min\left(\tau_s,\tau_x,L_i/4,
+          \frac{\pi}{4|\kappa_i|}\right),
+\end{equation}
+with the last term omitted for a straight segment. This cap prevents a path
+tolerance from collapsing distinct ends or multiple turns on a short arc.
+
+For a curved segment, use scaled coefficients
+\begin{equation}
+ a=\kappa_i\mathbf{q}\cdot\mathbf{t}_i,\qquad
+ b=\kappa_i\mathbf{q}\cdot\mathbf{n}_i-1,
+ \qquad \mathbf{q}=P-\mathbf{r}_i.
+\end{equation}
+Treat the segment as a continuous solution interval when
+\begin{equation}
+ \sqrt{a^2+b^2}\le
+ \max\left(|\kappa_i|\tau_x,
+      32\epsilon\max(1,|\kappa_i|\lVert\mathbf{q}\rVert)\right).
+\end{equation}
+Otherwise enumerate $\theta=\operatorname{atan2}(a,-b)+k\pi$. This phase
+avoids subtracting nearly equal angles for a small bend. In enumerating $k$,
+expand $[\min(0,\alpha_i),\max(0,\alpha_i)]$ by
+$\max(10^{-13},|\kappa_i|e_i)$ radians. Keep only candidates whose
+$u=\theta/\kappa_i$ lies in $[-e_i,L_i+e_i]$. Apply that same distance
+interval test to straight-segment candidates.
+
+Canonicalize $|u|\le e_i$ to $u=0$ and
+$|u-L_i|\le e_i$ to $u=L_i$; all other accepted local distances remain
+unchanged. Express endpoint candidates using their stored cumulative boundary
+station. Repeated endpoint candidates at the same junction are one candidate.
+All distinct station numbers remain distinct, including 0 and $L_C$ on a
+closed curve. If distinct non-endpoint roots collapse to the same binary64
+station, report a numeric-resolution error rather than silently merging them.
+
+Evaluate the distances of isolated candidates at their canonicalized stations.
+For a continuous interval, evaluate the distance at its midpoint. Let $d_*$
+be the minimum over these distances. A candidate or interval is closest when
+$|d-d_*|\le\tau_x$. Exactly one closest isolated candidate is required;
+otherwise report missing or ambiguous station as appropriate. A continuous
+interval farther than the closest isolated candidate by more than $\tau_x$
+does not prevent resolution.
+
+Numerically unresolved equalities are errors, not permission to pick a branch.
+Bounds-based search acceleration may skip a segment only after proving that
+it cannot contribute a closest candidate or an ambiguity within $\tau_x$.
+The two implementations' different search orders must preserve this rule.
+
+\subsection{Range and validity of computed results}
+
+Inputs, cumulative stations, derived curvatures, accumulated shifts, and
+computed frame entries must remain finite and representable. A nonzero bend
+whose curvature underflows to zero is a numeric-range failure. Adding a
+positive segment length must strictly increase its cumulative station.
+Overflow or loss of station resolution must not be replaced by zero curvature,
+clamping to a different station, or an identity frame. Resource limits may
+abort a computation explicitly; an aborted or partial computation is not a
+successful resolution of the complete layout.
 
 \section{World-pose readout and MAD-X-style angles}
 \label{sec:madx-angles}
@@ -957,21 +1202,36 @@ orientations.
 
 \section{Conformance notes}
 
+The companion \texttt{conformance/cases.json} is a language-neutral corpus.
+Each case contains either a layout value or raw \texttt{json\_text}, optional
+expected object-frame matrices, optional curve-frame matrices at specified
+stations, and optional station queries. Matrices are row-major arrays of four
+rows using the column convention of Equation~\eqref{eq:frame-matrix}; they
+are world poses, not operation lists. Expected failures specify a parsing or
+resolution stage and a failure category. The corpus's \texttt{schema\_valid}
+flag describes structural schema validity only; a structurally valid case can
+still have a missing reference, a cycle, an invalid target, or a geometric
+failure. Duplicate raw JSON members must be rejected before any dictionary
+representation discards them.
+
+Output entries pass when
+$|v-v_*|\le\texttt{matrix\_atol}+\texttt{matrix\_rtol}|v_*|$.
+Station query expectations distinguish a unique station from ambiguity.
+An independent implementation should also repeat cases with dictionary members
+reordered while preserving array order, resolve every existing instance frame,
+and verify all expected errors without rendering a scene. The accompanying
+corpus README describes its fields and invocation in the two maintained engines.
+
 The homogeneous frame is the authoritative result.  Sampled polylines,
 triangulated display meshes, transparent rendering, curve tubes, hover frames,
 and station snapping are viewer concerns and do not change the equations in
 this specification.  In particular, implementations should evaluate an arc
 analytically for positioning even if they draw it using samples.
 
-Named frames carry both an origin and an orientation because alignment normally
-requires both.  Magnetic and beam-interface entry and exit locations are
-likewise frames; their $x$--$y$ planes are the physically meaningful
-transverse planes.  A viewer may independently hide the magnetic axis and its
-entry/exit frames, the beam-interface axis and its entry/exit frames, and
-stored named frames; these three layers are off by default.
-Visibility does not change
-which frames exist or how they resolve.  A later beam-physics export may use
-the beam-interface frames to construct element boundaries and derive survey
-offsets or misalignments without changing the installation layout itself.
+Named frames include orientation because alignment fixes it. Magnetic and beam
+entry/exit frames define transverse $x$--$y$ planes. The magnetic, beam, and
+stored-frame viewer layers are independently switchable and off by default.
+Visibility does not alter frame existence or resolution. A physics export can
+derive element boundaries and survey offsets from these frames.
 
 \end{document}

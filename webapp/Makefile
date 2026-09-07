@@ -31,6 +31,7 @@ lint: install
 	$(NPM) run lint
 
 test: install
+	$(NODE) --test tests/conformance.test.mjs
 	$(NODE) --test tests/layout-data.test.mjs
 	$(NODE) --test tests/feature-references.test.mjs
 	$(NODE) --test tests/viewport-navigation.test.mjs

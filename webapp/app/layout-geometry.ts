@@ -80,6 +80,13 @@ function cloneFrame(frame: Frame): Frame {
   } as Frame;
 }
 
+function finiteFrame(frame: Frame): Frame {
+  if (![...frame.o, ...frame.x, ...frame.y, ...frame.s].every(Number.isFinite)) {
+    throw new Error("Frame exceeds numeric range");
+  }
+  return frame;
+}
+
 function applyOperations(frame: Frame, operations: TransformOperation[]): Frame {
   const next = cloneFrame(frame);
   for (const [name, value] of operations) {
@@ -95,7 +102,7 @@ function applyOperations(frame: Frame, operations: TransformOperation[]): Frame 
       next.s = normalize(rotate(next.s, axis, value));
     }
   }
-  return next;
+  return finiteFrame(next);
 }
 
 function curvatureNormal(frame: Frame, roll: number): Vec3 {
@@ -115,22 +122,27 @@ export function advanceFrame(
   angle: number,
   roll: number,
 ): Frame {
-  if (Math.abs(angle) < 1e-10) {
-    return { ...cloneFrame(frame), o: add(frame.o, scale(frame.s, segmentLength)) };
+  if (![segmentLength, angle, roll].every(Number.isFinite)) throw new Error("Bend exceeds numeric range");
+  if (angle === 0) {
+    return finiteFrame({...cloneFrame(frame), o: add(frame.o, scale(frame.s, segmentLength))});
   }
+  const sinc = (value: number) => {
+    if (Math.abs(value) >= 1e-4) return Math.sin(value) / value;
+    const square = value * value;
+    return 1 + square * (-1 / 6 + square * (1 / 120 - square / 5040));
+  };
   const normal = curvatureNormal(frame, roll);
   const bendAxis = normalize(cross(frame.s, normal));
-  const radius = segmentLength / angle;
   const displacement = add(
-    scale(frame.s, radius * Math.sin(angle)),
-    scale(normal, radius * (1 - Math.cos(angle))),
+    scale(frame.s, segmentLength * sinc(angle)),
+    scale(normal, segmentLength * (0.5 * angle * sinc(angle / 2) ** 2)),
   );
-  return {
+  return finiteFrame({
     o: add(frame.o, displacement),
     x: normalize(rotate(frame.x, bendAxis, angle)),
     y: normalize(rotate(frame.y, bendAxis, angle)),
     s: normalize(rotate(frame.s, bendAxis, angle)),
-  };
+  });
 }
 
 type LocalPath = { curvature: number; roll: number };
@@ -175,12 +187,12 @@ function transformVector(frame: Frame, vector: Vec3): Vec3 {
 }
 
 function composeFrames(parent: Frame, local: Frame): Frame {
-  return {
+  return finiteFrame({
     o: add(parent.o, transformVector(parent, local.o)),
     x: normalize(transformVector(parent, local.x)),
     y: normalize(transformVector(parent, local.y)),
     s: normalize(transformVector(parent, local.s)),
-  };
+  });
 }
 
 function invertFrame(frame: Frame): Frame {
@@ -327,7 +339,7 @@ export type SceneScope =
   | { kind: "curve" | "object"; name: string };
 
 function curveTolerances(curve: CurveGeometry, point?: Vec3) {
-  let geometryScale = Math.max(1, curve.totalLength);
+  const geometryScale = Math.max(1, curve.totalLength);
   let absoluteScale = Math.max(
     1,
     Math.abs(point?.[0] ?? 0),
@@ -335,13 +347,6 @@ function curveTolerances(curve: CurveGeometry, point?: Vec3) {
     Math.abs(point?.[2] ?? 0),
   );
   for (const segment of curve.segments) {
-    geometryScale = Math.max(geometryScale, segment.length);
-    if (Math.abs(segment.angle) >= 1e-10) {
-      geometryScale = Math.max(
-        geometryScale,
-        Math.abs(segment.length / segment.angle),
-      );
-    }
     absoluteScale = Math.max(
       absoluteScale,
       Math.abs(segment.startFrame.o[0]),
@@ -349,6 +354,8 @@ function curveTolerances(curve: CurveGeometry, point?: Vec3) {
       Math.abs(segment.startFrame.o[2]),
     );
   }
+  const end = curve.samples.at(-1)?.frame.o ?? [0, 0, 0];
+  absoluteScale = Math.max(absoluteScale, ...end.map(Math.abs));
   return {
     distance: Math.max(
       1e-10,
@@ -456,38 +463,50 @@ export function transverseCurvePathsForPoint(
 ): CurvePathSolutions {
   const tolerance = curveTolerances(curve, point);
   const candidates: number[] = [];
+  const endpointCandidates = new Set<number>();
   const intervals: { start: number; end: number }[] = [];
 
-  const addCandidate = (path: number) => {
+  const addCandidate = (path: number, endpoint: boolean) => {
     const clamped = Math.max(0, Math.min(curve.totalLength, path));
-    if (
-      !candidates.some((candidate) =>
-        Math.abs(candidate - clamped) <= tolerance.path
-      )
-    ) {
-      candidates.push(clamped);
+    if (candidates.includes(clamped)) {
+      if (!(endpoint && endpointCandidates.has(clamped))) throw new Error("Distinct curve roots exceed station numeric resolution");
+      return;
     }
+    candidates.push(clamped);
+    if (endpoint) endpointCandidates.add(clamped);
   };
 
   for (const segment of curve.segments) {
     const offset = sub(point, segment.startFrame.o);
-    if (Math.abs(segment.angle) < 1e-10) {
+    const curvature = segment.angle / segment.length;
+    if (!Number.isFinite(curvature) || (segment.angle !== 0 && curvature === 0)) {
+      throw new Error("Curve curvature exceeds numeric range");
+    }
+    const endpointTolerance = Math.min(tolerance.path, tolerance.distance, segment.length / 4,
+      curvature === 0 ? Infinity : Math.PI / (4 * Math.abs(curvature)));
+    const canonicalLocal = (distance: number) => {
+      if (Math.abs(distance) <= endpointTolerance) return 0;
+      if (Math.abs(distance - segment.length) <= endpointTolerance) return segment.length;
+      return distance;
+    };
+    if (segment.angle === 0) {
       const distance = dot(offset, segment.startFrame.s);
       if (
-        distance >= -tolerance.path &&
-        distance <= segment.length + tolerance.path
+        distance >= -endpointTolerance &&
+        distance <= segment.length + endpointTolerance
       ) {
-        addCandidate(segment.path + Math.max(0, Math.min(segment.length, distance)));
+        const local = canonicalLocal(distance);
+        addCandidate(segment.path + local, local === 0 || local === segment.length);
       }
       continue;
     }
 
-    const curvature = segment.angle / segment.length;
-    const radius = 1 / curvature;
     const normal = curvatureNormal(segment.startFrame, segment.roll);
-    const a = dot(offset, segment.startFrame.s);
-    const b = dot(offset, normal) - radius;
-    if (Math.hypot(a, b) <= tolerance.distance) {
+    const a = curvature * dot(offset, segment.startFrame.s);
+    const b = curvature * dot(offset, normal) - 1;
+    const degeneracyTolerance = Math.max(Math.abs(curvature) * tolerance.distance,
+      32 * Number.EPSILON * Math.max(1, Math.abs(curvature) * length(offset)));
+    if (Math.hypot(a, b) <= degeneracyTolerance) {
       intervals.push({
         start: segment.path,
         end: segment.path + segment.length,
@@ -495,12 +514,12 @@ export function transverseCurvePathsForPoint(
       continue;
     }
 
-    const firstRoot = Math.atan2(b, a) + Math.PI / 2;
+    const firstRoot = Math.atan2(a, -b);
     const minimum = Math.min(0, segment.angle);
     const maximum = Math.max(0, segment.angle);
     const angleTolerance = Math.max(
-      1e-12,
-      tolerance.path * Math.abs(curvature),
+      1e-13,
+      endpointTolerance * Math.abs(curvature),
     );
     const firstIndex = Math.ceil(
       (minimum - firstRoot - angleTolerance) / Math.PI,
@@ -512,12 +531,11 @@ export function transverseCurvePathsForPoint(
       const theta = firstRoot + index * Math.PI;
       const distance = theta / curvature;
       if (
-        distance >= -tolerance.path &&
-        distance <= segment.length + tolerance.path
+        distance >= -endpointTolerance &&
+        distance <= segment.length + endpointTolerance
       ) {
-        addCandidate(
-          segment.path + Math.max(0, Math.min(segment.length, distance)),
-        );
+        const local = canonicalLocal(distance);
+        addCandidate(segment.path + local, local === 0 || local === segment.length);
       }
     }
   }
@@ -1051,21 +1069,11 @@ export function* buildSceneSteps(
     const cached = curveCache.get(name);
     if (cached) return cached;
     if (stack.includes(`curve:${name}`)) {
-      return {
-        name,
-        samples: [{ p: [0, 0, 0], frame: IDENTITY, path: 0 }],
-        segments: [],
-        totalLength: 0,
-      };
+      throw new Error(`Reference dependency cycle: curve ${name}`);
     }
     const definition = layout.reference_curves[name];
     if (!definition) {
-      return {
-        name,
-        samples: [{ p: [0, 0, 0], frame: IDENTITY, path: 0 }],
-        segments: [],
-        totalLength: 0,
-      };
+      throw new Error(`Unknown curve ${name}`);
     }
     let frame = resolveTransformation(
       definition.starting_frame,
@@ -1077,6 +1085,11 @@ export function* buildSceneSteps(
     ];
     const segments: CurveSegmentGeometry[] = [];
     for (const [segmentLength, angle, roll] of definition.segments) {
+      const nextPath = path + segmentLength;
+      const curvature = angle / segmentLength;
+      if (!Number.isFinite(nextPath) || nextPath <= path || !Number.isFinite(curvature) || (angle !== 0 && curvature === 0)) {
+        throw new Error(`Curve ${name} exceeds numeric range`);
+      }
       segments.push({
         startFrame: cloneFrame(frame),
         path,
@@ -1106,7 +1119,7 @@ export function* buildSceneSteps(
         });
       }
       frame = advanceFrame(frame, segmentLength, angle, roll);
-      path += segmentLength;
+      path = nextPath;
     }
     const geometry = { name, samples, segments, totalLength: path };
     curveCache.set(name, geometry);
@@ -1183,7 +1196,7 @@ export function* buildSceneSteps(
     if (cached) return cached;
     if (stack.includes(`object:${name}`)) throw new Error(`Reference dependency cycle: object ${name}`);
     const object = layout.objects[name];
-    if (!object) return cloneFrame(IDENTITY);
+    if (!object) throw new Error(`Unknown object ${name}`);
     const targetFrame = resolveObjectPosition(
       object.position,
       [...stack, `object:${name}`],

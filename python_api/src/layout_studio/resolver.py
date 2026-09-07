@@ -331,16 +331,16 @@ def advance(
 
     if distance == 0.0:
         return frame
-    theta = curvature * distance
-    if curvature == 0.0 or abs(theta) < 1.0e-14:
-        # Retain the first curvature-dependent displacement term for a tiny but
-        # non-zero theta; this makes advance continuous down to machine scale.
-        tangent_distance = distance * (1.0 - theta * theta / 6.0)
-        normal_distance = curvature * distance * distance * (0.5 - theta * theta / 24.0)
-    else:
-        tangent_distance = sin(theta) / curvature
-        # 2 sin(theta/2)^2 avoids cancellation in 1-cos(theta).
-        normal_distance = 2.0 * sin(theta / 2.0) ** 2 / curvature
+    theta = _finite(curvature * distance, what="bend angle")
+
+    def sinc(value: float) -> float:
+        if abs(value) < 1.0e-4:
+            square = value * value
+            return 1.0 + square * (-1.0 / 6.0 + square * (1.0 / 120.0 - square / 5040.0))
+        return sin(value) / value
+
+    tangent_distance = distance * sinc(theta)
+    normal_distance = distance * (0.5 * theta * sinc(theta / 2.0) ** 2)
 
     c_roll, s_roll = cos(roll), sin(roll)
     normal_local = np.array((-c_roll, -s_roll, 0.0), dtype=float)
@@ -352,7 +352,7 @@ def advance(
     if theta != 0.0:
         bend_axis_local = np.array((s_roll, -c_roll, 0.0), dtype=float)
         relative[:3, :3] = rodrigues(bend_axis_local, theta)
-    return frame @ relative
+    return _matrix4(frame @ relative, copy=False)
 
 
 def apply_operations(matrix: ArrayLike, operations: Iterable[Any]) -> FloatMatrix:
@@ -372,7 +372,7 @@ def apply_operations(matrix: ArrayLike, operations: Iterable[Any]) -> FloatMatri
                 path=f"operations.{index}",
             )
         result = result @ elementary_matrix(name, value)
-    return result
+    return _matrix4(result, copy=False)
 
 
 apply_ordinary_operations = apply_operations
@@ -400,7 +400,7 @@ def apply_type_operations(
             result = advance(result, value, curvature, roll)
         else:
             result = result @ elementary_matrix(name, value)
-    return result
+    return _matrix4(result, copy=False)
 
 
 def inverse_operations(operations: Iterable[Any]) -> list[tuple[str, float]]:
@@ -1087,11 +1087,6 @@ class Resolver:
                 raise ValidationError(str(exc), path=f"{base}.beam_center") from exc
             if beam is not None:
                 center = beam[0]
-                if getattr(center, "reference", None) is not None:
-                    raise ValidationError(
-                        "object-local beam_center cannot have an explicit reference",
-                        path=f"{base}.beam_center.reference",
-                    )
                 self._validation_operations(_operations(center), f"{base}.beam_center.transformation")
             position = getattr(object_, "position", None)
             if position is None:
@@ -1200,8 +1195,14 @@ class Resolver:
                     "invalid curve segment",
                     path=f"reference_curves.{self._name_for('curve', curve)}.segments.{index}",
                 )
-            current = advance(current, length, angle / length, roll)
-            stations.append(stations[-1] + length)
+            curvature = angle / length
+            if not isfinite(curvature) or (angle != 0.0 and curvature == 0.0):
+                raise EvaluationError("curve curvature exceeds numeric range")
+            current = advance(current, length, curvature, roll)
+            station = stations[-1] + length
+            if not isfinite(station) or station <= stations[-1]:
+                raise EvaluationError("curve stations exceed numeric range")
+            stations.append(station)
             starts.append(current)
         # starts contains the frame at every boundary; frame i starts segment i.
         result = segments, stations, starts
@@ -1234,14 +1235,7 @@ class Resolver:
         )
 
         total = float(boundaries[-1])
-        bent = np.abs(angles) >= 1.0e-10
-        bend_radii = np.abs(lengths[bent] / angles[bent])
-        geometry_scale = max(
-            1.0,
-            total,
-            float(np.max(lengths)),
-            float(np.max(bend_radii)) if bend_radii.size else 1.0,
-        )
+        geometry_scale = max(1.0, total)
         result = _CurveStationGeometry(
             boundaries=boundaries,
             starts=starts,
@@ -1253,7 +1247,6 @@ class Resolver:
             sphere_radii=0.5 * lengths,
             base_origin_scale=max(
                 1.0,
-                total,
                 float(np.max(np.abs(np.stack(start_values)[:, :3, 3]))),
             ),
             path_tolerance=max(1.0e-12, 1.0e-9 * max(1.0, total)),
@@ -1275,14 +1268,14 @@ class Resolver:
                     f"station {station:g} is before curve domain [0, {total:g}]",
                     path=path,
                 )
-            return starts[0] @ tt_matrix(station)
+            return _matrix4(starts[0] @ tt_matrix(station), copy=False)
         if station > total:
             if not extrapolate:
                 raise StationOutOfRangeError(
                     f"station {station:g} is after curve domain [0, {total:g}]",
                     path=path,
                 )
-            return starts[-1] @ tt_matrix(station - total)
+            return _matrix4(starts[-1] @ tt_matrix(station - total), copy=False)
         if station <= 0.0:
             return starts[0].copy()
         if station >= total:
@@ -1628,6 +1621,7 @@ class Resolver:
             target = getattr(position, "target", "anchor")
             target_local = self._object_local_frame_matrix(object_, target)
             center = desired @ _rigid_inverse(target_local)
+        center = _matrix4(center, copy=False)
         self._object_anchors[id(object_)] = center
         return center
 
@@ -1677,24 +1671,23 @@ class Resolver:
 
     @staticmethod
     def _deduplicate_candidates(
-        candidates: list[tuple[float, float]], path_tolerance: float
+        candidates: list[tuple[float, float, bool]],
     ) -> list[tuple[float, float]]:
         if not candidates:
             return []
         candidates.sort(key=lambda item: item[0])
         result = [candidates[0]]
-        for station, distance in candidates[1:]:
-            previous_station, previous_distance = result[-1]
-            if abs(station - previous_station) <= path_tolerance:
-                # Junction roots describe the same frame; average the tiny
-                # station discrepancy and retain the more accurate distance.
-                result[-1] = (
-                    0.5 * (station + previous_station),
-                    min(distance, previous_distance),
-                )
+        for station, distance, endpoint in candidates[1:]:
+            previous_station, previous_distance, previous_endpoint = result[-1]
+            if station == previous_station:
+                if not (endpoint and previous_endpoint):
+                    raise EvaluationError("distinct curve roots exceed station numeric resolution")
+                # Endpoint roots have already been canonicalized to their
+                # common boundary. Distinct station numbers must never merge.
+                result[-1] = (station, min(distance, previous_distance), True)
             else:
-                result.append((station, distance))
-        return result
+                result.append((station, distance, endpoint))
+        return [(station, distance) for station, distance, _ in result]
 
     def _infer_station(self, curve: Any, point: Any) -> float:
         point = _point3(point)
@@ -1704,14 +1697,13 @@ class Resolver:
             return cached
         geometry = self._curve_station_geometry(curve)
         boundaries = geometry.boundaries
-        total = float(boundaries[-1])
         origin_scale = max(geometry.base_origin_scale, float(np.max(np.abs(point))))
         path_tolerance = geometry.path_tolerance
         geometry_tolerance = max(
             geometry.geometry_scale_tolerance,
             32.0 * _EPS * origin_scale,
         )
-        isolated: list[tuple[float, float]] = []
+        candidates: list[tuple[float, float, bool]] = []
         intervals: list[float] = []
 
         # Every centreline point in a segment is within half its path length
@@ -1731,10 +1723,7 @@ class Resolver:
         for index_value in order:
             index = int(index_value)
             if isfinite(closest_seen):
-                distance_tolerance = max(
-                    geometry_tolerance,
-                    1.0e-10 * max(1.0, closest_seen, origin_scale),
-                )
+                distance_tolerance = geometry_tolerance
                 if float(lower_bounds[index]) > closest_seen + distance_tolerance:
                     break
 
@@ -1747,56 +1736,59 @@ class Resolver:
             q = point - origin
             curvature = float(geometry.curvatures[index])
 
-            # The web implementation and reference conformance notes treat
-            # vanishingly small bend angles as straight to avoid enormous arc
-            # radii dominating otherwise scale-aware tolerances.
-            if abs(angle) < 1.0e-10:
+            endpoint_tolerance = min(path_tolerance, geometry_tolerance, length / 4.0)
+            if curvature != 0.0:
+                endpoint_tolerance = min(endpoint_tolerance, pi / (4.0 * abs(curvature)))
+
+            def canonical_local(local: float) -> float:
+                if abs(local) <= endpoint_tolerance:
+                    return 0.0
+                if abs(local - length) <= endpoint_tolerance:
+                    return length
+                return local
+
+            if angle == 0.0:
                 local = float(np.dot(q, tangent))
-                if -path_tolerance <= local <= length + path_tolerance:
-                    local = min(max(local, 0.0), length)
+                if -endpoint_tolerance <= local <= length + endpoint_tolerance:
+                    local = canonical_local(local)
                     candidate_origin = advance(start, local, 0.0, roll)[:3, 3]
                     distance = float(np.linalg.norm(point - candidate_origin))
-                    isolated.append((float(boundaries[index]) + local, distance))
+                    station = float(boundaries[index + 1]) if local == length else float(boundaries[index]) + local
+                    candidates.append((station, distance, local == 0.0 or local == length))
                     closest_seen = min(closest_seen, distance)
                 continue
 
             normal = -cos(roll) * x_axis - sin(roll) * y_axis
-            a = float(np.dot(q, tangent))
-            b = float(np.dot(q, normal)) - 1.0 / curvature
-            local_scale = max(
-                origin_scale, abs(1.0 / curvature), float(np.linalg.norm(q))
-            )
+            a = curvature * float(np.dot(q, tangent))
+            b = curvature * float(np.dot(q, normal)) - 1.0
             degeneracy_tolerance = max(
-                geometry_tolerance,
-                32.0 * _EPS * local_scale,
+                abs(curvature) * geometry_tolerance,
+                32.0 * _EPS * max(1.0, abs(curvature) * float(np.linalg.norm(q))),
             )
-            if abs(a) <= degeneracy_tolerance and abs(b) <= degeneracy_tolerance:
+            if hypot(a, b) <= degeneracy_tolerance:
                 distance = float(np.linalg.norm(point - geometry.midpoints[index]))
                 intervals.append(distance)
                 closest_seen = min(closest_seen, distance)
                 continue
 
-            base = atan2(b, a) + 0.5 * pi
+            base = atan2(a, -b)
             low, high = sorted((0.0, angle))
-            theta_tolerance = max(1.0e-13, abs(curvature) * path_tolerance)
+            theta_tolerance = max(1.0e-13, abs(curvature) * endpoint_tolerance)
             k_min = ceil((low - base - theta_tolerance) / pi)
             k_max = floor((high - base + theta_tolerance) / pi)
             for integer in range(k_min, k_max + 1):
                 theta = base + integer * pi
-                if theta < low and low - theta <= theta_tolerance:
-                    theta = low
-                elif theta > high and theta - high <= theta_tolerance:
-                    theta = high
                 local = theta / curvature
-                if local < -path_tolerance or local > length + path_tolerance:
+                if local < -endpoint_tolerance or local > length + endpoint_tolerance:
                     continue
-                local = min(max(local, 0.0), length)
+                local = canonical_local(local)
                 candidate_origin = advance(start, local, curvature, roll)[:3, 3]
                 distance = float(np.linalg.norm(point - candidate_origin))
-                isolated.append((float(boundaries[index]) + local, distance))
+                station = float(boundaries[index + 1]) if local == length else float(boundaries[index]) + local
+                candidates.append((station, distance, local == 0.0 or local == length))
                 closest_seen = min(closest_seen, distance)
 
-        isolated = self._deduplicate_candidates(isolated, path_tolerance)
+        isolated = self._deduplicate_candidates(candidates)
         all_distances = [distance for _, distance in isolated] + intervals
         curve_name = self._name_for("curve", curve)
         path = f"reference_curves.{curve_name}"
@@ -1806,10 +1798,7 @@ class Resolver:
             )
 
         closest_distance = min(all_distances)
-        distance_tolerance = max(
-            geometry_tolerance,
-            1.0e-10 * max(1.0, closest_distance, origin_scale),
-        )
+        distance_tolerance = geometry_tolerance
         if any(
             abs(distance - closest_distance) <= distance_tolerance
             for distance in intervals
@@ -1827,10 +1816,6 @@ class Resolver:
                 "multiple equidistant closest station solutions", path=path
             )
         station = closest[0]
-        if abs(station) <= path_tolerance:
-            station = 0.0
-        elif abs(station - total) <= path_tolerance:
-            station = total
         self._station_inference_cache[cache_key] = station
         return station
 

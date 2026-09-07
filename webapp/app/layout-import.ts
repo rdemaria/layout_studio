@@ -1,6 +1,8 @@
+import {parseLayoutJson} from "./layout-json";
+
 /** Read a local JSON file directly as text. */
 export async function readLayoutJson(source: Blob): Promise<unknown> {
-  return JSON.parse(await source.text());
+  return parseLayoutJson(await source.text());
 }
 
 export async function fetchLayoutJson(
@@ -9,5 +11,5 @@ export async function fetchLayoutJson(
 ): Promise<unknown> {
   const response = await fetch(url, { signal });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
+  return parseLayoutJson(await response.text());
 }

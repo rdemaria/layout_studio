@@ -642,7 +642,7 @@ export function shapePath(shape?: Shape): {
 }
 
 function parseColor(value: unknown, label: string): string {
-  if (typeof value !== "string" || !/^#[0-9a-f]{6}$/i.test(value)) {
+  if (typeof value !== "string" || value.length !== 7 || !/^#[0-9a-f]{6}$/i.test(value)) {
     throw new Error(`${label} must be a six-digit hex color`);
   }
   return value;

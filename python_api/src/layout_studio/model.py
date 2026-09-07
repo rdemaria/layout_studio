@@ -90,6 +90,15 @@ def _fail(message: str, *, path: str | None = None) -> ValidationError:
     return ValidationError(message, path=path)
 
 
+def _unique_json_members(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _fail(f"duplicate JSON member {key!r}")
+        result[key] = value
+    return result
+
+
 def _finite(value: object, label: str, *, path: str | None = None) -> float:
     """Return *value* as a finite float, rejecting booleans."""
 
@@ -229,7 +238,7 @@ class JsonValue:
             source = text if isinstance(text, str) else _decode_json_bytes(bytes(text))
 
         try:
-            value = json.loads(source)
+            value = json.loads(source, object_pairs_hook=_unique_json_members)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValidationError(f"invalid JSON: {exc}") from exc
         return cls.from_dict(value)
@@ -1365,9 +1374,10 @@ class Position(OwnedValue):
             Reference.from_dict(mapping["reference"]),
             operations=(Operation.from_dict(value) for value in operations),
         )
-        reference_curve = mapping.get("reference_curve")
-        if reference_curve is not None:
-            reference_curve = _name(reference_curve, "reference curve name")
+        reference_curve = (
+            _name(mapping["reference_curve"], "reference curve name")
+            if "reference_curve" in mapping else None
+        )
         return cls(
             frame,
             target=_name(mapping["target"], "target frame name"),

@@ -1,5 +1,6 @@
 import LayoutLoadWorker from "./layout-load.worker?worker&inline";
 import {parseLayout, type LayoutData} from "./layout-data";
+import {parseLayoutJson} from "./layout-json";
 import {endLayoutProfile, beginLayoutProfile} from "./layout-performance";
 
 export type LayoutSource = {url: string} | {file: Blob} | {value: unknown};
@@ -12,8 +13,8 @@ export async function loadLayoutAsync(source: LayoutSource, signal?: AbortSignal
     if ("url" in source) {
       const response = await fetch(source.url, {signal});
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      value = await response.json();
-    } else value = "file" in source ? JSON.parse(await source.file.text()) : source.value;
+      value = parseLayoutJson(await response.text());
+    } else value = "file" in source ? parseLayoutJson(await source.file.text()) : source.value;
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     return parseLayout(value);
   }

@@ -1,4 +1,4 @@
-# Layout Python API — contract revision 0.6
+# Layout Python API — contract revision 0.7
 
 Status: implemented public-interface contract. Geometry is evaluated
 analytically and interactive views use the Layout Studio browser application.
@@ -21,6 +21,14 @@ independently from the installable package.
   URL is written instead.
 - References accept concise strings when their meaning is syntactically
   unambiguous; explicit reference classes remain the lossless fallback.
+- JSON text rejects duplicate member names, including names spelled with
+  different equivalent escapes. Optional members must be omitted rather than
+  set to `null`, including `reference_curve`.
+- Geometry follows revision 1 of `specifications/layout_positioning_model.tex`
+  and its schema and conformance corpus. `Layout.validate()` and
+  `Resolver.validate()` check structure and references; full geometric
+  resolution can additionally fail on missing/ambiguous stations or numeric
+  range. A successfully solved layout has a unique set of world frames.
 
 ## Public API
 

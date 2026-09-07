@@ -1,0 +1,545 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/rdemaria/layout_studio/main/specifications/layout.schema.json",
+  "title": "Layout Studio positioning format, revision 1",
+  "description": "Structural grammar. Duplicate-member checks, name resolution, frame dependencies, target anchoring and numerical resolution are additional normative checks.",
+  "type": "object",
+  "properties": {
+    "reference_curves": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/curve"
+      }
+    },
+    "types": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/type"
+      }
+    },
+    "objects": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/name"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/object"
+      }
+    }
+  },
+  "required": [
+    "reference_curves",
+    "types",
+    "objects"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "number": {
+      "type": "number",
+      "minimum": -1.7976931348623157e+308,
+      "maximum": 1.7976931348623157e+308
+    },
+    "positive": {
+      "type": "number",
+      "minimum": -1.7976931348623157e+308,
+      "maximum": 1.7976931348623157e+308,
+      "exclusiveMinimum": 0
+    },
+    "color": {
+      "type": "string",
+      "minLength": 7,
+      "maxLength": 7,
+      "pattern": "^#[0-9a-fA-F]{6}$"
+    },
+    "world": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "world"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "curveReference": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "curve"
+        },
+        "curve": {
+          "$ref": "#/$defs/name"
+        }
+      },
+      "required": [
+        "kind",
+        "curve"
+      ],
+      "additionalProperties": false
+    },
+    "objectReference": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "object_frame"
+        },
+        "object": {
+          "$ref": "#/$defs/name"
+        },
+        "frame": {
+          "$ref": "#/$defs/name"
+        }
+      },
+      "required": [
+        "kind",
+        "object",
+        "frame"
+      ],
+      "additionalProperties": false
+    },
+    "localReference": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "local_frame"
+        },
+        "frame": {
+          "$ref": "#/$defs/name"
+        }
+      },
+      "required": [
+        "kind",
+        "frame"
+      ],
+      "additionalProperties": false
+    },
+    "reference": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/world"
+        },
+        {
+          "$ref": "#/$defs/curveReference"
+        },
+        {
+          "$ref": "#/$defs/objectReference"
+        }
+      ]
+    },
+    "placementReference": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/world"
+        },
+        {
+          "$ref": "#/$defs/curveReference"
+        },
+        {
+          "$ref": "#/$defs/objectReference"
+        },
+        {
+          "$ref": "#/$defs/localReference"
+        }
+      ]
+    },
+    "operation": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "enum": [
+            "tx",
+            "ty",
+            "tt",
+            "ts",
+            "rx",
+            "ry",
+            "rs"
+          ]
+        },
+        {
+          "$ref": "#/$defs/number"
+        }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/operation"
+      }
+    },
+    "hasTs": {
+      "type": "array",
+      "contains": {
+        "type": "array",
+        "prefixItems": [
+          {
+            "const": "ts"
+          },
+          {
+            "$ref": "#/$defs/number"
+          }
+        ],
+        "items": false,
+        "minItems": 2,
+        "maxItems": 2
+      }
+    },
+    "placement": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/placementReference"
+        },
+        "transformation": {
+          "$ref": "#/$defs/operations"
+        }
+      },
+      "required": [
+        "transformation"
+      ],
+      "additionalProperties": false
+    },
+    "transformation": {
+      "type": "object",
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/reference"
+        },
+        "transformation": {
+          "$ref": "#/$defs/operations"
+        }
+      },
+      "required": [
+        "reference",
+        "transformation"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "transformation": {
+                "$ref": "#/$defs/hasTs"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reference": {
+                "$ref": "#/$defs/curveReference"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "position": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/name"
+        },
+        "reference": {
+          "$ref": "#/$defs/reference"
+        },
+        "reference_curve": {
+          "$ref": "#/$defs/name"
+        },
+        "transformation": {
+          "$ref": "#/$defs/operations"
+        }
+      },
+      "required": [
+        "target",
+        "reference",
+        "transformation"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "reference": {
+                "$ref": "#/$defs/curveReference"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reference_curve"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "allOf": [
+              {
+                "not": {
+                  "properties": {
+                    "reference": {
+                      "$ref": "#/$defs/curveReference"
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "transformation": {
+                    "$ref": "#/$defs/hasTs"
+                  }
+                }
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "reference_curve"
+            ]
+          }
+        }
+      ]
+    },
+    "shape": {
+      "oneOf": [
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "box"
+            },
+            {
+              "$ref": "#/$defs/positive"
+            },
+            {
+              "$ref": "#/$defs/positive"
+            },
+            {
+              "$ref": "#/$defs/positive"
+            },
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "$ref": "#/$defs/number"
+            }
+          ],
+          "items": false,
+          "minItems": 6,
+          "maxItems": 6
+        },
+        {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "cylinder"
+            },
+            {
+              "$ref": "#/$defs/positive"
+            },
+            {
+              "$ref": "#/$defs/positive"
+            },
+            {
+              "$ref": "#/$defs/number"
+            },
+            {
+              "$ref": "#/$defs/number"
+            }
+          ],
+          "items": false,
+          "minItems": 5,
+          "maxItems": 5
+        }
+      ]
+    },
+    "curve": {
+      "type": "object",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/color"
+        },
+        "starting_frame": {
+          "$ref": "#/$defs/transformation"
+        },
+        "segments": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "$ref": "#/$defs/positive"
+              },
+              {
+                "$ref": "#/$defs/number"
+              },
+              {
+                "$ref": "#/$defs/number"
+              }
+            ],
+            "items": false,
+            "minItems": 3,
+            "maxItems": 3
+          }
+        }
+      },
+      "required": [
+        "color",
+        "starting_frame",
+        "segments"
+      ],
+      "additionalProperties": false
+    },
+    "type": {
+      "type": "object",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/color"
+        },
+        "frames": {
+          "type": "object",
+          "propertyNames": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/name"
+              },
+              {
+                "not": {
+                  "enum": [
+                    "anchor",
+                    "center",
+                    "mechanical_center",
+                    "magnetic_center",
+                    "magnetic_entry",
+                    "magnetic_exit",
+                    "beam_center",
+                    "beam_entry",
+                    "beam_exit"
+                  ]
+                }
+              }
+            ]
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/placement"
+          }
+        },
+        "shape": {
+          "$ref": "#/$defs/shape"
+        },
+        "mechanical_center": {
+          "$ref": "#/$defs/placement"
+        },
+        "magnetic_center": {
+          "$ref": "#/$defs/placement"
+        },
+        "magnetic_length": {
+          "$ref": "#/$defs/positive"
+        },
+        "magnetic_curvature": {
+          "$ref": "#/$defs/number"
+        },
+        "magnetic_roll": {
+          "$ref": "#/$defs/number"
+        }
+      },
+      "required": [
+        "color",
+        "frames"
+      ],
+      "additionalProperties": false,
+      "dependentRequired": {
+        "magnetic_center": [
+          "magnetic_length",
+          "magnetic_curvature",
+          "magnetic_roll"
+        ],
+        "magnetic_length": [
+          "magnetic_center",
+          "magnetic_curvature",
+          "magnetic_roll"
+        ],
+        "magnetic_curvature": [
+          "magnetic_center",
+          "magnetic_length",
+          "magnetic_roll"
+        ],
+        "magnetic_roll": [
+          "magnetic_center",
+          "magnetic_length",
+          "magnetic_curvature"
+        ],
+        "mechanical_center": [
+          "shape"
+        ]
+      }
+    },
+    "object": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/name"
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "beam_center": {
+          "$ref": "#/$defs/placement"
+        },
+        "beam_length": {
+          "$ref": "#/$defs/positive"
+        },
+        "beam_curvature": {
+          "$ref": "#/$defs/number"
+        },
+        "beam_roll": {
+          "$ref": "#/$defs/number"
+        }
+      },
+      "required": [
+        "type",
+        "position"
+      ],
+      "additionalProperties": false,
+      "dependentRequired": {
+        "beam_center": [
+          "beam_length",
+          "beam_curvature",
+          "beam_roll"
+        ],
+        "beam_length": [
+          "beam_center",
+          "beam_curvature",
+          "beam_roll"
+        ],
+        "beam_curvature": [
+          "beam_center",
+          "beam_length",
+          "beam_roll"
+        ],
+        "beam_roll": [
+          "beam_center",
+          "beam_length",
+          "beam_curvature"
+        ]
+      }
+    }
+  }
+}
