@@ -109,7 +109,7 @@ function curvatureNormal(frame: Frame, roll: number): Vec3 {
   );
 }
 
-function advanceFrame(
+export function advanceFrame(
   frame: Frame,
   segmentLength: number,
   angle: number,
@@ -261,7 +261,10 @@ export type ClosestCurvePathSolution = {
   paths: number[];
   distance?: number;
 };
+export type Bounds = { min: Vec3; max: Vec3 };
+
 export type ObjectGeometry = {
+  bounds?: Bounds;
   name: string;
   object: LayoutObject;
   typeName: string;
@@ -299,7 +302,16 @@ export type MagneticFrameGeometry =
   FeatureBoundaryFrameGeometry<MagneticBoundaryFrameName>;
 export type BeamFrameGeometry =
   FeatureBoundaryFrameGeometry<BeamBoundaryFrameName>;
+export type DeferredScene = {
+  objectByName: Map<string, ObjectGeometry>;
+  detail: (object: ObjectGeometry) => ObjectGeometry;
+  namedFrames: (object: string) => NamedFrameGeometry[];
+  feature: (object: string, kind: "magnetic" | "beam") => {axes: FeatureAxisGeometry[]; frames: FeatureBoundaryFrameGeometry[]};
+  resolveFrame: (object: string, name: string) => Frame;
+  cachedSolids: () => number;
+};
 export type SceneGeometry = {
+  deferred?: DeferredScene;
   curves: CurveGeometry[];
   objects: ObjectGeometry[];
   frames: NamedFrameGeometry[];
@@ -998,10 +1010,11 @@ function featurePlaneVertices(
   return localVertices.map((vertex) => localToWorld(frame, vertex));
 }
 
-export function buildScene(
+export function* buildSceneSteps(
   layout: LayoutData,
   scope: SceneScope = { kind: "layout" },
-): SceneGeometry {
+  options: {deferred?: boolean} = {},
+): Generator<{completed: number; total: number; preview?: SceneGeometry}, SceneGeometry> {
   if (
     scope.kind === "curve" &&
     !Object.hasOwn(layout.reference_curves, scope.name)
@@ -1071,7 +1084,7 @@ export function buildScene(
         angle,
         roll,
       });
-      const steps = Math.max(
+      const steps = options.deferred ? Math.max(1, Math.ceil(Math.abs(angle) / 0.03)) : Math.max(
         3,
         Math.min(
           100,
@@ -1238,89 +1251,28 @@ export function buildScene(
   const curves = curveNames.map((name) =>
     resolveCurve(name, []),
   );
-  const objects: ObjectGeometry[] = objectEntries.map(
-    ([name, object]) => {
-      const frame = resolveObject(name, []);
-      const type = layout.types[object.type];
-      if (!type.shape) {
-        return {
-          name,
-          object,
-          typeName: object.type,
-          type,
-          frame,
-          vertices: [],
-          faces: [],
-          edges: [],
-        };
-      }
-      const mechanicalFrame = resolveFrame(name, "mechanical_center", []);
-      const steps = sweepStepCount(type);
-      if (type.shape[0] === "box") {
-        const [, dx, dy, dz] = type.shape;
-        const crossSection: [number, number][] = [
-          [-dx / 2, -dy / 2],
-          [dx / 2, -dy / 2],
-          [dx / 2, dy / 2],
-          [-dx / 2, dy / 2],
-        ];
-        const vertices: Vec3[] = [];
-        for (let layer = 0; layer <= steps; layer += 1) {
-          const path = -dz / 2 + (dz * layer) / steps;
-          const sectionFrame = advanceLocalPath(
-            mechanicalFrame,
-            path,
-            mechanicalPath(type),
-          );
-          for (const [x, y] of crossSection) {
-            vertices.push(localToWorld(sectionFrame, [x, y, 0]));
-          }
-        }
-        return {
-          name,
-          object,
-          typeName: object.type,
-          type,
-          frame,
-          mechanicalFrame,
-          vertices,
-          ...sweepTopology(4, steps),
-        };
-      }
+  const objects: ObjectGeometry[] = [];
+  if (options.deferred) {
+    const points = curves.flatMap(curve => curve.samples.map(s => s.p));
+    const min: Vec3 = [-1,-1,-1], max: Vec3 = [1,1,1];
+    if (points.length) for (let i = 0; i < 3; i++) {
+      min[i] = Math.min(...points.map(p => p[i])); max[i] = Math.max(...points.map(p => p[i]));
+    }
+    yield {completed: 0, total: objectEntries.length, preview: {curves, objects: [], frames: [], magneticAxes: [], magneticFrames: [], beamAxes: [], beamFrames: [], bounds: {min, max}}};
+  }
+  for (const [name, object] of objectEntries) {
+    const frame = resolveObject(name, []);
+    const type = layout.types[object.type];
+    const mechanicalFrame = type.shape ? resolveFrame(name, "mechanical_center", []) : undefined;
+    let geometry: ObjectGeometry = {name, object, typeName: object.type, type, frame,
+      ...(mechanicalFrame ? {mechanicalFrame} : {}), vertices: [], faces: [], edges: []};
+    if (options.deferred) geometry.bounds = objectDisplayBounds(geometry);
+    else geometry = materializeObject(geometry);
+    objects.push(geometry);
+    if (objects.length % 128 === 0) yield {completed: objects.length, total: objectEntries.length};
+  }
 
-      const [, radius, dz] = type.shape;
-      const sides = 18;
-      const vertices: Vec3[] = [];
-      for (let layer = 0; layer <= steps; layer += 1) {
-        const path = -dz / 2 + (dz * layer) / steps;
-        const sectionFrame = advanceLocalPath(
-          mechanicalFrame,
-          path,
-          mechanicalPath(type),
-        );
-        for (let index = 0; index < sides; index += 1) {
-          const angle = (index / sides) * Math.PI * 2;
-          vertices.push(localToWorld(sectionFrame, [
-            Math.cos(angle) * radius,
-            Math.sin(angle) * radius,
-            0,
-          ]));
-        }
-      }
-      return {
-        name,
-        object,
-        typeName: object.type,
-        type,
-        frame,
-        mechanicalFrame,
-        vertices,
-        ...sweepTopology(sides, steps, true),
-      };
-    },
-  );
-
-  const frames = objectEntries.flatMap(([objectName, object]) =>
+  const frames = options.deferred ? [] : objectEntries.flatMap(([objectName, object]) =>
     Object.keys(layout.types[object.type].frames).map((frameName) => ({
       object: objectName,
       name: frameName,
@@ -1333,7 +1285,7 @@ export function buildScene(
   const magneticFrames: MagneticFrameGeometry[] = [];
   const beamAxes: FeatureAxisGeometry[] = [];
   const beamFrames: BeamFrameGeometry[] = [];
-  for (const [objectName, object] of objectEntries) {
+  for (const [objectName, object] of options.deferred ? [] : objectEntries) {
     const type = layout.types[object.type];
     if (hasMagneticFeature(type)) {
       const centerFrame = resolveFrame(objectName, "magnetic_center", []);
@@ -1407,6 +1359,7 @@ export function buildScene(
   }
   for (const object of objects) {
     includePosition(object.frame.o);
+    if (object.bounds) { includePosition(object.bounds.min); includePosition(object.bounds.max); }
     for (const vertex of object.vertices) includePosition(vertex);
   }
   for (const frame of frames) includePosition(frame.frame.o);
@@ -1424,7 +1377,39 @@ export function buildScene(
     max[1] = 1;
     max[2] = 1;
   }
+  const solids = new Map<string, ObjectGeometry>();
+  const deferred: DeferredScene | undefined = options.deferred ? {
+    objectByName: new Map(objects.map(object => [object.name, object])),
+    detail(object) {
+      let result = solids.get(object.name);
+      if (result) solids.delete(object.name);
+      else result = materializeObject(object);
+      solids.set(object.name, result);
+      if (solids.size > 2048) solids.delete(solids.keys().next().value!);
+      return result;
+    },
+    cachedSolids: () => solids.size,
+    resolveFrame: (object, name) => resolveFrame(object, name, []),
+    namedFrames: (objectName) => {
+      const object = layout.objects[objectName];
+      return Object.keys(layout.types[object.type].frames).map(name => ({object: objectName, name,
+        typeName: object.type, frame: resolveFrame(objectName, name, [])}));
+    },
+    feature: (objectName, kind) => {
+      const object = layout.objects[objectName], type = layout.types[object.type];
+      const axis = kind === "beam" ? effectiveBeamFeature(type, object) : hasMagneticFeature(type)
+        ? {length: type.magnetic_length!, curvature: type.magnetic_curvature!, roll: type.magnetic_roll!} : undefined;
+      if (!axis) return {axes: [], frames: []};
+      const centerFrame = resolveFrame(objectName, `${kind}_center`, []);
+      return {axes: [buildFeatureAxisGeometry(objectName, object.type, kind, centerFrame, axis.length, axis.curvature, axis.roll)],
+        frames: (kind === "beam" ? BEAM_BOUNDARY_FRAME_NAMES : MAGNETIC_BOUNDARY_FRAME_NAMES).map(name => {
+          const frame = resolveFrame(objectName, name, []);
+          return {object: objectName, name, typeName: object.type, kind, frame, vertices: featurePlaneVertices(type, frame, axis.length)};
+        })};
+    },
+  } : undefined;
   return {
+    ...(deferred ? {deferred} : {}),
     curves,
     objects,
     frames,
@@ -1434,4 +1419,102 @@ export function buildScene(
     beamFrames,
     bounds: { min, max },
   };
+}
+
+/** Generate a solid only when its display footprint warrants it. */
+export function materializeObject(objectGeometry: ObjectGeometry): ObjectGeometry {
+  const {name, object, type, frame, mechanicalFrame} = objectGeometry;
+  if (!type.shape || !mechanicalFrame) return objectGeometry;
+  const steps = sweepStepCount(type);
+  if (type.shape[0] === "box") {
+    const [, dx, dy, dz] = type.shape;
+    const crossSection: [number, number][] = [
+      [-dx / 2, -dy / 2],
+      [dx / 2, -dy / 2],
+      [dx / 2, dy / 2],
+      [-dx / 2, dy / 2],
+    ];
+    const vertices: Vec3[] = [];
+    for (let layer = 0; layer <= steps; layer += 1) {
+      const path = -dz / 2 + (dz * layer) / steps;
+      const sectionFrame = advanceLocalPath(
+        mechanicalFrame,
+        path,
+        mechanicalPath(type),
+      );
+      for (const [x, y] of crossSection) {
+        vertices.push(localToWorld(sectionFrame, [x, y, 0]));
+      }
+    }
+    return {
+      name,
+      object,
+      typeName: object.type,
+      type,
+      frame,
+      mechanicalFrame,
+      vertices,
+      ...sweepTopology(4, steps),
+    };
+  }
+
+  const [, radius, dz] = type.shape;
+  const sides = 18;
+  const vertices: Vec3[] = [];
+  for (let layer = 0; layer <= steps; layer += 1) {
+    const path = -dz / 2 + (dz * layer) / steps;
+    const sectionFrame = advanceLocalPath(
+      mechanicalFrame,
+      path,
+      mechanicalPath(type),
+    );
+    for (let index = 0; index < sides; index += 1) {
+      const angle = (index / sides) * Math.PI * 2;
+      vertices.push(localToWorld(sectionFrame, [
+        Math.cos(angle) * radius,
+        Math.sin(angle) * radius,
+        0,
+      ]));
+    }
+  }
+  return {
+    name,
+    object,
+    typeName: object.type,
+    type,
+    frame,
+    mechanicalFrame,
+    vertices,
+    ...sweepTopology(sides, steps, true),
+  };
+}
+
+/** Conservative bounds of the continuous sweep, including between mesh rings. */
+export function objectDisplayBounds(object: ObjectGeometry): Bounds {
+  const frame = object.mechanicalFrame ?? object.frame;
+  const path = object.type.shape ? mechanicalPath(object.type) : {length: 0, curvature: 0, roll: 0};
+  const shape = object.type.shape;
+  const hx = shape ? (shape[0] === "box" ? Math.abs(shape[1]) / 2 : Math.abs(shape[1])) : 0;
+  const hy = shape ? (shape[0] === "box" ? Math.abs(shape[2]) / 2 : Math.abs(shape[1])) : 0;
+  const halfLength = Math.abs(shapePath(shape).length) / 2;
+  // The distance travelled along a curved centerline is an upper bound on
+  // displacement. Straight shapes get tight rotated-box bounds.
+  const extent = [0, 1, 2].map(i => path.curvature
+    ? halfLength + Math.hypot(hx, hy)
+    : Math.abs(frame.x[i]) * hx + Math.abs(frame.y[i]) * hy + Math.abs(frame.s[i]) * halfLength);
+  return {min: frame.o.map((v,i) => v - extent[i]) as Vec3,
+    max: frame.o.map((v,i) => v + extent[i]) as Vec3};
+}
+
+export function objectDisplayLine(object: ObjectGeometry): Vec3[] {
+  if (!object.type.shape || !object.mechanicalFrame) return [object.frame.o];
+  const {length, curvature, roll} = shapePath(object.type.shape);
+  return [-0.5, 0, 0.5].map(t => advanceFrame(object.mechanicalFrame!, t * length, t * length * curvature, roll).o);
+}
+
+export function buildScene(layout: LayoutData, scope: SceneScope = {kind: "layout"}, options: {deferred?: boolean} = {}): SceneGeometry {
+  const steps = buildSceneSteps(layout, scope, options);
+  let next = steps.next();
+  while (!next.done) next = steps.next();
+  return next.value;
 }

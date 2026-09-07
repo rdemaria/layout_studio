@@ -36,10 +36,9 @@ import type {
 import {
   NON_CURVE_TRANSFORM_NAMES,
   TRANSFORM_NAMES,
-  getLayoutFrameDependencies,
-  layoutFrameNodeId,
-  objectFrameNames,
 } from "./layout-data";
+
+import { matchingNames, referenceCandidates } from "./layout-reference-options";
 
 import { NumberInput } from "./number-input";
 export { NumberInput } from "./number-input";
@@ -69,14 +68,20 @@ export function NamePicker({
   value,
   onSelect,
   onRename,
+  isAllowed,
 }: {
   label: string;
   names: string[];
   value: string;
   onSelect: (name: string) => void;
   onRename?: (from: string, to: string) => void;
+  isAllowed?: (name: string) => boolean;
 }) {
   const inputId = useId();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const matches = useMemo(() => pickerOpen ? matchingNames(names, query, isAllowed) : [value],
+    [names, query, isAllowed, pickerOpen, value]);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState(value);
@@ -159,7 +164,10 @@ export function NamePicker({
         <div className="name-picker-row">
           <Combobox<string>
             value={value}
-            items={names}
+            items={matches}
+            filter={null}
+            onOpenChange={(open) => { setPickerOpen(open); if (!open) setQuery(""); }}
+            onInputValueChange={(text, details) => { if (details.reason === "input-change") setQuery(text); }}
             limit={SEARCH_RESULT_LIMIT}
             autoHighlight
             onValueChange={(next) => {
@@ -369,41 +377,10 @@ export function ReferenceEditor({
     value: Transformation & Partial<Pick<ObjectPosition, "reference_curve">>,
   ) => void;
 }) {
-  const reverseDependencies = useMemo(() => {
-    const dependents = new Map<string, string[]>();
-    for (const [from, dependencies] of getLayoutFrameDependencies(layout)) {
-      for (const to of dependencies) {
-        const list = dependents.get(to) ?? [];
-        list.push(from);
-        dependents.set(to, list);
-      }
-    }
-    return dependents;
-  }, [layout]);
-  const { curveNames, objectNames, objectFrames } = useMemo(() => {
-    const unsafeReferences = new Set<string>();
-    const pending = [`${owner.kind}:${owner.name}`];
-    while (pending.length) {
-      const node = pending.pop()!;
-      if (unsafeReferences.has(node)) continue;
-      unsafeReferences.add(node);
-      for (const dependent of reverseDependencies.get(node) ?? []) {
-        pending.push(dependent);
-      }
-    }
-    const objectFrames = new Map(Object.entries(layout.objects).map(([name, object]) => [name,
-      objectFrameNames(layout.types[object.type], object).filter(
-        (frame) => !unsafeReferences.has(layoutFrameNodeId(name, frame))),
-    ]));
-    return {
-      curveNames: Object.keys(layout.reference_curves).filter(
-        (name) => !unsafeReferences.has(`curve:${name}`),
-      ),
-      objectNames: [...objectFrames].filter(([, frames]) => frames.length > 0).map(([name]) => name),
-      objectFrames,
-    };
-  }, [layout, owner.kind, owner.name, reverseDependencies]);
-  const frameNamesForObject = (objectName: string) => objectFrames.get(objectName) ?? [];
+  const candidates = useMemo(() => referenceCandidates(layout, owner), [layout, owner.kind, owner.name]);
+  const curveNames = useMemo(() => Object.keys(layout.reference_curves).filter(candidates.curveAllowed), [layout.reference_curves, candidates]);
+  const objectNames = useMemo(() => Object.keys(layout.objects), [layout.objects]);
+  const frameNamesForObject = candidates.frames;
   const reference = value.reference;
   const referenceCurve = owner.kind === "object" ? value.reference_curve : undefined;
   const hasPathLookup = value.transformation.some(([name]) => name === "ts");
@@ -459,7 +436,8 @@ export function ReferenceEditor({
       });
     } else {
       if (!objectNames.length) return;
-      const object = objectNames[0];
+      const object = objectNames.find(name => frameNamesForObject(name).length > 0);
+      if (!object) return;
       const frame = frameNamesForObject(object)[0];
       const carriedCurve = reference.kind === "curve"
         ? reference.curve
@@ -515,6 +493,7 @@ export function ReferenceEditor({
             <NamePicker
               label="Object"
               names={objectNames}
+              isAllowed={(name) => frameNamesForObject(name).length > 0}
               value={reference.object}
               onSelect={(object) => {
                 const frame = frameNamesForObject(object)[0];

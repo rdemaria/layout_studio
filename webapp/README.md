@@ -23,6 +23,7 @@ npm test
 interface tests.
 
 For the SPS performance analysis and profiling commands, see [PERFORMANCE.md](PERFORMANCE.md).
+For the large-machine implementation and LHC measurements, see [LHC-PERFORMANCE.md](LHC-PERFORMANCE.md).
 
 ## Standalone build
 
@@ -48,11 +49,15 @@ wheel. Do not add a second generated HTML copy under `python_api`.
 - `app/page.tsx` — editor state and top-level workspace.
 - `app/layout-data.ts` — canonical JSON model and validation.
 - `app/layout-geometry.ts` — curve, frame, object, and snapping mathematics.
+- `app/layout-lod.ts` — spatial indexing, automatic detail levels and adaptive curves.
+- `app/layout-layers.ts` — deferred optional layers with independent bounds.
 - `app/layout-viewport.tsx` — interactive 3D projection and viewer controls.
 - `app/viewport-zoom.ts` — depth picking from the rendered geometry for zoom.
 - `app/python-bridge.ts` — validated external-control protocol for Python.
 - `app/layout-url-catalog.ts` — catalog validation and debug URL resolution.
 - `app/layout-import.ts` — JSON loading from files and URLs.
+- `app/layout-load.ts`, `app/layout-load.worker.ts` — background JSON loading and validation.
+- `app/layout-edit.ts` — edits that copy only changed model branches.
 - `app/layout-controls.tsx` — reusable model-editing controls.
 - `app/curve-segment-editor.tsx` — lazily mounted segment editor with 50-row pages.
 - `app/dependency-tree.tsx` — World-rooted dependency view.
@@ -63,6 +68,23 @@ wheel. Do not add a second generated HTML copy under `python_api`.
 - `build/index.html` — generated standalone application.
 
 ## Zoom and display proportions
+
+Large machines use automatic detail levels. The overview shows grouped marks and
+centerlines; zooming in restores complete solids. Offscreen geometry is culled,
+and an onscreen selected object always receives full detail. Grouped marks select
+a representative object; use the searchable object picker for an exact name.
+The complete model remains available for editing and export.
+
+Loading and validation run in a worker. The reference curve appears first, with
+progress shown while object placement and indexing finish in short, cancellable
+batches. Optional frame and axis layers are built when enabled. Curve snap targets
+are prepared in the background for the detailed objects and layers currently in
+view; segment boundaries and exact analytic curve readouts remain available.
+These display choices do not change positioning or exported data.
+
+Pickers search the complete name list but display at most 50 matches. Large
+dependency trees start closed, page each branch in groups of 50, and expand one
+branch at a time.
 
 Wheel zoom moves the camera toward the geometry under the pointer while keeping
 that detail at the same screen position. Rectangle zoom uses the depth of the

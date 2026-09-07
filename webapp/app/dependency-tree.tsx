@@ -131,6 +131,7 @@ function DependencyBranch({
   onToggle,
   onSelect,
 }: DependencyBranchProps) {
+  const [page, setPage] = useState(0);
   const edges = dependentsByAnchor.get(node.id) ?? [];
   const hasChildren = Boolean(edges.length);
   const isOpen = hasChildren && expanded.has(branchId);
@@ -177,7 +178,7 @@ function DependencyBranch({
 
       {isOpen ? (
         <ul className="dependency-tree-group" role="group">
-          {edges.map((edge) => {
+          {edges.slice(page * 50, (page + 1) * 50).map((edge) => {
             const child = graphNodes.get(edge.from);
             if (!child) return null;
             const childBranchId = dependencyBranchId(branchId, edge);
@@ -216,6 +217,11 @@ function DependencyBranch({
               />
             );
           })}
+          {edges.length > 50 && <li role="none" className="dependency-pages">
+            <Button size="xs" variant="ghost" disabled={page === 0} onClick={() => setPage(p => p - 1)}>Previous</Button>
+            <span>{page * 50 + 1}–{Math.min(edges.length, (page + 1) * 50)} of {edges.length}</span>
+            <Button size="xs" variant="ghost" disabled={(page + 1) * 50 >= edges.length} onClick={() => setPage(p => p + 1)}>Next</Button>
+          </li>}
         </ul>
       ) : null}
     </li>
@@ -239,6 +245,7 @@ function WorldRoot({
   onToggle,
   onSelect,
 }: WorldRootProps) {
+  const [page, setPage] = useState(0);
   const edges = dependentsByAnchor.get("world") ?? [];
   const hasChildren = Boolean(edges.length);
   const isOpen = hasChildren && expanded.has("world");
@@ -274,7 +281,7 @@ function WorldRoot({
 
       {isOpen ? (
         <ul className="dependency-tree-group" role="group">
-          {edges.map((edge) => {
+          {edges.slice(page * 50, (page + 1) * 50).map((edge) => {
             const child = graphNodes.get(edge.from);
             if (!child) return null;
             const childBranchId = dependencyBranchId("world", edge);
@@ -294,6 +301,11 @@ function WorldRoot({
               />
             );
           })}
+          {edges.length > 50 && <li role="none" className="dependency-pages">
+            <Button size="xs" variant="ghost" disabled={page === 0} onClick={() => setPage(p => p - 1)}>Previous</Button>
+            <span>{page * 50 + 1}–{Math.min(edges.length, (page + 1) * 50)} of {edges.length}</span>
+            <Button size="xs" variant="ghost" disabled={(page + 1) * 50 >= edges.length} onClick={() => setPage(p => p + 1)}>Next</Button>
+          </li>}
         </ul>
       ) : null}
     </li>
@@ -310,14 +322,15 @@ export function DependencyTree({
     () => buildLayoutDependencyHierarchy(layout),
     [layout],
   );
+  const largeTree = graphNodes.size > 2000;
   const branchIds = useMemo(
-    () => expandableBranchIds(dependentsByAnchor),
-    [dependentsByAnchor],
+    () => largeTree ? ["world"] : expandableBranchIds(dependentsByAnchor),
+    [dependentsByAnchor, largeTree],
   );
   const allExpanded = Boolean(
     branchIds.length && branchIds.every((id) => expanded.has(id)),
   );
-  const anyExpanded = branchIds.some((id) => expanded.has(id));
+  const anyExpanded = expanded.size > 0;
 
   const toggle = (id: string) => {
     setExpanded((current) => {
@@ -340,7 +353,7 @@ export function DependencyTree({
             disabled={!branchIds.length || allExpanded}
             onClick={() => setExpanded(new Set(branchIds))}
           >
-            Expand all
+            {largeTree ? "Expand root" : "Expand all"}
           </Button>
           <Button
             type="button"

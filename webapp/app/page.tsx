@@ -2,7 +2,7 @@
 
 import { beginLayoutProfile, endLayoutProfile } from "./layout-performance";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box as BoxIcon,
   ChevronDown,
@@ -90,6 +90,8 @@ import {
   type ViewportCommand,
   type ViewportFitRequest,
 } from "./layout-viewport";
+import { editLayout } from "./layout-edit";
+import { loadLayoutAsync } from "./layout-load";
 import type { SceneScope } from "./layout-geometry";
 import {
   installPythonBridge,
@@ -103,7 +105,6 @@ import {
   parseLayoutUrlList,
   type LayoutUrlSuggestion,
 } from "./layout-url-catalog";
-import { fetchLayoutJson, readLayoutJson } from "./layout-import";
 
 type Status = {
   kind: "idle" | "loading" | "success" | "error";
@@ -126,6 +127,7 @@ type PendingViewportCommand = {
 };
 
 type LoadValueOptions = {
+  validated?: boolean;
   preserveViewport?: boolean;
   scope?: SceneScope;
 };
@@ -308,27 +310,37 @@ export default function Home() {
     return () => controller.abort();
   }, []);
 
+  const pendingEditRef = useRef<LayoutData | null>(null);
+  const editingRef = useRef<AbortController | null>(null);
+  useEffect(() => () => editingRef.current?.abort(), []);
   const update = (mutate: (draft: LayoutData) => void) => {
-    const draft = structuredClone(layoutRef.current);
-    mutate(draft);
-    layoutRef.current = draft;
-    setLayout(draft);
-    setStatus({ kind: "idle", message: "Edited locally" });
+    if (pendingEditRef.current) { updateValidated(mutate); return; }
+    loadingRef.current?.abort();
+    const draft = editLayout(layoutRef.current, mutate);
+    layoutRef.current = draft; setLayout(draft);
+    setStatus({kind: "idle", message: "Edited locally"});
   };
-
   const updateValidated = (mutate: (draft: LayoutData) => void) => {
-    const draft = structuredClone(layoutRef.current);
-    mutate(draft);
+    editingRef.current?.abort();
+    loadingRef.current?.abort();
+    const controller = new AbortController(); editingRef.current = controller;
     try {
-      const parsed = parseLayout(draft);
-      layoutRef.current = parsed;
-      setLayout(parsed);
-      setStatus({ kind: "idle", message: "Edited locally" });
-    } catch (error) {
-      setStatus({
-        kind: "error",
-        message: error instanceof Error ? error.message : "Invalid layout edit",
+      const draft = editLayout(pendingEditRef.current ?? layoutRef.current, mutate);
+      pendingEditRef.current = draft;
+      setStatus({kind: "loading", message: "Checking edit…"});
+      void loadLayoutAsync({value: draft}, controller.signal).then(parsed => {
+        if (controller.signal.aborted) return;
+        pendingEditRef.current = null;
+        layoutRef.current = parsed; setLayout(parsed);
+        setStatus({kind: "idle", message: "Edited locally"});
+      }).catch(error => {
+        if (controller.signal.aborted) return;
+        pendingEditRef.current = null;
+        setStatus({kind: "error", message: error instanceof Error ? error.message : "Invalid layout edit"});
       });
+    } catch (error) {
+      pendingEditRef.current = null;
+      setStatus({kind: "error", message: error instanceof Error ? error.message : "Invalid layout edit"});
     }
   };
 
@@ -338,8 +350,10 @@ export default function Home() {
     options: LoadValueOptions = {},
   ) => {
     const profileStarted = beginLayoutProfile();
-    const parsed = parseLayout(value);
-    endLayoutProfile("parseLayout", profileStarted);
+    const parsed = options.validated ? value as LayoutData : parseLayout(value);
+    if (!options.validated) endLayoutProfile("parseLayout", profileStarted);
+    editingRef.current?.abort();
+    pendingEditRef.current = null;
     const preserveViewport = options.preserveViewport ?? false;
     const nextScope =
       options.scope ??
@@ -356,6 +370,7 @@ export default function Home() {
     const activeType = parsed.objects[firstObject]?.type ?? firstType;
     const firstFrame = Object.keys(parsed.types[activeType]?.frames ?? {})[0] ?? "";
     setLayout(parsed);
+    setDependenciesCardOpen(Object.keys(parsed.objects).length < 20000);
     setSelectedCurve(firstCurve);
     setSegmentPage(0);
     setSelectedType(activeType);
@@ -387,19 +402,28 @@ export default function Home() {
     setStatus({ kind: "success", message: `Loaded ${source}` });
   }, []);
 
+  const loadingRef = useRef<AbortController | null>(null);
+  useEffect(() => () => loadingRef.current?.abort(), []);
+
   const importUrl = useCallback(async (
     url: string,
     source = "URL",
     signal?: AbortSignal,
   ) => {
+    loadingRef.current?.abort();
+    editingRef.current?.abort(); pendingEditRef.current = null;
+    const controller = new AbortController(); loadingRef.current = controller;
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort, {once: true});
+    if (signal?.aborted) controller.abort();
     setStatus({ kind: "loading", message: `Loading ${source}…` });
     try {
       const profileStarted = beginLayoutProfile();
-      const value = await fetchLayoutJson(url, signal);
-      endLayoutProfile("fetch and JSON decode", profileStarted, {source});
-      if (!signal?.aborted) loadValue(value, source);
+      const value = await loadLayoutAsync({url}, controller.signal);
+      endLayoutProfile("load and validate", profileStarted, {source});
+      if (!controller.signal.aborted) loadValue(value, source, {validated: true});
     } catch (error) {
-      if (signal?.aborted) return;
+      if (controller.signal.aborted) return;
       setSelectedLayoutUrl("");
       setStatus({
         kind: "error",
@@ -408,7 +432,7 @@ export default function Home() {
             ? `Could not load URL: ${error.message}`
             : "Could not load URL",
       });
-    }
+    } finally { signal?.removeEventListener("abort", abort); }
   }, [loadValue]);
 
   useEffect(() => {
@@ -430,10 +454,15 @@ export default function Home() {
 
   const importFile = async (file: File | undefined) => {
     if (!file) return;
+    loadingRef.current?.abort();
+    editingRef.current?.abort(); pendingEditRef.current = null;
+    const controller = new AbortController(); loadingRef.current = controller;
     setStatus({ kind: "loading", message: `Reading ${file.name}…` });
     try {
-      loadValue(await readLayoutJson(file), file.name);
+      const parsed = await loadLayoutAsync({file}, controller.signal);
+      if (!controller.signal.aborted) loadValue(parsed, file.name, {validated: true});
     } catch (error) {
+      if (controller.signal.aborted) return;
       setStatus({
         kind: "error",
         message: error instanceof Error ? error.message : "Invalid JSON file",
@@ -457,6 +486,7 @@ export default function Home() {
   };
 
   const clearLayout = () => {
+    loadingRef.current?.abort(); editingRef.current?.abort(); pendingEditRef.current = null;
     const fullLayoutScope: SceneScope = { kind: "layout" };
     viewportScopeRef.current = fullLayoutScope;
     setViewportScope(fullLayoutScope);
@@ -691,10 +721,12 @@ export default function Home() {
     setSelection((current) => (sameSelection(current, next) ? current : next));
   };
 
-  const executePythonBridgeCommand = (command: PythonBridgeCommand) => {
+  const executePythonBridgeCommand = async (command: PythonBridgeCommand) => {
     switch (command.command) {
       case "set_layout": {
-        loadValue(command.layout, "Python", {
+        const parsed = await loadLayoutAsync({value: command.layout});
+        loadValue(parsed, "Python", {
+          validated: true,
           preserveViewport: true,
           ...(command.scope ? { scope: command.scope } : {}),
         });
@@ -810,9 +842,9 @@ export default function Home() {
     pythonBridgeRef.current?.emitSelection(selection);
   }, [selection]);
 
-  const curveNames = Object.keys(layout.reference_curves);
-  const typeNames = Object.keys(layout.types);
-  const objectNames = Object.keys(layout.objects);
+  const curveNames = useMemo(() => Object.keys(layout.reference_curves), [layout.reference_curves]);
+  const typeNames = useMemo(() => Object.keys(layout.types), [layout.types]);
+  const objectNames = useMemo(() => Object.keys(layout.objects), [layout.objects]);
   const hasLayoutContent = Boolean(
     curveNames.length || typeNames.length || objectNames.length,
   );
@@ -830,9 +862,12 @@ export default function Home() {
   const typePlacementFrameNames = typeDefinition
     ? [...new Set([...typeFrameNames(typeDefinition), "beam_center", "beam_entry", "beam_exit"])]
     : ["anchor"];
-  const typeInstances = objectNames.filter(
-    (name) => layout.objects[name].type === selectedType,
-  );
+  const typeInstances = useMemo(() => objectNames.filter(
+    (name) => layout.objects[name].type === selectedType), [objectNames, layout.objects, selectedType]);
+  const totalFrameCount = useMemo(() => {
+    const counts = new Map(Object.entries(layout.types).map(([name,type]) => [name, Object.keys(type.frames).length]));
+    return Object.values(layout.objects).reduce((sum, item) => sum + (counts.get(item.type) ?? 0), 0);
+  }, [layout.types, layout.objects]);
 
   const renameCurve = (from: string, requested: string) => {
     const to = requested.trim();
@@ -2343,11 +2378,7 @@ export default function Home() {
               <CardDescription>
                 {curveNames.length} curves · {typeNames.length} types ·{" "}
                 {objectNames.length} objects ·{" "}
-                {Object.values(layout.objects).reduce(
-                  (sum, item) =>
-                    sum + Object.keys(layout.types[item.type]?.frames ?? {}).length,
-                  0,
-                )} frames
+                {totalFrameCount} frames
               </CardDescription>
               <CardAction className="main-card-actions">
                 <CollapsibleTrigger asChild>
@@ -2415,12 +2446,12 @@ export default function Home() {
               </CardHeader>
               <CollapsibleContent className="main-card-content">
                 <CardContent>
-                  <DependencyTree
+                  {dependenciesCardOpen && <DependencyTree
                     key={`dependencies-${viewerRevision}`}
                     layout={layout}
                     selection={selection}
                     onSelect={selectFromViewport}
-                  />
+                  />}
                 </CardContent>
               </CollapsibleContent>
             </Card>

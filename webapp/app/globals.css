@@ -1318,6 +1318,13 @@ textarea {
   backdrop-filter: blur(8px);
 }
 
+.viewport-stage { container-type: inline-size; }
+@container (max-width: 860px) {
+  .viewport-stage .viewport-layers { top: 58px; left: 12px; right: 12px; flex-wrap: wrap; }
+  .viewport-stage .viewport-axis-marker { top: 112px; }
+  .viewport-stage .viewport-progress { top: 152px; }
+}
+
 .viewport-toolbar button {
   color: #c8d5db;
 }
@@ -1777,4 +1784,18 @@ textarea {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+.viewport-progress {
+  position: absolute;
+  top: 64px;
+  left: 16px;
+  z-index: 3;
+  padding: 7px 12px;
+  border: 1px solid #496079;
+  border-radius: 6px;
+  background: #101c2eef;
+  color: #deedfa;
+  font-size: 14px;
+  pointer-events: none;
 }

@@ -291,9 +291,8 @@ test("renders viewer layers, world axes, and combines curve station with World p
   assert.doesNotMatch(html, /aria-label="Selected reference curve and path position"/);
   assert.equal((html.match(/class="coordinate-readout"/g) ?? []).length, 1);
   assert.match(html, /World pose · Curve station/);
-  assert.match(html, /Curve = main    s = 0.000000 m/);
-  assert.match(html, /X = 0.000000 m/);
-  assert.match(html, /Snapped to Segment 1 start/);
+  assert.match(html, /Hover a named frame/); // Geometry resolves progressively after hydration.
+  assert.doesNotMatch(html, /Snapped to Segment 1 start/);
 
   const front = worldAxisMarkerProjection({ azimuth: 0, elevation: 0 });
   const frontAxes = Object.fromEntries(front.axes.map((axis) => [axis.label, axis]));

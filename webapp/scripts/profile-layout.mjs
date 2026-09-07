@@ -9,8 +9,8 @@ import { createServer } from "vite";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const input = process.argv[2] ?? new URL("../public/layouts/SPS--LS3.json", import.meta.url);
 const mode = process.argv[3] ?? "all";
-if (!["all", "scene", "controls", "tree", "segments", "view"].includes(mode)) {
-  throw new Error("Usage: node scripts/profile-layout.mjs <layout.json> [all|scene|controls|tree|segments|view]");
+if (!["all", "scene", "controls", "tree", "segments", "view", "lod"].includes(mode)) {
+  throw new Error("Usage: node scripts/profile-layout.mjs <layout.json> [all|scene|controls|tree|segments|view|lod]");
 }
 const vite = await createServer({
   appType: "custom", configFile: false, root,
@@ -33,6 +33,33 @@ try {
   console.log(JSON.stringify({ objects: Object.keys(layout.objects).length,
     types: Object.keys(layout.types).length,
     curves: Object.values(layout.reference_curves).map(curve => curve.segments.length) }));
+  if (mode === "lod") {
+    const {buildSceneSteps} = await vite.ssrLoadModule("/app/layout-geometry.ts");
+    const {buildSpatialIndex, selectSceneDetail, compactProxies, runCooperatively, visibleCurveSamples} = await vite.ssrLoadModule("/app/layout-lod.ts");
+    const {cameraBoundsProjector, cameraProjector, fitCameraToPoints} = await vite.ssrLoadModule("/app/layout-viewport.tsx");
+    const signal = new AbortController().signal;
+    const started = performance.now();
+    const scene = await runCooperatively(buildSceneSteps(layout, {kind: "layout"}, {deferred: true}), signal);
+    console.log(JSON.stringify({stage: "deferred scene", milliseconds: performance.now()-started, heapMB: process.memoryUsage().heapUsed/1024/1024}));
+    const indexed = performance.now();
+    const index = await runCooperatively(buildSpatialIndex(scene.objects), signal);
+    console.log(JSON.stringify({stage: "spatial index", milliseconds: performance.now()-indexed, heapMB: process.memoryUsage().heapUsed/1024/1024}));
+    const corners = [];
+    for (const x of [scene.bounds.min[0], scene.bounds.max[0]]) for (const y of [scene.bounds.min[1], scene.bounds.max[1]]) for (const z of [scene.bounds.min[2], scene.bounds.max[2]]) corners.push([x,y,z]);
+    const object = scene.deferred.objectByName.get("MB.B11R1") ?? scene.objects.find(object => {
+      const shape = object.type.shape;
+      return shape && (shape[0] === "box" ? shape[3] : shape[2]) > 1;
+    }) ?? scene.objects[0];
+    for (const [width, height] of [[512,613],[1200,800]]) {
+      const overview = fitCameraToPoints({azimuth:-0.68,elevation:0.42,distance:20,target:[0,0,4]}, corners,width,height);
+      for (const [name,camera] of [["overview",overview],["detail",{...overview, target: object.mechanicalFrame?.o ?? object.frame.o,distance:40}], ["scaled",{...overview,axisScale:[0.01,1,1]}]]) {
+        const selection = measure(`LOD ${name} ${width}`, () => selectSceneDetail(scene,index,cameraBoundsProjector(camera,width,height), name==="detail"?object.name:undefined));
+        const objects = measure("visible solids",() => selection.objects.map(object=>scene.deferred.detail(object)));
+        const samples = measure("visible curves", () => scene.curves.flatMap(curve=>visibleCurveSamples(curve,cameraProjector(camera,width,height),width,height)));
+        console.log(JSON.stringify({stage:name,width,height,detailed:objects.length,proxies:compactProxies(selection.proxies).length,visited:selection.visited,curvePoints:samples.filter(Boolean).length,faces:objects.reduce((sum,o)=>sum+o.faces.length,0),cachedSolids:scene.deferred.cachedSolids()}));
+      }
+    }
+  }
   if (["scene", "all", "view"].includes(mode)) {
     const { buildScene } = await vite.ssrLoadModule("/app/layout-geometry.ts");
     const scene = measure("buildScene", () => buildScene(layout));

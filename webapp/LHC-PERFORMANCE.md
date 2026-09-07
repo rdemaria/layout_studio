@@ -1,9 +1,10 @@
 # LHC LS3 conversion and viewer performance
 
 Measured on 2026-09-07 against the source snapshot added in `abfe848`.
-The LHC loads successfully, but displaying every object is too slow for
-interactive use. The main bottleneck is geometry processing and Canvas 2D
-drawing, with additional startup cost in model validation and reference controls.
+The viewer now uses automatic detail levels, spatial culling, background loading
+and progressive scene construction. The same complete LHC model is interactive
+in the overview and tested close-ups; the original eager rendering baseline is
+retained below for comparison.
 
 Publication status: the converter, report and profiling tools are committed.
 The 35.6 MB JSON upload failed through the available GitHub connection, so the
@@ -31,7 +32,7 @@ conversion and internal resolution; they do not establish surveyed mechanical
 envelopes or recover the missing ancestors. The conversion report and SHA-256
 manifest are in `conversion/lhc/`.
 
-## Measurements
+## Original eager-rendering baseline
 
 Browser measurements used the cloud Chrome development preview, default view,
 all objects enabled, and other optional object layers disabled. No artificial
@@ -89,32 +90,84 @@ opportunity for simplification; they are not measured speedups. Simply hiding
 these solids would remove most hardware from the overview, so a coarse
 representation should replace them.
 
-## Proposed next changes
+## Implemented changes and new measurements
 
-1. **Add automatic detail levels based on projected size.** At ring scale,
-   show an adaptively sampled reference curve and sector/cell spans. At an
-   intermediate scale, use simple lines or boxes for visible assemblies. Draw
-   complete solids and small components at close range. Keep the selected
-   object visible and detailed. Use hysteresis around thresholds to avoid
-   flicker, and calculate size after the existing global X/Y/Z display scaling.
-   This can be a viewer policy without changing physical coordinates or JSON.
-2. **Cull and build only what is needed.** Cache object or assembly bounds,
-   reject offscreen geometry before face allocation, and create optional axes
-   and named frames when enabled or selected. Keep the object tree and search
-   complete. Picking and wheel/rectangle depth targeting must use the displayed
-   representation and resolve selections back to the underlying objects.
-3. **Reduce startup work independently of drawing.** Share dependency/frame
-   indexes across editors and calculate candidate frames when needed. Show the
-   curve first, then generate visible geometry progressively. A worker could
-   preserve UI responsiveness, but does not by itself reduce memory or work.
-4. **Consider a GPU renderer if these changes remain insufficient.** Repeated
-   boxes suit instanced rendering and depth-buffer visibility. First measure
-   the simpler culling/LOD approach; moving all current allocations to WebGL
-   would leave the startup and editor costs unresolved.
+The viewer retains all 161,941 objects and the original analytic positioning model.
+It builds conservative object bounds and a spatial hierarchy before creating
+solid meshes. Offscreen branches are rejected; small branches become grouped
+marks, and individual small objects use centerlines. Full solids enter at an
+8 CSS pixel footprint and remain until below 5 pixels. Selected onscreen objects
+always get full detail. Thresholds apply after the existing global-axis scaling.
+A bounded cache retains up to 2,048 solid meshes. Exact eager geometry remains
+available through `buildScene()` for API consumers and regression comparisons.
 
-For immediate inspection, turning off **Show objects** leaves the reference
-curve usable. LOD is a proposal in this change, not an implemented performance
-fix. No physical objects were removed merely to make the benchmark faster.
+Reference curves use screen-error sampling. Magnetic axes, beam interfaces and
+named frames are generated only when enabled, in cancellable batches, and have
+their own bounds so externally referenced frames can lie far from their object's
+anchor. Picking and zoom use the representation actually drawn. A group mark
+selects a representative object; the full searchable object list remains the
+way to choose an exact name at ring scale. Curve snapping considers detailed
+objects and layers currently in view and computes those targets in background
+batches; exact analytic station readouts and segment boundaries are retained.
+
+URL/file decoding and model validation run in a bundled worker, including in
+the standalone page. The curve appears before object placement completes.
+Placement, indexing, optional layers and snap calculations yield to the UI and
+cancel obsolete work on a newer load, edit or camera change. Numeric edits copy
+changed branches instead of deep-cloning the model; structural edits are checked
+in a worker before adoption. Existing Python bridge commands wait for the new
+scene and requested layers before reporting success.
+
+Closed reference pickers no longer build/filter a complete reverse dependency
+index. Open pickers display at most 50 matching names and evaluate candidate
+frame dependencies on demand. The dependency card starts closed on very large
+layouts; branches use 50-child pages, and large trees expand one branch at a time.
+
+The same cloud Chrome development preview and 512 × 613 CSS pixel viewport gave:
+
+| Measurement | Eager baseline | With automatic detail |
+| --- | ---: | ---: |
+| First settled LHC load | 51.7 s | about 12.3 s |
+| First reference-curve preview | after synchronous startup | about 6.2 s |
+| Whole-layout canvas draw | 9.35–19.60 s | 7–13 ms |
+| Close-up canvas draw, MB.B11R1 | not measured | 10–15 ms |
+| Close-up with beam interfaces | not measured | about 14 ms |
+| Curve reference editor, Node server rendering | 5.36 s | 45 ms |
+| Object reference editor, Node server rendering | 2.98 s | 58 ms |
+
+The new browser load included about 5.3 seconds for the worker and model handoff
+(0.40 s decode, 3.64 s validation inside the worker) and 6.2 seconds of cooperative
+scene/index construction. The overview drew roughly 220 grouped marks and one
+solid instead of 963,138 faces. The fitted MB.B11R1 view drew about 69 detailed
+objects and 101 coarse marks. Wheel zoom and rectangle zoom continued to approach
+the visible geometry; beam-layer toggling completed without restarting the load.
+The rebuilt standalone page also loaded the full LHC successfully, in about
+10.3 seconds, with a 7.6 ms overview draw. A repeat development load completed in
+12.1 seconds with a 3.5 ms settled draw.
+
+A separate Node run resolved the deferred scene in 3.35 seconds and built its
+spatial index in 0.41 seconds. At 1200 × 800 pixels, visibility selection took
+2.1 ms for the overview and 5.5 ms for a 40 m camera distance around MB.B11R1.
+The latter created 153 detailed objects (918 faces), with 521 coarse marks.
+Compressing global X to 0.01× reduced selection to about 1 ms in that overview.
+
+Drawing times measure Canvas command submission, not presentation or sustained
+FPS. Visibility selection adds a few milliseconds, and optional layers add their
+own selection/projection work. These are observations from one development
+browser, not hardware-independent guarantees. Startup still includes a full-model
+validation and worker structured-clone handoff. Enabling all 761,297 named frames
+requires additional background work and memory; it is not instantaneous. The
+solid cache is bounded, but the complete model, resolved placement frames and
+spatial indexes remain in memory. No browser peak-memory reduction is claimed.
+
+Regression checks compare eager and deferred meshes and feature coordinates,
+including externally referenced frames; retain selected detail and aggregate
+counts; check culling under axis scaling and near-plane intersections; verify
+cancellation, bounded mesh caching, adaptive curves, candidate-reference rules
+and copy-on-write edits. The existing SPS and camera-navigation checks remain.
+If dense close-ups still exceed the desired frame budget on target hardware,
+instanced WebGL rendering is the next candidate. It is not necessary for the
+measured LHC overview and close-up cases and is not included in this change.
 
 ## Reproduce
 
@@ -128,12 +181,14 @@ python conversion/validate.py conversion/lhc/LHC--LS3.pickle conversion/lhc/LHC-
 From `webapp/`, with dependencies installed:
 
 ```bash
-node scripts/profile-layout.mjs public/layouts/LHC--LS3.json
-node scripts/profile-layout.mjs public/layouts/LHC--LS3.json view
+node scripts/profile-layout.mjs ../conversion/lhc/LHC--LS3.json
+node scripts/profile-layout.mjs ../conversion/lhc/LHC--LS3.json view
+node scripts/profile-layout.mjs ../conversion/lhc/LHC--LS3.json lod
 ```
 
 Modes `scene`, `controls`, `tree`, and `segments` isolate the corresponding
-stages. The existing `profile-sps.mjs` commands remain supported. Add
+stages; `lod` measures deferred construction and visibility at overview, close-up
+and compressed-axis views. The existing `profile-sps.mjs` commands remain supported. Add
 `?profile=1` to the app URL, import the generated LHC JSON file, and inspect `[layout-profile]`
-console entries for browser fetch, validation, scene, and redraw timings.
+console entries for worker decode/validation, scene, visibility and redraw timings.
 Normal use does not emit these diagnostics.

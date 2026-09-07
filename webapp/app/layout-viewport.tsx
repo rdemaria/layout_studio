@@ -46,7 +46,8 @@ import type {
 } from "./layout-data";
 import {
   add,
-  buildScene,
+  buildSceneSteps,
+  objectDisplayLine,
   closestTransverseCurvePathForPoint,
   curveObjectSurfaceIntersectionPaths,
   cross,
@@ -65,7 +66,12 @@ import {
   type FeatureBoundaryFrameGeometry,
   type SceneGeometry,
   type SceneScope,
+  type Bounds,
 } from "./layout-geometry";
+
+import { buildSpatialIndex, selectSceneDetail, compactProxies, visibleCurveSamples, runCooperatively,
+  type BoundsProjector, type SpatialIndex } from "./layout-lod";
+import {buildSceneLayers, type SceneLayers} from "./layout-layers";
 
 type NavigationMode = "orbit" | "pan" | "select" | "zoom-region";
 type Camera = { azimuth: number; elevation: number; distance: number; target: Vec3; axisScale?: Vec3 };
@@ -292,6 +298,7 @@ export function toggleViewerSelection(
   return candidate;
 }
 
+const EMPTY_SPATIAL_INDEX: SpatialIndex = {root: null, order: []};
 const EMPTY_SCENE: SceneGeometry = {
   curves: [],
   objects: [],
@@ -335,7 +342,8 @@ export function sceneBoundsForVisibility(
   }
   if (visibility.objects) {
     for (const object of scene.objects) {
-      if (object.vertices.length) {
+      if (object.bounds) { include(object.bounds.min); include(object.bounds.max); }
+      else if (object.vertices.length) {
         for (const vertex of object.vertices) include(vertex);
       } else {
         include(object.frame.o);
@@ -792,6 +800,38 @@ export function cameraProjector(camera: Camera, width: number, height: number): 
   };
 }
 
+/** Conservative frustum test in display space, including anisotropic axis scales. */
+export function cameraBoundsProjector(camera: Camera, width: number, height: number): BoundsProjector {
+  const {forward, right, up} = cameraOrientation(camera);
+  const factors = camera.axisScale ?? UNIT_AXIS_SCALE;
+  const focal = Math.min(width, height) * 0.92;
+  const horizontal = (width / 2 + 8) / focal, vertical = (height / 2 + 8) / focal;
+  const near = Math.max(minimumCameraDistance(camera.target) * 0.25, camera.distance * 1e-6);
+  const planes = [forward, add(right, scale(forward, horizontal)), add(scale(right, -1), scale(forward, horizontal)),
+    add(up, scale(forward, vertical)), add(scale(up, -1), scale(forward, vertical))];
+  return (bounds: Bounds) => {
+    const center = bounds.min.map((v,i) => (((v + bounds.max[i]) / 2) - camera.target[i]) * factors[i]) as Vec3;
+    const extent = bounds.min.map((v,i) => (bounds.max[i] - v) / 2 * factors[i]);
+    for (let n = 0; n < planes.length; n++) {
+      const p = planes[n], shift = n === 0 ? camera.distance - near : camera.distance * (n < 3 ? horizontal : vertical);
+      const radius = Math.abs(p[0]) * extent[0] + Math.abs(p[1]) * extent[1] + Math.abs(p[2]) * extent[2];
+      if (dot(center, p) + shift + radius < 0) return null;
+    }
+    let left = Infinity, rightX = -Infinity, top = Infinity, bottom = -Infinity;
+    let intersectsNear = false;
+    for (let corner = 0; corner < 8; corner++) {
+      const offset = center.map((v,i) => v + (corner & (1 << i) ? 1 : -1) * extent[i]) as Vec3;
+      const depth = camera.distance + dot(offset, forward);
+      if (depth <= near) {intersectsNear = true; continue;}
+      const x = width / 2 + dot(offset, right) * focal / depth;
+      const y = height / 2 - dot(offset, up) * focal / depth;
+      left = Math.min(left, x); rightX = Math.max(rightX, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
+    }
+    if (intersectsNear) {left = 0; rightX = width; top = 0; bottom = height;}
+    return {left, right: rightX, top, bottom, depth: Math.max(near * 2, camera.distance + dot(center, forward))};
+  };
+}
+
 function rgba(hex: string, alpha: number): string {
   const normalized = /^#[0-9a-f]{6}$/i.test(hex) ? hex.slice(1) : "f0a84b";
   const value = Number.parseInt(normalized, 16);
@@ -869,20 +909,39 @@ export function LayoutViewport({
   const handledScopeRef = useRef(
     scope.kind === "layout" ? "layout" : `${scope.kind}:${scope.name}`,
   );
-  const sceneResult = useMemo(() => {
-    try {
-      const profileStarted = beginLayoutProfile();
-      const scene = buildScene(layout, scope);
-      endLayoutProfile("buildScene", profileStarted, {objects: scene.objects.length, frames: scene.frames.length});
-      return { scene, error: "" };
-    } catch (error) {
-      return {
-        scene: EMPTY_SCENE,
-        error: error instanceof Error ? error.message : "Unknown geometry error",
-      };
-    }
+  const [sceneResult, setSceneResult] = useState<{scene: SceneGeometry; index: SpatialIndex; error: string; source?: LayoutData; scope?: SceneScope}>(
+    {scene: EMPTY_SCENE, index: {root: null, order: []}, error: ""});
+  const [buildProgress, setBuildProgress] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    const profileStarted = beginLayoutProfile();
+    setBuildProgress("Resolving layout…");
+    setSceneResult({source: layout, scope, scene: EMPTY_SCENE, index: {root: null, order: []}, error: ""});
+    void (async () => {
+      try {
+        const scene = await runCooperatively(buildSceneSteps(layout, scope, {deferred: true}), controller.signal,
+          progress => {
+            if (progress.preview) setSceneResult({source: layout, scope, scene: progress.preview, index: {root: null, order: []}, error: ""});
+            setBuildProgress(`Resolving objects ${progress.completed.toLocaleString()} / ${progress.total.toLocaleString()}`);
+          });
+        setBuildProgress("Indexing visible geometry…");
+        const index = await runCooperatively(buildSpatialIndex(scene.objects), controller.signal);
+        if (controller.signal.aborted) return;
+        setSceneResult({source: layout, scope, scene, index, error: ""});
+        setBuildProgress("");
+        endLayoutProfile("buildScene", profileStarted, {objects: scene.objects.length, frames: 0, deferred: true});
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setBuildProgress("");
+        setSceneResult({source: layout, scope, scene: EMPTY_SCENE, index: {root: null, order: []},
+          error: error instanceof Error ? error.message : "Unknown geometry error"});
+      }
+    })();
+    return () => controller.abort();
   }, [layout, scope]);
-  const { scene } = sceneResult;
+  const currentScene = sceneResult.source === layout && sceneResult.scope === scope;
+  const scene = currentScene ? sceneResult.scene : EMPTY_SCENE;
+  const spatialIndex = currentScene ? sceneResult.index : EMPTY_SPATIAL_INDEX;
   const geometryError = sceneResult.error;
   const [mode, setMode] = useState<NavigationMode>("orbit");
   const [hovered, setHovered] = useState<HoverTarget>(null);
@@ -891,6 +950,24 @@ export function LayoutViewport({
   const [showFrames, setShowFrames] = useState(false);
   const [showMagneticAxis, setShowMagneticAxis] = useState(false);
   const [showBeamAxis, setShowBeamAxis] = useState(false);
+  const [layerResult, setLayerResult] = useState<{layers: SceneLayers; index: SpatialIndex} | null>(null);
+  const [layersLoading, setLayersLoading] = useState(false);
+  useEffect(() => {
+    const controller = new AbortController();
+    setLayerResult(null);
+    const enabled = Boolean(scene.deferred && (showFrames || showMagneticAxis || showBeamAxis));
+    setLayersLoading(enabled);
+    if (enabled) void (async () => {
+      try {
+        const layers = await runCooperatively(buildSceneLayers(scene, {frames: showFrames, magnetic: showMagneticAxis, beam: showBeamAxis}), controller.signal);
+        const index = await runCooperatively(buildSpatialIndex(layers.objects), controller.signal);
+        if (!controller.signal.aborted) {setLayerResult({layers, index}); setLayersLoading(false);}
+      } catch (error) {
+        if (!controller.signal.aborted) {setLayersLoading(false); setSceneResult(current => ({...current, error: error instanceof Error ? error.message : "Cannot resolve layers"}));}
+      }
+    })();
+    return () => controller.abort();
+  }, [scene, showFrames, showMagneticAxis, showBeamAxis]);
   const [curveProbe, setCurveProbe] = useState<CurveProbe | null>(null);
   const [zoomRectangle, setZoomRectangle] =
     useState<ScreenRectangle | null>(null);
@@ -930,187 +1007,233 @@ export function LayoutViewport({
         ? `${hovered.kind}:${hovered.feature}:${hovered.object}`
       : `${hovered.kind}:${hovered.object}:${hovered.name}`;
 
+  const detailHistory = useRef(new Set<string>());
+  const selectedObjectName = selection?.kind === "object" ? selection.name : selection?.kind === "frame" ? selection.object : undefined;
+  const detailSelection = useMemo(() => {
+    const started = beginLayoutProfile();
+    const result = selectSceneDetail(scene, spatialIndex,
+      cameraBoundsProjector(camera, size.width, size.height), selectedObjectName, detailHistory.current);
+    endLayoutProfile("selectDetail", started, {visitedNodes: result.visited});
+    return result;
+  },
+    [scene, spatialIndex, camera, size, selectedObjectName]);
+  const renderedObjects = useMemo(() => showObjects ? detailSelection.objects.map(object => scene.deferred?.detail(object) ?? object) : [],
+    [detailSelection, scene, showObjects]);
+  const objectProxies = useMemo(() => compactProxies(detailSelection.proxies), [detailSelection]);
+  const layerObjectMap = useMemo(() => new Map(layerResult?.layers.objects.map(object => [object.name, object]) ?? []), [layerResult]);
+  const visibleLayers = useMemo(() => {
+    const empty = {frames: scene.frames, magneticAxes: scene.magneticAxes, magneticFrames: scene.magneticFrames,
+      beamAxes: scene.beamAxes, beamFrames: scene.beamFrames, proxies: [] as typeof objectProxies};
+    if (!layerResult) return empty;
+    const layerScene = {...scene, deferred: scene.deferred ? {...scene.deferred,
+      objectByName: layerObjectMap} : undefined};
+    const visible = selectSceneDetail(layerScene, layerResult.index, cameraBoundsProjector(camera, size.width, size.height), selectedObjectName);
+    const records = visible.objects.map(object => layerResult.layers.byObject.get(object.name)!);
+    return {frames: records.flatMap(record => record.frames), magneticAxes: records.flatMap(record => record.magneticAxes),
+      magneticFrames: records.flatMap(record => record.magneticFrames), beamAxes: records.flatMap(record => record.beamAxes),
+      beamFrames: records.flatMap(record => record.beamFrames), proxies: compactProxies(visible.proxies)};
+  }, [scene, layerResult, layerObjectMap, camera, size, selectedObjectName]);
+
   const selectedCurve = useMemo<CurveGeometry | null>(() => {
     if (selection?.kind !== "curve") return null;
     return scene.curves.find((curve) => curve.name === selection.name) ?? null;
   }, [scene.curves, selection]);
 
-  const selectedCurveStations = useMemo<CurveStation[]>(() => {
-    if (!selectedCurve || geometryError) return [];
-    const pathTolerance = 1e-9 * Math.max(1, selectedCurve.totalLength);
-    const worldScale = Math.max(
-      1,
-      selectedCurve.totalLength,
-      ...scene.bounds.min.map(Math.abs),
-      ...scene.bounds.max.map(Math.abs),
-    );
-    const onCurveTolerance = Math.max(1e-6, 1e-10 * worldScale);
-    const stations: CurveStation[] = [];
-    const affiliationCache = new Map<string, string | null>();
-
-    const addStation = (path: number, source: CurveStationSource) => {
-      stations.push({
-        path,
-        frame: frameAtCurvePath(selectedCurve, path),
-        sources: [source],
-      });
-    };
-
-    const addFrameStation = (
-      frameOrigin: Vec3,
-      object: string,
-      name: string,
-      label: string,
-    ) => {
-      const affiliation = objectCurveAffiliation(
-        layout,
-        object,
-        affiliationCache,
+  const [stationResult, setStationResult] = useState<{curve: CurveGeometry; stations: CurveStation[]} | null>(null);
+  const [stationsLoading, setStationsLoading] = useState(false);
+  const selectedCurveStations = useMemo(() => stationResult?.curve === selectedCurve ? stationResult.stations : [], [stationResult, selectedCurve]);
+  useEffect(() => {
+    const controller = new AbortController();
+    setStationResult(null);
+    setStationsLoading(Boolean(selectedCurve && !geometryError));
+    if (!selectedCurve || geometryError) return () => controller.abort();
+    const curve = selectedCurve;
+    function* buildStations(): Generator<void, CurveStation[]> {
+      const pathTolerance = 1e-9 * Math.max(1, curve.totalLength);
+      const worldScale = Math.max(
+        1,
+        curve.totalLength,
+        ...scene.bounds.min.map(Math.abs),
+        ...scene.bounds.max.map(Math.abs),
       );
-      if (affiliation && affiliation !== selectedCurve.name) return;
-      const solutions = transverseCurvePathsForPoint(selectedCurve, frameOrigin);
-      const paths = affiliation === selectedCurve.name
-        ? (() => {
-            const closest = closestTransverseCurvePathForPoint(
-              selectedCurve,
-              frameOrigin,
-            );
-            return closest.kind === "unique" && closest.path !== undefined
-              ? [closest.path]
-              : [];
-          })()
-        : solutions.paths.filter((path) =>
-            length(sub(frameOrigin, frameAtCurvePath(selectedCurve, path).o)) <=
-              onCurveTolerance
-          );
-      for (const path of paths) {
-        addStation(path, { kind: "frame", object, name, label });
-      }
-    };
+      const onCurveTolerance = Math.max(1e-6, 1e-10 * worldScale);
+      const stations: CurveStation[] = [];
+      const affiliationCache = new Map<string, string | null>();
 
-    for (const [segmentIndex, segment] of selectedCurve.segments.entries()) {
-      addStation(segment.path, {
-        kind: "segment",
-        segmentIndex,
-        boundary: "start",
-        label: `Segment ${segmentIndex + 1} start`,
-      });
-      addStation(segment.path + segment.length, {
-        kind: "segment",
-        segmentIndex,
-        boundary: "end",
-        label: `Segment ${segmentIndex + 1} end`,
-      });
-    }
-
-    if (showFrames) {
-      for (const namedFrame of scene.frames) {
-        addFrameStation(
-          namedFrame.frame.o,
-          namedFrame.object,
-          namedFrame.name,
-          `${namedFrame.object}.${namedFrame.name}`,
-        );
-      }
-    }
-
-    if (showObjects) {
-      for (const object of scene.objects) {
-        addFrameStation(
-          object.frame.o,
-          object.name,
-          "anchor",
-          `${object.name}.anchor`,
-        );
-      }
-      const surfacePaths = curveObjectSurfaceIntersectionPaths(
-        selectedCurve,
-        scene.objects,
-      );
-      for (const [object, paths] of surfacePaths) {
-        for (const path of paths) {
-          addStation(path, {
-            kind: "surface",
-            object,
-            name: "shape",
-            label: `${object} shape surface`,
-          });
-        }
-      }
-    }
-
-    const addFeaturePlaneStations = (
-      feature: "magnetic" | "beam",
-      featureFrames: FeatureBoundaryFrameGeometry[],
-    ) => {
-      for (const featureFrame of featureFrames) {
-        if (
-          objectCurveAffiliation(
-            layout,
-            featureFrame.object,
-            affiliationCache,
-          ) !== selectedCurve.name
-        ) {
-          continue;
-        }
-        const intersections = curvePlaneIntersectionPaths(
-          selectedCurve,
-          featureFrame.frame,
-        );
-        if (intersections.kind === "none" || intersections.kind === "infinite") {
-          continue;
-        }
-        const paths = intersections.paths.filter((path) => {
-          const curveFrame = frameAtCurvePath(selectedCurve, path);
-          return pointInsideFeaturePlane(curveFrame.o, featureFrame) &&
-            length(cross(
-              normalize(featureFrame.frame.s),
-              normalize(curveFrame.s),
-            )) <= 1e-6;
+      const addStation = (path: number, source: CurveStationSource) => {
+        stations.push({
+          path,
+          frame: frameAtCurvePath(curve, path),
+          sources: [source],
         });
-        if (paths.length === 1) {
-          const boundary = featureFrame.name.endsWith("_entry")
-            ? "entry"
-            : "exit";
-          addStation(paths[0], {
-            kind: "plane",
-            feature,
-            object: featureFrame.object,
-            name: featureFrame.name,
-            label: `${featureFrame.object} ${feature === "magnetic" ? "magnetic" : "beam"} ${boundary} plane`,
-          });
-        }
-      }
-    };
-    if (showMagneticAxis) {
-      addFeaturePlaneStations("magnetic", scene.magneticFrames);
-    }
-    if (showBeamAxis) addFeaturePlaneStations("beam", scene.beamFrames);
+      };
 
-    stations.sort((a, b) => a.path - b.path);
-    const grouped: CurveStation[] = [];
-    for (const station of stations) {
-      const previous = grouped[grouped.length - 1];
-      if (!previous || Math.abs(previous.path - station.path) > pathTolerance) {
-        grouped.push(station);
-        continue;
+      const addFrameStation = (
+        frameOrigin: Vec3,
+        object: string,
+        name: string,
+        label: string,
+      ) => {
+        const affiliation = objectCurveAffiliation(
+          layout,
+          object,
+          affiliationCache,
+        );
+        if (affiliation && affiliation !== curve.name) return;
+        const solutions = transverseCurvePathsForPoint(curve, frameOrigin);
+        const paths = affiliation === curve.name
+          ? (() => {
+              const closest = closestTransverseCurvePathForPoint(
+                curve,
+                frameOrigin,
+              );
+              return closest.kind === "unique" && closest.path !== undefined
+                ? [closest.path]
+                : [];
+            })()
+          : solutions.paths.filter((path) =>
+              length(sub(frameOrigin, frameAtCurvePath(curve, path).o)) <=
+                onCurveTolerance
+            );
+        for (const path of paths) {
+          addStation(path, { kind: "frame", object, name, label });
+        }
+      };
+
+      for (const [segmentIndex, segment] of curve.segments.entries()) {
+        addStation(segment.path, {
+          kind: "segment",
+          segmentIndex,
+          boundary: "start",
+          label: `Segment ${segmentIndex + 1} start`,
+        });
+        addStation(segment.path + segment.length, {
+          kind: "segment",
+          segmentIndex,
+          boundary: "end",
+          label: `Segment ${segmentIndex + 1} end`,
+        });
+        yield;
       }
-      for (const source of station.sources) {
-        if (
-          !previous.sources.some((candidate) =>
-            stationSourceKey(candidate) === stationSourceKey(source)
-          )
-        ) {
-          previous.sources.push(source);
+
+      if (showFrames) {
+        for (const namedFrame of visibleLayers.frames) {
+          addFrameStation(
+            namedFrame.frame.o,
+            namedFrame.object,
+            namedFrame.name,
+            `${namedFrame.object}.${namedFrame.name}`,
+          );
+          yield;
         }
       }
+
+      if (showObjects) {
+        for (const object of renderedObjects) {
+          addFrameStation(
+            object.frame.o,
+            object.name,
+            "anchor",
+            `${object.name}.anchor`,
+          );
+          yield;
+        }
+        for (const geometry of renderedObjects) {
+          const surfacePaths = curveObjectSurfaceIntersectionPaths(curve, [geometry]);
+          for (const [object, paths] of surfacePaths) {
+            for (const path of paths) {
+              addStation(path, {
+                kind: "surface",
+                object,
+                name: "shape",
+                label: `${object} shape surface`,
+              });
+            }
+          }
+          yield;
+        }
+      }
+
+      const addFeaturePlaneStations = function* (
+        feature: "magnetic" | "beam",
+        featureFrames: FeatureBoundaryFrameGeometry[],
+      ) {
+        for (const featureFrame of featureFrames) {
+          yield;
+          if (
+            objectCurveAffiliation(
+              layout,
+              featureFrame.object,
+              affiliationCache,
+            ) !== curve.name
+          ) {
+            continue;
+          }
+          const intersections = curvePlaneIntersectionPaths(
+            curve,
+            featureFrame.frame,
+          );
+          if (intersections.kind === "none" || intersections.kind === "infinite") {
+            continue;
+          }
+          const paths = intersections.paths.filter((path) => {
+            const curveFrame = frameAtCurvePath(curve, path);
+            return pointInsideFeaturePlane(curveFrame.o, featureFrame) &&
+              length(cross(
+                normalize(featureFrame.frame.s),
+                normalize(curveFrame.s),
+              )) <= 1e-6;
+          });
+          if (paths.length === 1) {
+            const boundary = featureFrame.name.endsWith("_entry")
+              ? "entry"
+              : "exit";
+            addStation(paths[0], {
+              kind: "plane",
+              feature,
+              object: featureFrame.object,
+              name: featureFrame.name,
+              label: `${featureFrame.object} ${feature === "magnetic" ? "magnetic" : "beam"} ${boundary} plane`,
+            });
+          }
+        }
+      };
+      if (showMagneticAxis) {
+        yield* addFeaturePlaneStations("magnetic", visibleLayers.magneticFrames);
+      }
+      if (showBeamAxis) yield* addFeaturePlaneStations("beam", visibleLayers.beamFrames);
+
+      stations.sort((a, b) => a.path - b.path);
+      const grouped: CurveStation[] = [];
+      for (const station of stations) {
+        const previous = grouped[grouped.length - 1];
+        if (!previous || Math.abs(previous.path - station.path) > pathTolerance) {
+          grouped.push(station);
+          continue;
+        }
+        for (const source of station.sources) {
+          if (
+            !previous.sources.some((candidate) =>
+              stationSourceKey(candidate) === stationSourceKey(source)
+            )
+          ) {
+            previous.sources.push(source);
+          }
+        }
+      }
+      return grouped;
     }
-    return grouped;
+    void runCooperatively(buildStations(), controller.signal).then(stations => {
+      if (!controller.signal.aborted) {setStationResult({curve: selectedCurve, stations}); setStationsLoading(false);}
+    }).catch(() => {if (!controller.signal.aborted) setStationsLoading(false);});
+    return () => controller.abort();
   }, [
     geometryError,
     layout,
     scene,
     selectedCurve,
+    renderedObjects,
+    visibleLayers,
     showBeamAxis,
     showFrames,
     showMagneticAxis,
@@ -1146,15 +1269,23 @@ export function LayoutViewport({
   }, [size.height, size.width]);
 
   const visibleBounds = useMemo(
-    () => sceneBoundsForVisibility(scene, {
+    () => {
+      const bounds = sceneBoundsForVisibility(scene, {
       curves: showCurves,
       objects: showObjects,
       frames: showFrames,
       magneticAxis: showMagneticAxis,
       beamAxis: showBeamAxis,
-    }),
+    });
+      const layerBounds = layerResult?.index.root?.bounds;
+      if (!layerBounds) return bounds;
+      if (!bounds) return layerBounds;
+      return {min: bounds.min.map((v,i) => Math.min(v, layerBounds.min[i])) as Vec3,
+        max: bounds.max.map((v,i) => Math.max(v, layerBounds.max[i])) as Vec3};
+    },
     [
       scene,
+      layerResult,
       showBeamAxis,
       showCurves,
       showFrames,
@@ -1169,11 +1300,11 @@ export function LayoutViewport({
   }, [fitPoints, visibleBounds]);
 
   useEffect(() => {
-    if (!fittedOnceRef.current) {
+    if (!fittedOnceRef.current && (scene.curves.length || scene.objects.length)) {
       fittedOnceRef.current = true;
       fit();
     }
-  }, [fit]);
+  }, [fit, scene]);
 
   /* eslint-disable react-hooks/set-state-in-effect -- The command prop is an
      external command stream. Applying a committed command here is the
@@ -1195,6 +1326,7 @@ export function LayoutViewport({
       fitRequest.id === handledFitRequestRef.current ||
       geometryError
     ) return;
+    if (buildProgress) return;
     handledFitRequestRef.current = fitRequest.id;
     if (fitRequest.kind === "curve") {
       const curve = scene.curves.find(
@@ -1208,8 +1340,8 @@ export function LayoutViewport({
       (candidate) => candidate.name === fitRequest.name,
     );
     if (!object) return;
-    fitPoints(object.vertices.length ? object.vertices : [object.frame.o]);
-  }, [fitPoints, fitRequest, geometryError, scene.curves, scene.objects]);
+    fitPoints(object.bounds ? boundsCorners(object.bounds) : object.vertices.length ? object.vertices : [object.frame.o]);
+  }, [fitPoints, fitRequest, geometryError, scene.curves, scene.objects, buildProgress]);
 
   useEffect(() => {
     const wrapper = wrapperRef.current;
@@ -1322,11 +1454,11 @@ export function LayoutViewport({
       selected: boolean;
     };
     const objectProjections = showObjects
-      ? scene.objects.map((object) => object.vertices.map(project))
+      ? renderedObjects.map((object) => object.vertices.map(project))
       : [];
     const faces: FaceDraw[] = [];
     if (showObjects) {
-      for (const [objectIndex, object] of scene.objects.entries()) {
+      for (const [objectIndex, object] of renderedObjects.entries()) {
         const projected = objectProjections[objectIndex];
         for (const face of object.faces) {
           const polygon = face
@@ -1360,6 +1492,30 @@ export function LayoutViewport({
 
     const hits: HitTarget[] = [];
     const zoomGeometry: ZoomGeometry = {faces, lines: [], points: []};
+    const drawProxies = (proxies: typeof objectProxies, color?: string) => {
+      for (const {object, bounds, count} of proxies) {
+        const marker = {x: (bounds.left + bounds.right) / 2, y: (bounds.top + bounds.bottom) / 2, depth: bounds.depth};
+        const points = !color && count === 1 ? objectDisplayLine(object).map(project).filter(Boolean) as Projection[] : [];
+        const a = points[0] ?? marker, b = points[points.length - 1] ?? marker;
+        const x = (a.x + b.x) / 2, y = (a.y + b.y) / 2;
+        context.strokeStyle = color ?? object.type.color;
+        if (points.length > 1) {
+          context.beginPath(); traceProjectedPolyline(context, points); context.lineWidth = 2; context.stroke();
+          for (let n = 1; n < points.length; n++) zoomGeometry.lines.push([points[n-1], points[n]]);
+        }
+        if (Math.hypot(b.x-a.x, b.y-a.y) < 1) {context.fillStyle = color ?? object.type.color; context.fillRect(x-1, y-1, 2, 2);}
+        zoomGeometry.points.push(marker);
+        const record = color ? layerResult?.layers.byObject.get(object.name) : undefined;
+        const frame = record?.frames[0];
+        const axis = record?.magneticAxes[0] ?? record?.beamAxes[0];
+        if (frame) hits.push({kind: "frame", object: object.name, name: frame.name, x, y});
+        else if (axis) hits.push({kind: "feature_axis_hit", feature: axis.kind, object: object.name,
+          ax:a.x, ay:a.y, bx:b.x, by:b.y, startSample:axis.samples[0], endSample:axis.samples[axis.samples.length-1]});
+        else hits.push({kind: "object", name: object.name, x, y, ax: a.x, ay: a.y, bx: b.x, by: b.y, radius: 4});
+      }
+    };
+    if (showObjects) drawProxies(objectProxies);
+    drawProxies(visibleLayers.proxies, "#ffca75");
     const drawFeature = (
       feature: "magnetic" | "beam",
       axes: FeatureAxisGeometry[],
@@ -1446,12 +1602,13 @@ export function LayoutViewport({
       }
     };
     if (showMagneticAxis) {
-      drawFeature("magnetic", scene.magneticAxes, scene.magneticFrames);
+      drawFeature("magnetic", visibleLayers.magneticAxes, visibleLayers.magneticFrames);
     }
-    if (showBeamAxis) drawFeature("beam", scene.beamAxes, scene.beamFrames);
+    if (showBeamAxis) drawFeature("beam", visibleLayers.beamAxes, visibleLayers.beamFrames);
 
     if (showCurves) for (const curve of scene.curves) {
-      const projected = curve.samples.map((sample) => project(sample.p));
+      const samples = visibleCurveSamples(curve, project, width, height);
+      const projected = samples.map((sample) => sample ? project(sample.p) : null);
       const active = selection?.kind === "curve" && selection.name === curve.name;
       const hovering = hoverStyleKey === `curve:${curve.name}`;
       const curveColor = layout.reference_curves[curve.name].color;
@@ -1480,7 +1637,7 @@ export function LayoutViewport({
           }
           const segmentIndex = curveSegmentIndexAtPath(
             curve,
-            (curve.samples[index - 1].path + curve.samples[index].path) / 2,
+            (samples[index - 1]!.path + samples[index]!.path) / 2,
           );
           if (segmentIndex !== focusedSegment) {
             focusedStarted = false;
@@ -1511,17 +1668,17 @@ export function LayoutViewport({
           by: b.y,
           startDepth: a.depth,
           endDepth: b.depth,
-          startPath: curve.samples[index - 1].path,
-          endPath: curve.samples[index].path,
+          startPath: samples[index - 1]!.path,
+          endPath: samples[index]!.path,
           segmentIndex: curveSegmentIndexAtPath(
             curve,
-            (curve.samples[index - 1].path + curve.samples[index].path) / 2,
+            (samples[index - 1]!.path + samples[index]!.path) / 2,
           ),
         });
       }
     }
 
-    if (showObjects) for (const [objectIndex, object] of scene.objects.entries()) {
+    if (showObjects) for (const [objectIndex, object] of renderedObjects.entries()) {
       const projected = objectProjections[objectIndex];
       const active =
         (selection?.kind === "object" && selection.name === object.name) ||
@@ -1610,7 +1767,7 @@ export function LayoutViewport({
       }
     }
 
-    if (showFrames) for (const namedFrame of scene.frames) {
+    if (showFrames) for (const namedFrame of visibleLayers.frames) {
       const projected = project(namedFrame.frame.o);
       if (!projected) continue;
       zoomGeometry.points.push(projected);
@@ -1669,12 +1826,17 @@ export function LayoutViewport({
 
     hitTargetsRef.current = hits;
     zoomProjectionRef.current = {camera, width, height, geometry: zoomGeometry};
-    endLayoutProfile("viewportDraw", profileStarted, {width, height, ratio, faces: faces.length, hits: hits.length, objectsVisible: showObjects});
+    endLayoutProfile("viewportDraw", profileStarted, {width, height, ratio, faces: faces.length, hits: hits.length, objectsVisible: showObjects, detailedObjects: renderedObjects.length, proxies: objectProxies.length, visitedNodes: detailSelection.visited, cachedSolids: scene.deferred?.cachedSolids()});
   }, [
     camera,
     hoverStyleKey,
     layout.reference_curves,
     scene,
+    renderedObjects,
+    objectProxies,
+    layerResult,
+    detailSelection,
+    visibleLayers,
     selectedCurve,
     selectedCurveStations,
     selection,
@@ -1707,11 +1869,8 @@ export function LayoutViewport({
             (hovered.feature === "magnetic" ? showMagneticAxis : showBeamAxis)
           ? hovered.frame
         : hovered?.kind === "frame" && showFrames
-          ? scene.frames.find(
-              (namedFrame) =>
-                namedFrame.object === hovered.object &&
-                namedFrame.name === hovered.name,
-            )?.frame
+          ? scene.deferred?.resolveFrame(hovered.object, hovered.name) ?? visibleLayers.frames.find(
+              (namedFrame) => namedFrame.object === hovered.object && namedFrame.name === hovered.name)?.frame
           : undefined;
     if (hoveredFrame) {
       const origin = project(hoveredFrame.o);
@@ -1785,7 +1944,7 @@ export function LayoutViewport({
     activeCurveProbe,
     camera,
     hovered,
-    scene.frames,
+    visibleLayers.frames,
     selection,
     showBeamAxis,
     showCurves,
@@ -2233,8 +2392,11 @@ export function LayoutViewport({
         frame: activeCurveProbe.sample.frame,
       };
     }
+    if (hovered?.kind === "frame" && showFrames && scene.deferred) {
+      return {label: `Frame ${hovered.object}.${hovered.name}`, frame: scene.deferred.resolveFrame(hovered.object, hovered.name)};
+    }
     if (hovered?.kind === "frame" && showFrames) {
-      const namedFrame = scene.frames.find(
+      const namedFrame = visibleLayers.frames.find(
         (candidate) =>
           candidate.object === hovered.object && candidate.name === hovered.name,
       );
@@ -2287,8 +2449,11 @@ export function LayoutViewport({
           }
         : null;
     }
+    if (selection?.kind === "frame" && scene.deferred && currentScene && !buildProgress) {
+      return {label: `Frame ${selection.object}.${selection.name}`, frame: scene.deferred.resolveFrame(selection.object, selection.name)};
+    }
     if (selection?.kind === "frame" && showFrames) {
-      const namedFrame = scene.frames.find(
+      const namedFrame = visibleLayers.frames.find(
         (candidate) =>
           candidate.object === selection.object &&
           candidate.name === selection.name,
@@ -2313,6 +2478,9 @@ export function LayoutViewport({
     geometryError,
     hovered,
     scene,
+    visibleLayers,
+    currentScene,
+    buildProgress,
     selection,
     showBeamAxis,
     showCurves,
@@ -2418,6 +2586,7 @@ export function LayoutViewport({
 
   useEffect(() => {
     if (!command || command.id <= handledCommandRef.current) return;
+    if (command.command === "fit" && (!currentScene || buildProgress)) return;
     handledCommandRef.current = command.id;
     const finish = (error?: string) => {
       setCommandResult(error ? { id: command.id, error } : { id: command.id });
@@ -2483,10 +2652,12 @@ export function LayoutViewport({
       finish(`Cannot fit object "${objectName}": target is not in the current scene.`);
       return;
     }
-    fitPoints(object.vertices.length ? object.vertices : [object.frame.o]);
+    fitPoints(object.bounds ? boundsCorners(object.bounds) : object.vertices.length ? object.vertices : [object.frame.o]);
     finish();
   }, [
     command,
+    currentScene,
+    buildProgress,
     fit,
     fitPoints,
     geometryError,
@@ -2502,13 +2673,15 @@ export function LayoutViewport({
 
   useEffect(() => {
     if (
+      !currentScene || buildProgress || layersLoading ||
+      ((showFrames || showMagneticAxis || showBeamAxis) && scene.deferred && !layerResult && !geometryError) ||
       !commandResult ||
       commandResult.id <= reportedCommandRef.current ||
       !onCommandApplied
     ) return;
     reportedCommandRef.current = commandResult.id;
-    onCommandApplied(commandResult.id, commandResult.error);
-  }, [commandResult, onCommandApplied]);
+    onCommandApplied(commandResult.id, commandResult.error || geometryError || undefined);
+  }, [commandResult, onCommandApplied, currentScene, buildProgress, layersLoading, layerResult, scene, geometryError, showFrames, showMagneticAxis, showBeamAxis]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   return (
@@ -2732,6 +2905,7 @@ export function LayoutViewport({
             ? "Draw around a detail to approach it · Shift-drag or right-drag to pan"
             : `Drag to ${mode} · wheel toward pointer · click again or empty space to clear`}
         </div>
+        {(buildProgress || layersLoading || stationsLoading) && <div className="viewport-progress" role="status">{buildProgress || (layersLoading ? "Preparing visible layers…" : "Preparing curve snap targets…")}</div>}
         {geometryError && (
           <div className="viewport-error" role="alert">
             <strong>Cannot resolve layout geometry</strong>
