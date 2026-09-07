@@ -49,6 +49,7 @@ wheel. Do not add a second generated HTML copy under `python_api`.
 - `app/layout-data.ts` — canonical JSON model and validation.
 - `app/layout-geometry.ts` — curve, frame, object, and snapping mathematics.
 - `app/layout-viewport.tsx` — interactive 3D projection and viewer controls.
+- `app/viewport-zoom.ts` — depth picking from the rendered geometry for zoom.
 - `app/python-bridge.ts` — validated external-control protocol for Python.
 - `app/layout-url-catalog.ts` — catalog validation and debug URL resolution.
 - `app/layout-import.ts` — JSON loading from files and URLs.
@@ -60,6 +61,26 @@ wheel. Do not add a second generated HTML copy under `python_api`.
 - `tests/python-bridge.test.mjs` — bridge protocol and security regressions.
 - `standalone/` — repository-relative single-file bundler.
 - `build/index.html` — generated standalone application.
+
+## Zoom and display proportions
+
+Wheel zoom moves the camera toward the geometry under the pointer while keeping
+that detail at the same screen position. Rectangle zoom uses the depth of the
+geometry inside the box, preferring its center, and approaches that plane. Empty
+space uses the current camera target plane. Both keep a fixed field of view.
+
+Open **Axis scale** at the lower left of the viewer to compress or stretch global
+X, Y, and Z independently, from 0.001× to 1000×. The sliders use a logarithmic scale;
+numeric fields allow exact factors. Use **Fit layout** after changing proportions
+if needed, and **Reset to 1×** to restore physical proportions. Active factors
+remain visible when the panel is closed.
+
+Scaling affects only the display, including picking, pan, zoom, and fitting.
+World-coordinate readouts, positioning calculations, and exported JSON remain
+physical. It is useful for long straight sections near a global axis (for example,
+compress Z to 0.01×); it does not unroll a ring or compress a diagonal section along
+its own direction. In those cases an axis aligned with the section or a longitudinal
+schematic view would be more suitable.
 
 ## Anchors and feature references
 

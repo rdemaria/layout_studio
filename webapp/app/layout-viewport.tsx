@@ -15,6 +15,7 @@ import {
   Move,
   RotateCcw,
   ScanSearch,
+  SlidersHorizontal,
   View,
 } from "lucide-react";
 
@@ -26,6 +27,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Switch } from "@/components/ui/switch";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Slider } from "@/components/ui/slider";
+import { NumberInput } from "./number-input";
+import { zoomFocusDepth, type ZoomGeometry } from "./viewport-zoom";
 import {
   Tooltip,
   TooltipContent,
@@ -62,7 +67,7 @@ import {
 } from "./layout-geometry";
 
 type NavigationMode = "orbit" | "pan" | "select" | "zoom-region";
-type Camera = { azimuth: number; elevation: number; distance: number; target: Vec3 };
+type Camera = { azimuth: number; elevation: number; distance: number; target: Vec3; axisScale?: Vec3 };
 type Projection = { x: number; y: number; depth: number; scale: number };
 type Projector = (point: Vec3) => Projection | null;
 export type CanonicalView = "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
@@ -572,6 +577,41 @@ function minimumCameraDistance(target: Vec3): number {
   return Math.max(1e-9, absoluteScale * Number.EPSILON * 64);
 }
 
+const UNIT_AXIS_SCALE: Vec3 = [1, 1, 1];
+function displayVector(vector: Vec3, camera: Camera): Vec3 {
+  const factors = camera.axisScale ?? UNIT_AXIS_SCALE;
+  return [vector[0] * factors[0], vector[1] * factors[1], vector[2] * factors[2]];
+}
+function physicalVector(vector: Vec3, camera: Camera): Vec3 {
+  const factors = camera.axisScale ?? UNIT_AXIS_SCALE;
+  return [vector[0] / factors[0], vector[1] / factors[1], vector[2] / factors[2]];
+}
+
+export function screenPointAtDepth(camera: Camera, x: number, y: number, depth: number, width: number, height: number): Vec3 {
+  const { right, up, forward } = cameraOrientation(camera);
+  const focal = Math.min(width, height) * 0.92;
+  return add(camera.target, physicalVector(add(
+    add(scale(right, (x - width / 2) * depth / focal), scale(up, -(y - height / 2) * depth / focal)),
+    scale(forward, depth - camera.distance),
+  ), camera));
+}
+
+export function zoomCameraAtPoint(camera: Camera, x: number, y: number, deltaY: number, width: number, height: number, depth = camera.distance): Camera {
+  if (!deltaY) return camera;
+  const focus = screenPointAtDepth(camera, x, y, depth, width, height);
+  const distance = zoomedCameraDistance(depth, deltaY, focus);
+  // Keep the point under the cursor fixed while moving the eye toward it.
+  // Rebase the orbit plane to the actual geometry so zoom cannot stall at
+  // the old layout center, far in front of or behind the requested detail.
+  const lateral = screenPointAtDepth({...camera, target: [0, 0, 0], distance}, x, y, distance, width, height);
+  return {...camera, distance, target: sub(focus, lateral)};
+}
+
+export function panCamera(camera: Camera, dx: number, dy: number, width: number, height: number): Camera {
+  const point = screenPointAtDepth(camera, width / 2 - dx, height / 2 - dy, camera.distance, width, height);
+  return {...camera, target: point};
+}
+
 const CANONICAL_POLE_EPSILON = 1e-6;
 
 const CANONICAL_VIEWS: { value: CanonicalView; label: string }[] = [
@@ -604,6 +644,7 @@ export function zoomCameraToRectangle(
   rectangle: ScreenRectangle,
   width: number,
   height: number,
+  depth = camera.distance,
 ): Camera {
   const safeWidth = Math.max(1, width);
   const safeHeight = Math.max(1, height);
@@ -615,17 +656,9 @@ export function zoomCameraToRectangle(
   const rectangleHeight = bottom - top;
   if (rectangleWidth <= 0 || rectangleHeight <= 0) return camera;
 
-  const focal = Math.min(safeWidth, safeHeight) * 0.92;
   const centerX = (left + rightEdge) / 2;
   const centerY = (top + bottom) / 2;
-  const { right, up } = cameraOrientation(camera);
-  const target = add(
-    camera.target,
-    add(
-      scale(right, (centerX - safeWidth / 2) * camera.distance / focal),
-      scale(up, -(centerY - safeHeight / 2) * camera.distance / focal),
-    ),
-  );
+  const target = screenPointAtDepth(camera, centerX, centerY, depth, safeWidth, safeHeight);
   const scaleFactor = Math.max(
     rectangleWidth / safeWidth,
     rectangleHeight / safeHeight,
@@ -635,7 +668,7 @@ export function zoomCameraToRectangle(
     target,
     distance: Math.max(
       minimumCameraDistance(target),
-      camera.distance * scaleFactor,
+      depth * scaleFactor,
     ),
   };
 }
@@ -689,13 +722,13 @@ export function fitCameraToPoints(
   const focal = Math.min(safeWidth, safeHeight) * 0.92;
   const halfWidth = safeWidth * 0.42;
   const halfHeight = safeHeight * 0.42;
-  const span = length(sub(max, min));
+  const span = length(displayVector(sub(max, min), camera));
   const precisionFloor = minimumCameraDistance(target);
   const depthMargin = Math.max(precisionFloor, span * 1e-6);
   let distance = precisionFloor;
 
   for (const point of finitePoints) {
-    const offset = sub(point, target);
+    const offset = displayVector(sub(point, target), camera);
     const alongView = dot(offset, forward);
     distance = Math.max(
       distance,
@@ -736,7 +769,7 @@ export function worldAxisMarkerProjection(
   };
 }
 
-function cameraProjector(camera: Camera, width: number, height: number): Projector {
+export function cameraProjector(camera: Camera, width: number, height: number): Projector {
   const { forward, right, up } = cameraOrientation(camera);
   const focal = Math.min(width, height) * 0.92;
   const nearDepth = Math.max(
@@ -746,7 +779,7 @@ function cameraProjector(camera: Camera, width: number, height: number): Project
   return (point: Vec3) => {
     // Work relative to the camera target so a millimetre-scale detail remains
     // resolvable even when the layout uses large world coordinates.
-    const offset = sub(point, camera.target);
+    const offset = displayVector(sub(point, camera.target), camera);
     const depth = camera.distance + dot(offset, forward);
     if (depth <= nearDepth) return null;
     return {
@@ -814,6 +847,9 @@ export function LayoutViewport({
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const hitTargetsRef = useRef<HitTarget[]>([]);
+  const zoomProjectionRef = useRef<{
+    camera: Camera; width: number; height: number; geometry: ZoomGeometry;
+  } | null>(null);
   const dragRef = useRef<{
     startX: number;
     startY: number;
@@ -865,6 +901,16 @@ export function LayoutViewport({
     target: [0, 0, 4],
   });
   const [size, setSize] = useState({ width: 900, height: 650 });
+  const axisScale = camera.axisScale ?? UNIT_AXIS_SCALE;
+  const scaledDisplay = axisScale.some((value) => value !== 1);
+  const setAxisScale = (axis: number, value: number) => {
+    if (!Number.isFinite(value)) return;
+    setCamera((current) => {
+      const factors: Vec3 = [...(current.axisScale ?? UNIT_AXIS_SCALE)];
+      factors[axis] = Math.max(0.001, Math.min(1000, value));
+      return {...current, axisScale: factors};
+    });
+  };
   const worldAxes = useMemo(
     () => worldAxisMarkerProjection({
       azimuth: camera.azimuth,
@@ -1175,7 +1221,7 @@ export function LayoutViewport({
   }, []);
 
   useEffect(() => {
-    const wrapper = wrapperRef.current;
+    const wrapper = canvasRef.current;
     if (!wrapper) return;
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault();
@@ -1186,14 +1232,15 @@ export function LayoutViewport({
         : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
           ? event.deltaY * Math.max(1, wrapper.clientHeight)
           : event.deltaY;
-      setCamera((current) => ({
-        ...current,
-        distance: zoomedCameraDistance(
-          current.distance,
-          deltaY,
-          current.target,
-        ),
-      }));
+      const rect = wrapper.getBoundingClientRect();
+      const x = event.clientX - rect.left, y = event.clientY - rect.top;
+      const snapshot = zoomProjectionRef.current;
+      const depth = snapshot ? zoomFocusDepth(snapshot.geometry, x, y) : undefined;
+      const focus = snapshot && depth !== undefined
+        ? screenPointAtDepth(snapshot.camera, x, y, depth, snapshot.width, snapshot.height)
+        : undefined;
+      setCamera((current) => zoomCameraAtPoint(current, x, y, deltaY, rect.width, rect.height,
+        focus ? cameraProjector(current, rect.width, rect.height)(focus)?.depth : undefined));
     };
     wrapper.addEventListener("wheel", handleWheel, { passive: false });
     return () => wrapper.removeEventListener("wheel", handleWheel);
@@ -1224,23 +1271,26 @@ export function LayoutViewport({
     context.fillStyle = gradient;
     context.fillRect(0, 0, width, height);
 
-    const requestedGridStep = Math.max(camera.distance / 35, 1e-12);
-    const gridPower = 10 ** Math.floor(Math.log10(requestedGridStep));
-    const gridRatio = requestedGridStep / gridPower;
-    const gridStep = gridPower * (gridRatio <= 1 ? 1 : gridRatio <= 2 ? 2 : gridRatio <= 5 ? 5 : 10);
-    const gridExtent = Math.max(gridStep * 5, camera.distance * 0.9);
-    const gridMinX = Math.floor((camera.target[0] - gridExtent) / gridStep) * gridStep;
-    const gridMaxX = Math.ceil((camera.target[0] + gridExtent) / gridStep) * gridStep;
-    const gridMinZ = Math.floor((camera.target[2] - gridExtent) / gridStep) * gridStep;
-    const gridMaxZ = Math.ceil((camera.target[2] + gridExtent) / gridStep) * gridStep;
+    const grid = [0, 2].map((axis) => {
+      const requestedStep = Math.max(camera.distance / 35 / (camera.axisScale?.[axis] ?? 1),
+        Math.abs(camera.target[axis]) * Number.EPSILON * 8, 1e-12);
+      const power = 10 ** Math.floor(Math.log10(requestedStep));
+      const ratio = requestedStep / power;
+      const step = power * (ratio <= 1 ? 1 : ratio <= 2 ? 2 : ratio <= 5 ? 5 : 10);
+      const extent = Math.max(step * 5, camera.distance * 0.9 / (camera.axisScale?.[axis] ?? 1));
+      return {step, min: Math.floor((camera.target[axis] - extent) / step) * step,
+        max: Math.ceil((camera.target[axis] + extent) / step) * step};
+    });
+    const [gridX, gridZ] = grid;
     context.lineWidth = 1;
     const drawGridLine = (value: number, axis: "x" | "z") => {
       const lines = axis === "x"
-        ? [[project([value, 0, gridMinZ]), project([value, 0, gridMaxZ])]]
-        : [[project([gridMinX, 0, value]), project([gridMaxX, 0, value])]];
-      const gridIndex = Math.round(value / gridStep);
+        ? [[project([value, 0, gridZ.min]), project([value, 0, gridZ.max])]]
+        : [[project([gridX.min, 0, value]), project([gridX.max, 0, value])]];
+      const step = axis === "x" ? gridX.step : gridZ.step;
+      const gridIndex = Math.round(value / step);
       context.strokeStyle =
-        Math.abs(value) <= gridStep * 1e-8
+        Math.abs(value) <= step * 1e-8
           ? "rgba(127, 166, 191, .26)"
           : Math.abs(gridIndex) % 5 === 0
             ? "rgba(127, 166, 191, .13)"
@@ -1253,10 +1303,10 @@ export function LayoutViewport({
         context.stroke();
       }
     };
-    for (let value = gridMinX; value <= gridMaxX + gridStep * 0.5; value += gridStep) {
+    for (let value = gridX.min; value <= gridX.max + gridX.step * 0.5; value += gridX.step) {
       drawGridLine(value, "x");
     }
-    for (let value = gridMinZ; value <= gridMaxZ + gridStep * 0.5; value += gridStep) {
+    for (let value = gridZ.min; value <= gridZ.max + gridZ.step * 0.5; value += gridZ.step) {
       drawGridLine(value, "z");
     }
 
@@ -1304,6 +1354,7 @@ export function LayoutViewport({
     }
 
     const hits: HitTarget[] = [];
+    const zoomGeometry: ZoomGeometry = {faces, lines: [], points: []};
     const drawFeature = (
       feature: "magnetic" | "beam",
       axes: FeatureAxisGeometry[],
@@ -1329,6 +1380,7 @@ export function LayoutViewport({
           const a = projected[index - 1];
           const b = projected[index];
           if (!a || !b) continue;
+          zoomGeometry.lines.push([a, b]);
           hits.push({
             kind: "feature_axis_hit",
             feature,
@@ -1348,6 +1400,7 @@ export function LayoutViewport({
           .map(project)
           .filter(Boolean) as Projection[];
         if (polygon.length !== featureFrame.vertices.length) continue;
+        zoomGeometry.faces.push({polygon});
         const active = selection?.kind === "object" &&
           selection.name === featureFrame.object;
         const hovering = hoverStyleKey ===
@@ -1443,6 +1496,7 @@ export function LayoutViewport({
         const a = projected[index - 1];
         const b = projected[index];
         if (!a || !b) continue;
+        zoomGeometry.lines.push([a, b]);
         hits.push({
           kind: "curve_hit",
           name: curve.name,
@@ -1489,6 +1543,7 @@ export function LayoutViewport({
       if (!projected.length) {
         const center = project(object.frame.o);
         if (center) {
+          zoomGeometry.points.push(center);
           const radius = active || hovering ? 6 : 4.5;
           context.beginPath();
           context.moveTo(center.x, center.y - radius);
@@ -1553,6 +1608,7 @@ export function LayoutViewport({
     if (showFrames) for (const namedFrame of scene.frames) {
       const projected = project(namedFrame.frame.o);
       if (!projected) continue;
+      zoomGeometry.points.push(projected);
       const active =
         hoverStyleKey === `frame:${namedFrame.object}:${namedFrame.name}` ||
         (selection?.kind === "frame" &&
@@ -1607,6 +1663,7 @@ export function LayoutViewport({
     }
 
     hitTargetsRef.current = hits;
+    zoomProjectionRef.current = {camera, width, height, geometry: zoomGeometry};
   }, [
     camera,
     hoverStyleKey,
@@ -1665,7 +1722,7 @@ export function LayoutViewport({
         ];
         for (const axis of axes) {
           const endpoint = project(
-            add(hoveredFrame.o, scale(axis.vector, axisSize)),
+            add(hoveredFrame.o, scale(axis.vector, axisSize / length(displayVector(axis.vector, camera)))),
           );
           if (!endpoint) continue;
           context.beginPath();
@@ -2060,18 +2117,7 @@ export function LayoutViewport({
         }));
       } else if (activeMode === "pan") {
         setZoomRectangle(null);
-        const panScale =
-          (camera.distance / Math.max(size.width, size.height)) * 1.45;
-        const cos = Math.cos(camera.azimuth);
-        const sin = Math.sin(camera.azimuth);
-        setCamera((current) => ({
-          ...current,
-          target: add(current.target, [
-            (-dx * cos - dy * sin * Math.sin(camera.elevation)) * panScale,
-            dy * Math.cos(camera.elevation) * panScale,
-            (dx * sin - dy * cos * Math.sin(camera.elevation)) * panScale,
-          ]),
-        }));
+        setCamera((current) => panCamera(current, dx, dy, size.width, size.height));
       } else if (activeMode === "zoom-region" && drag.zooming) {
         const point = pointerCoordinates(event);
         setZoomRectangle({
@@ -2106,16 +2152,20 @@ export function LayoutViewport({
       const rectangle = {
         startX: drag.localStartX,
         startY: drag.localStartY,
-        endX: point.x,
-        endY: point.y,
+        endX: Math.max(0, Math.min(size.width, point.x)),
+        endY: Math.max(0, Math.min(size.height, point.y)),
       };
       if (
         drag.moved &&
         Math.abs(rectangle.endX - rectangle.startX) >= 6 &&
         Math.abs(rectangle.endY - rectangle.startY) >= 6
       ) {
+        const snapshot = zoomProjectionRef.current;
+        const depth = snapshot ? zoomFocusDepth(snapshot.geometry,
+          (rectangle.startX + rectangle.endX) / 2,
+          (rectangle.startY + rectangle.endY) / 2, rectangle) : undefined;
         setCamera((current) =>
-          zoomCameraToRectangle(current, rectangle, size.width, size.height)
+          zoomCameraToRectangle(current, rectangle, size.width, size.height, depth)
         );
       }
       setZoomRectangle(null);
@@ -2637,10 +2687,44 @@ export function LayoutViewport({
           })}
           <circle className="axis-marker-origin" cx="38" cy="38" r="2.7" />
         </svg>
+        <div className="viewport-scale-control">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button type="button" size="sm" variant="ghost"
+                aria-label="Global axis display scale" data-scaled={scaledDisplay}>
+                <SlidersHorizontal />
+                <span className="truncate">{scaledDisplay
+                  ? `Scale: ${axisScale.map((value, i) => `${"XYZ"[i]} ${Number(value.toPrecision(3))}×`).join(" · ")}`
+                  : "Axis scale"}</span>
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent side="top" align="start" className="viewport-scale-panel">
+              <h3>Global axis scale</h3>
+              <p>Compress below 1× or stretch above 1×. Display only; coordinates keep their physical values.</p>
+              {axisScale.map((value, axis) => (
+                <div className="viewport-scale-row" key={axis}>
+                  <span>{"XYZ"[axis]}</span>
+                  <Slider aria-label={`Global ${"XYZ"[axis]} scale`} min={-3} max={3} step={0.01}
+                    value={[Math.log10(value)]}
+                    onValueChange={([exponent]) => setAxisScale(axis, Number((10 ** exponent).toPrecision(6)))} />
+                  <NumberInput label={`Global ${"XYZ"[axis]} scale factor`} value={value} min={0.001}
+                    step={0.1} onChange={(next) => setAxisScale(axis, next)} />
+                </div>
+              ))}
+              <div className="viewport-scale-actions">
+                <Button type="button" size="sm" variant="outline" onClick={() =>
+                  setCamera((current) => ({...current, axisScale: [...UNIT_AXIS_SCALE]}))}>
+                  Reset to 1×
+                </Button>
+                <Button type="button" size="sm" variant="outline" onClick={fit}>Fit layout</Button>
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
         <div className="viewport-hint">
           {mode === "zoom-region"
-            ? "Draw a rectangle to zoom · Shift-drag or right-drag to pan"
-            : `Drag to ${mode} · wheel to zoom · click again or empty space to clear`}
+            ? "Draw around a detail to approach it · Shift-drag or right-drag to pan"
+            : `Drag to ${mode} · wheel toward pointer · click again or empty space to clear`}
         </div>
         {geometryError && (
           <div className="viewport-error" role="alert">

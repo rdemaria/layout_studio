@@ -33,6 +33,7 @@ lint: install
 test: install
 	$(NODE) --test tests/layout-data.test.mjs
 	$(NODE) --test tests/feature-references.test.mjs
+	$(NODE) --test tests/viewport-navigation.test.mjs
 	$(NODE) --test tests/layout-import.test.mjs
 	$(NODE) --test tests/sps-performance.test.mjs
 	$(NODE) --test tests/python-bridge.test.mjs

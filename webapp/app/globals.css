@@ -1442,11 +1442,48 @@ textarea {
 .viewport-hint {
   position: absolute;
   right: 12px;
-  bottom: 10px;
+  bottom: 52px;
   color: rgba(190, 207, 216, 0.62);
   font-size: 0.7rem;
   pointer-events: none;
 }
+
+.viewport-scale-control {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  max-width: calc(100% - 24px);
+  border: 1px solid rgba(137, 162, 178, 0.32);
+  border-radius: 6px;
+  background: rgba(8, 14, 22, 0.9);
+  color: #c8d5db;
+}
+
+.viewport-scale-control button {
+  max-width: 100%;
+  font-size: 0.8rem;
+}
+
+.viewport-scale-control button[data-scaled="true"] {
+  color: #ffd166;
+}
+
+.viewport-scale-panel {
+  width: min(390px, calc(100vw - 24px));
+}
+
+.viewport-scale-panel h3 { font-size: 1rem; font-weight: 650; }
+.viewport-scale-panel p { font-size: 0.875rem; line-height: 1.45; color: var(--muted-foreground); margin-block: 6px 16px; }
+.viewport-scale-row {
+  display: grid;
+  grid-template-columns: 16px minmax(50px, 1fr) 146px;
+  align-items: center;
+  gap: 12px;
+  margin-block: 12px;
+  font-size: 0.875rem;
+}
+.viewport-scale-row .number-input { font-size: 0.875rem; }
+.viewport-scale-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 18px; }
 
 .viewport-label {
   position: absolute;
