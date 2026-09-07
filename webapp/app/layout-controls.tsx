@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -36,6 +36,7 @@ import type {
 import {
   NON_CURVE_TRANSFORM_NAMES,
   TRANSFORM_NAMES,
+  getLayoutDependencyGraph,
   objectFrameNames,
 } from "./layout-data";
 
@@ -367,53 +368,35 @@ export function ReferenceEditor({
     value: Transformation & Partial<Pick<ObjectPosition, "reference_curve">>,
   ) => void;
 }) {
-  const reverseDependencies = new Map<string, string[]>();
-  const addDependency = (node: string, transformation: Transformation) => {
-    const reference = transformation.reference;
-    const dependencies = [
-      reference.kind === "curve"
-        ? `curve:${reference.curve}`
-        : reference.kind === "object_frame"
-          ? `object:${reference.object}`
-          : null,
-    ];
-    const objectPosition = transformation as Partial<ObjectPosition>;
-    if (
-      reference.kind !== "curve" &&
-      objectPosition.reference_curve &&
-      transformation.transformation.some(([name]) => name === "ts")
-    ) {
-      dependencies.push(`curve:${objectPosition.reference_curve}`);
+  const reverseDependencies = useMemo(() => {
+    const dependents = new Map<string, string[]>();
+    for (const edge of getLayoutDependencyGraph(layout).edges) {
+      const list = dependents.get(edge.to) ?? [];
+      list.push(edge.from);
+      dependents.set(edge.to, list);
     }
-    for (const dependency of dependencies) {
-      if (!dependency) continue;
-      reverseDependencies.set(dependency, [
-        ...(reverseDependencies.get(dependency) ?? []),
-        node,
-      ]);
+    return dependents;
+  }, [layout]);
+  const { curveNames, objectNames } = useMemo(() => {
+    const unsafeReferences = new Set<string>();
+    const pending = [`${owner.kind}:${owner.name}`];
+    while (pending.length) {
+      const node = pending.pop()!;
+      if (unsafeReferences.has(node)) continue;
+      unsafeReferences.add(node);
+      for (const dependent of reverseDependencies.get(node) ?? []) {
+        pending.push(dependent);
+      }
     }
-  };
-  for (const [name, curve] of Object.entries(layout.reference_curves)) {
-    addDependency(`curve:${name}`, curve.starting_frame);
-  }
-  for (const [name, object] of Object.entries(layout.objects)) {
-    addDependency(`object:${name}`, object.position);
-  }
-  const unsafeReferences = new Set<string>();
-  const pending = [`${owner.kind}:${owner.name}`];
-  while (pending.length) {
-    const node = pending.pop()!;
-    if (unsafeReferences.has(node)) continue;
-    unsafeReferences.add(node);
-    pending.push(...(reverseDependencies.get(node) ?? []));
-  }
-
-  const curveNames = Object.keys(layout.reference_curves).filter(
-    (name) => !unsafeReferences.has(`curve:${name}`),
-  );
-  const objectNames = Object.keys(layout.objects).filter(
-    (name) => !unsafeReferences.has(`object:${name}`),
-  );
+    return {
+      curveNames: Object.keys(layout.reference_curves).filter(
+        (name) => !unsafeReferences.has(`curve:${name}`),
+      ),
+      objectNames: Object.keys(layout.objects).filter(
+        (name) => !unsafeReferences.has(`object:${name}`),
+      ),
+    };
+  }, [layout, owner.kind, owner.name, reverseDependencies]);
   const frameNamesForObject = (objectName: string) => {
     const type = layout.types[layout.objects[objectName]?.type];
     return type ? objectFrameNames(type, layout.objects[objectName]) : ["center"];
@@ -526,36 +509,21 @@ export function ReferenceEditor({
 
         {reference.kind === "object_frame" && (
           <>
-            <Field label="Object">
-              <NativeSelect
-                value={reference.object}
-                onChange={(event) => {
-                  const object = event.target.value;
-                  const frame = frameNamesForObject(object)[0];
-                  emit({
-                    reference: { kind: "object_frame", object, frame },
-                  });
-                }}
-              >
-                {objectNames.map((name) => (
-                  <NativeSelectOption key={name} value={name}>{name}</NativeSelectOption>
-                ))}
-              </NativeSelect>
-            </Field>
-            <Field label="Frame">
-              <NativeSelect
-                value={reference.frame}
-                onChange={(event) =>
-                  emit({
-                    reference: { ...reference, frame: event.target.value },
-                  })
-                }
-              >
-                {frameNamesForObject(reference.object).map((name) => (
-                  <NativeSelectOption key={name} value={name}>{name}</NativeSelectOption>
-                ))}
-              </NativeSelect>
-            </Field>
+            <NamePicker
+              label="Object"
+              names={objectNames}
+              value={reference.object}
+              onSelect={(object) => {
+                const frame = frameNamesForObject(object)[0];
+                emit({ reference: { kind: "object_frame", object, frame } });
+              }}
+            />
+            <NamePicker
+              label="Frame"
+              names={frameNamesForObject(reference.object)}
+              value={reference.frame}
+              onSelect={(frame) => emit({ reference: { ...reference, frame } })}
+            />
           </>
         )}
 

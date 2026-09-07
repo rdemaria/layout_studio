@@ -22,6 +22,8 @@ npm test
 `npm test` builds the Sites application and runs the model, geometry, rendering, and
 interface tests.
 
+For the SPS performance analysis and profiling commands, see [PERFORMANCE.md](PERFORMANCE.md).
+
 ## Standalone build
 
 Running the standalone build produces `build/index.html` with its JavaScript and
@@ -51,6 +53,7 @@ wheel. Do not add a second generated HTML copy under `python_api`.
 - `app/layout-url-catalog.ts` — catalog validation and debug URL resolution.
 - `app/layout-import.ts` — JSON loading from files and URLs.
 - `app/layout-controls.tsx` — reusable model-editing controls.
+- `app/curve-segment-editor.tsx` — lazily mounted segment editor with 50-row pages.
 - `app/dependency-tree.tsx` — World-rooted dependency view.
 - `app/globals.css` — responsive application styling.
 - `tests/` — model, geometry, rendering, and UI regression checks.

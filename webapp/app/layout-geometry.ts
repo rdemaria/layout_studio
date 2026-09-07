@@ -1040,6 +1040,10 @@ export function buildScene(
   const curveCache = new Map<string, CurveGeometry>();
   const objectCache = new Map<string, Frame>();
   const namedFrameCache = new Map<string, Frame>();
+  // Several objects often advance from the same anchor. Its inferred station
+  // is independent of their path shifts. Keep this cache local to one build so
+  // edits to a curve or an anchor always recompute the projection.
+  const transversePathCache = new Map<string, WeakMap<Vec3, number>>();
 
   const resolveTransformation = (value: Transformation, stack: string[]): Frame => {
     let base = cloneFrame(IDENTITY);
@@ -1131,6 +1135,9 @@ export function buildScene(
     stack: string[],
     label: string,
   ): number => {
+    const paths = transversePathCache.get(curveName) ?? new WeakMap<Vec3, number>();
+    const cached = paths.get(point);
+    if (cached !== undefined) return cached;
     const result = closestTransverseCurvePathForPoint(
       resolveCurve(curveName, stack),
       point,
@@ -1145,7 +1152,10 @@ export function buildScene(
         `${label}: cannot infer s on curve ${curveName}; multiple transverse-plane solutions are equally close to the referenced frame origin`,
       );
     }
-    return result.path as number;
+    const path = result.path as number;
+    paths.set(point, path);
+    transversePathCache.set(curveName, paths);
+    return path;
   };
 
   const resolveObjectPosition = (

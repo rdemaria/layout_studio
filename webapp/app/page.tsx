@@ -80,6 +80,7 @@ import {
   type SelectedEntity,
 } from "./layout-data";
 import { DependencyTree } from "./dependency-tree";
+import { CurveSegmentEditor, SEGMENT_PAGE_SIZE } from "./curve-segment-editor";
 import {
   LayoutViewport,
   toggleViewerSelection,
@@ -248,6 +249,7 @@ export default function Home() {
   const [viewerCardOpen, setViewerCardOpen] = useState(true);
   const [dependenciesCardOpen, setDependenciesCardOpen] = useState(true);
   const [segmentsOpen, setSegmentsOpen] = useState(true);
+  const [segmentPage, setSegmentPage] = useState(0);
   const [typeFramesOpen, setTypeFramesOpen] = useState(true);
   const [viewerRevision, setViewerRevision] = useState(0);
   const [viewportFitRequest, setViewportFitRequest] =
@@ -354,6 +356,7 @@ export default function Home() {
     const firstFrame = Object.keys(parsed.types[activeType]?.frames ?? {})[0] ?? "";
     setLayout(parsed);
     setSelectedCurve(firstCurve);
+    setSegmentPage(0);
     setSelectedType(activeType);
     setSelectedObject(firstObject);
     setSelectedTypeFrame(firstFrame);
@@ -456,6 +459,7 @@ export default function Home() {
     layoutRef.current = createEmptyLayout();
     setLayout(createEmptyLayout());
     setSelectedCurve("");
+    setSegmentPage(0);
     setSelectedType("");
     setSelectedObject("");
     setSelectedTypeFrame("");
@@ -472,6 +476,7 @@ export default function Home() {
   const selectCurve = (name: string) => {
     if (!layout.reference_curves[name]) return;
     setSelectedCurve(name);
+    setSegmentPage(0);
     setSelection({ kind: "curve", name });
   };
 
@@ -550,6 +555,7 @@ export default function Home() {
       setCurvesCardOpen(true);
       setSegmentsOpen(true);
       setSelectedCurve(toggled.name);
+      setSegmentPage(Math.floor((toggled.segmentIndex ?? 0) / SEGMENT_PAGE_SIZE));
       setSelection(toggled);
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
@@ -663,6 +669,7 @@ export default function Home() {
       setCurvesCardOpen(true);
       setSegmentsOpen(true);
       setSelectedCurve(next.name);
+      setSegmentPage(Math.floor((next.segmentIndex ?? 0) / SEGMENT_PAGE_SIZE));
     } else {
       const objectName = next.kind === "object" ? next.name : next.object;
       const nextObject = currentLayout.objects[objectName];
@@ -1573,82 +1580,25 @@ export default function Home() {
                         </CollapsibleTrigger>
                       </div>
                       <CollapsibleContent>
-                        <div className="segment-head">
-                          <span>#</span><span>Length [m]</span><span>Angle (°)</span><span>Roll (°)</span><span />
-                        </div>
-                        <div
-                          aria-label={`${selectedCurve} segments`}
-                          className={`segment-list ${
-                            curve.segments.length > 4
-                              ? "segment-list-scrollable"
-                              : ""
-                          }`}
-                        >
-                          {curve.segments.map((segment, index) => (
-                            <div
-                              aria-label={`Segment ${index + 1} editor`}
-                              className={`segment-row ${
-                                selection?.kind === "curve" &&
-                                selection.name === selectedCurve &&
-                                selection.segmentIndex === index
-                                  ? "selected-segment-row"
-                                  : ""
-                              }`}
-                              id={`curve-segment-row-${index}`}
-                              key={index}
-                              role="group"
-                              tabIndex={-1}
-                            >
-                              <span className="row-index">
-                                {String(index + 1).padStart(2, "0")}
-                              </span>
-                              {segment.map((value, axis) => (
-                                <NumberInput
-                                  key={axis}
-                                  value={
-                                    axis === 0
-                                      ? value
-                                      : Math.round((value * 180 / Math.PI) * 1e10) / 1e10
-                                  }
-                                  min={axis === 0 ? 0 : undefined}
-                                  step={axis === 0 ? 0.1 : 5}
-                                  label={`Segment ${index + 1} ${["length", "angle", "roll"][axis]}`}
-                                  onChange={(next) =>
-                                    update((draft) => {
-                                      draft.reference_curves[selectedCurve].segments[index][axis] =
-                                        axis === 0
-                                          ? Math.max(0.000001, next)
-                                          : next * Math.PI / 180;
-                                    })
-                                  }
-                                />
-                              ))}
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon-sm"
-                                aria-label={`Remove segment ${index + 1}`}
-                                disabled={curve.segments.length === 1}
-                                onClick={() => removeCurveSegment(index)}
-                              >
-                                <Trash2 />
-                              </Button>
-                            </div>
-                          ))}
-                        </div>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="wide-add"
-                          onClick={() =>
+                        <CurveSegmentEditor
+                          open={segmentsOpen}
+                          curveName={selectedCurve}
+                          segments={curve.segments}
+                          selectedIndex={selection?.kind === "curve" && selection.name === selectedCurve
+                            ? selection.segmentIndex : undefined}
+                          page={segmentPage}
+                          onPageChange={setSegmentPage}
+                          onChange={(index, axis, value) => update((draft) => {
+                            draft.reference_curves[selectedCurve].segments[index][axis] = value;
+                          })}
+                          onRemove={removeCurveSegment}
+                          onAdd={() => {
+                            setSegmentPage(Math.floor(curve.segments.length / SEGMENT_PAGE_SIZE));
                             update((draft) => {
                               draft.reference_curves[selectedCurve].segments.push([1, 0, 0]);
-                            })
-                          }
-                        >
-                          <Plus /> Add segment
-                        </Button>
+                            });
+                          }}
+                        />
                       </CollapsibleContent>
                     </Collapsible>
                   </>

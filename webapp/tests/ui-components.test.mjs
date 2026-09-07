@@ -780,7 +780,8 @@ test("renders collapsible controls for every main card", async () => {
     readFile(path.join(root, "app/dependency-tree.tsx"), "utf8"),
     readFile(path.join(root, "app/globals.css"), "utf8"),
   ]);
-  assert.match(pageSource, /curve\.segments\.length > 4/);
+  const segmentSource = await readFile(path.join(root, "app/curve-segment-editor.tsx"), "utf8");
+  assert.match(segmentSource, /segments\.length > 4/);
   assert.match(pageSource, /key=\{`dependencies-\$\{viewerRevision\}`\}/);
   assert.match(dependencySource, /useState<Set<string>>\(\(\) => new Set\(\)\)/);
   assert.match(dependencySource, /dependentsByAnchor\.get\(edge\.to\)/);

@@ -816,6 +816,16 @@ textarea {
   border-style: dashed;
 }
 
+.segment-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 0.8rem;
+  color: #607078;
+}
+
 .object-basics {
   display: grid;
   grid-template-columns: 1fr 1fr;
