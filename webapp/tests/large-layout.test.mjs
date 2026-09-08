@@ -85,6 +85,14 @@ test("reference candidate checks match frame graph semantics without filtering a
   assert.equal(matchingNames(names,"",()=>{checked++;return true;}).length,50);
   assert.equal(checked,50);
   assert.deepEqual(matchingNames(names,"magnet-99999"),["magnet-99999"]);
+  const ringNames = [
+    ...Array.from({length:80},(_,i)=>`MB.${i}.1R1`),
+    "1L1", "1R2", "1R1", "1R1.A", "S12",
+  ];
+  assert.deepEqual(matchingNames(ringNames,"1r1"),["1R1","1R1.A"]);
+  assert.deepEqual(matchingNames(ringNames,"1R1.A"),["1R1.A"]);
+  assert.deepEqual(matchingNames(ringNames,"R1"),[]);
+  assert.deepEqual(matchingNames(ringNames,"1R1",name=>name!=="1R1"),["1R1.A"]);
 });
 
 test("adaptive reference curve drawing refines bends at close range", () => {

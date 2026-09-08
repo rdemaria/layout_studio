@@ -82,9 +82,10 @@ are prepared in the background for the detailed objects and layers currently in
 view; segment boundaries and exact analytic curve readouts remain available.
 These display choices do not change positioning or exported data.
 
-Pickers search the complete name list but display at most 50 matches. Large
-dependency trees start closed, page each branch in groups of 50, and expand one
-branch at a time.
+Pickers match the start of names using the full query, ignoring case, and display
+at most 50 matches. For example, `1R1` matches `1R1` and `1R1.A`, but not
+`MBAS2.1R1` or `1R2`. Large dependency trees start closed, page each branch in
+groups of 50, and expand one branch at a time.
 
 Dependency children sharing a reference curve and reference frame are ordered by
 their placement's curve station, using the sum of their `ts` shifts. Equal stations

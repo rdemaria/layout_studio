@@ -46,7 +46,7 @@ export function matchingNames(names: string[], query: string, allowed?: (name: s
   const result: string[] = [];
   const needle = query.toLocaleLowerCase();
   for (const name of names) {
-    if (name.toLocaleLowerCase().includes(needle) && (!allowed || allowed(name))) {
+    if (name.toLocaleLowerCase().startsWith(needle) && (!allowed || allowed(name))) {
       result.push(name);
       if (result.length >= limit) break;
     }

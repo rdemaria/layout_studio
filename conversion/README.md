@@ -113,8 +113,11 @@ The generated plain LHC JSON contains 161,941 of 162,758 source objects.
 817 objects have missing ancestors and are listed in the report. The missing
 external parents are `DFBLA.RR13`, `DFBLB.RR17`, `DFBLD.RR53`, `DFBLE.RR57`,
 `GISCB.01UX85`, and `UJ33`; their positions cannot be recovered from this snapshot.
-The JSON is also copied to `webapp/public/layouts/` and the standalone build,
-with an entry in their `list.json` catalogs. See
+The LHC JSON is supplied separately; generate it with the command above or import
+the supplied file. Updating the viewer does not update an already loaded model.
+Conversions made with the earlier seam workaround must be regenerated or
+replaced: the corrected hierarchy has five branches under `S12`, including
+`S12 → LSSR1 → 1R1`. See
 [LHC viewer performance](../webapp/LHC-PERFORMANCE.md) for measurements and proposals.
 
 For a span, resolve its station interval from the longitudinal source hierarchy.

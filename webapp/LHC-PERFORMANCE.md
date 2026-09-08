@@ -13,7 +13,7 @@ the JSON with the command below, or import the separately supplied JSON file.
 
 ## Converted data and validation
 
-- Plain JSON: 35,608,954 bytes; 161,941 objects and 4,764 types.
+- Plain JSON: 35,611,379 bytes; 161,941 objects and 4,764 types.
 - Circumference: 26,658.8832 m; 2,465 analytic reference-curve segments.
 - 578 logical containers use path spans. Hardware uses the shared straight
   mechanical default and approximate 0.1 m transverse boxes.
