@@ -234,6 +234,12 @@ type CurveProbe = {
   sources: CurveStationSource[];
 };
 
+function featureBoundaryLabel(feature: FeatureFrameGeometry["kind"], name: string) {
+  if (name.endsWith("_center")) return "center";
+  const isEntry = name.endsWith("_entry");
+  return feature === "beam" ? (isEntry ? "in" : "out") : (isEntry ? "start" : "end");
+}
+
 export function projectFeatureFrame(
   featureFrame: FeatureFrameGeometry,
   project: Projector,
@@ -529,8 +535,7 @@ export function* featurePlaneCurveStations(
       for (const path of intersections.paths) {
         const frame = frameAtCurvePath(curve, path);
         if (!pointInsideFeaturePlane(frame.o, featureFrame)) continue;
-        const boundary = featureFrame.name.endsWith("_center") ? "center"
-          : featureFrame.name.endsWith("_entry") ? "start" : "end";
+        const boundary = featureBoundaryLabel(feature, featureFrame.name);
         const label = feature === "beam" ? "beam interface" : `${feature} axis`;
         stations.push({path, frame, sources: [{
           kind: "plane", feature, object: featureFrame.object, name: featureFrame.name,
@@ -1639,7 +1644,7 @@ export function LayoutViewport({
         context.beginPath();
         context.arc(x, y, isCenter ? 4.5 : 3, 0, Math.PI * 2);
         context.fill();
-        context.fillText(isCenter ? "CENTER" : feature === "mechanical" ? (isEntry ? "START" : "END") : (isEntry ? "IN" : "OUT"), x + 6, y - 6);
+        context.fillText(featureBoundaryLabel(feature, featureFrame.name).toUpperCase(), x + 6, y - 6);
         hits.push({
           kind: "feature_frame",
           feature,
@@ -2535,7 +2540,7 @@ export function LayoutViewport({
       (hovered.feature === "mechanical" ? showMechanicalAxis : hovered.feature === "magnetic" ? showMagneticAxis : showBeamAxis)
     ) {
       return {
-        label: `${hovered.feature === "mechanical" ? "Mechanical" : hovered.feature === "magnetic" ? "Magnetic" : "Beam"} ${hovered.name.endsWith("_center") ? "center" : hovered.name.endsWith("_entry") ? "entry" : "exit"} frame · ${hovered.object}`,
+        label: `${hovered.feature === "mechanical" ? "Mechanical" : hovered.feature === "magnetic" ? "Magnetic" : "Beam"} ${featureBoundaryLabel(hovered.feature, hovered.name)} frame · ${hovered.object}`,
         frame: hovered.frame,
       };
     }
