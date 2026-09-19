@@ -5,10 +5,13 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useReducer,
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
+  ArrowLeft,
+  ArrowRight,
   ChevronDown,
   Focus,
   MousePointer2,
@@ -31,6 +34,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Slider } from "@/components/ui/slider";
 import { NumberInput } from "./number-input";
 import { zoomFocusDepth, type ZoomGeometry } from "./viewport-zoom";
+import { cameraHistoryReducer, initialCameraHistory, type Camera } from "./viewport-history";
 import { beginLayoutProfile, endLayoutProfile } from "./layout-performance";
 import {
   Tooltip,
@@ -74,7 +78,6 @@ import { buildSpatialIndex, selectSceneDetail, compactProxies, visibleCurveSampl
 import {buildSceneLayers, type SceneLayers} from "./layout-layers";
 
 type NavigationMode = "orbit" | "pan" | "select" | "zoom-region";
-type Camera = { azimuth: number; elevation: number; distance: number; target: Vec3; axisScale?: Vec3 };
 type Projection = { x: number; y: number; depth: number; scale: number };
 type Projector = (point: Vec3) => Projection | null;
 export type CanonicalView = "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
@@ -845,11 +848,13 @@ function rgba(hex: string, alpha: number): string {
 
 function ToolButton({
   active = false,
+  disabled = false,
   label,
   onClick,
   children,
 }: {
   active?: boolean;
+  disabled?: boolean;
   label: string;
   onClick: () => void;
   children: React.ReactNode;
@@ -862,6 +867,7 @@ function ToolButton({
           variant={active ? "default" : "ghost"}
           size="icon-sm"
           aria-label={label}
+          disabled={disabled}
           onClick={onClick}
         >
           {children}
@@ -897,6 +903,7 @@ export function LayoutViewport({
     camera: Camera; width: number; height: number; geometry: ZoomGeometry;
   } | null>(null);
   const dragRef = useRef<{
+    cameraGroup: string;
     startX: number;
     startY: number;
     x: number;
@@ -981,12 +988,33 @@ export function LayoutViewport({
     id: number;
     error?: string;
   } | null>(null);
-  const [camera, setCamera] = useState<Camera>({
+  const [cameraHistory, dispatchCamera] = useReducer(cameraHistoryReducer, {
     azimuth: -0.68,
     elevation: 0.42,
     distance: 20,
     target: [0, 0, 4],
-  });
+  }, initialCameraHistory);
+  const camera = cameraHistory.present;
+  const setCamera = useCallback((update: (current: Camera) => Camera, group?: string, reset = false) => {
+    dispatchCamera({type: "change", update, group, reset});
+  }, []);
+  const gestureSequence = useRef(0);
+  const burst = useRef({kind: "", time: -Infinity, group: ""});
+  const burstGroup = useCallback((kind: "wheel" | "scale") => {
+    const time = performance.now();
+    if (burst.current.kind !== kind || time - burst.current.time > 400) {
+      burst.current.group = `${kind}-${++gestureSequence.current}`;
+    }
+    burst.current.kind = kind;
+    burst.current.time = time;
+    return burst.current.group;
+  }, []);
+  const navigateHistory = useCallback((direction: "back" | "forward") => {
+    dragRef.current = null;
+    setZoomRectangle(null);
+    setHovered(null);
+    dispatchCamera({type: direction});
+  }, []);
   const [size, setSize] = useState({ width: 900, height: 650 });
   const axisScale = camera.axisScale ?? UNIT_AXIS_SCALE;
   const scaledDisplay = axisScale.some((value) => value !== 1);
@@ -996,7 +1024,7 @@ export function LayoutViewport({
       const factors: Vec3 = [...(current.axisScale ?? UNIT_AXIS_SCALE)];
       factors[axis] = Math.max(0.001, Math.min(1000, value));
       return {...current, axisScale: factors};
-    });
+    }, burstGroup("scale"));
   };
   const worldAxes = useMemo(
     () => worldAxisMarkerProjection({
@@ -1268,14 +1296,14 @@ export function LayoutViewport({
     };
   }, [curveProbe, geometryError, selectedCurve, selectedCurveStations]);
 
-  const fitPoints = useCallback((points: Vec3[]) => {
+  const fitPoints = useCallback((points: Vec3[], resetHistory = false) => {
     const rect = wrapperRef.current?.getBoundingClientRect();
     const width = rect?.width || size.width;
     const height = rect?.height || size.height;
     setCamera((current) =>
-      fitCameraToPoints(current, points, width, height)
+      fitCameraToPoints(current, points, width, height), undefined, resetHistory
     );
-  }, [size.height, size.width]);
+  }, [setCamera, size.height, size.width]);
 
   const visibleBounds = useMemo(
     () => {
@@ -1300,7 +1328,7 @@ export function LayoutViewport({
       showCurves,
       showFrames,
       showMechanicalAxis,
-    showMagneticAxis,
+      showMagneticAxis,
       showObjects,
     ],
   );
@@ -1313,9 +1341,9 @@ export function LayoutViewport({
   useEffect(() => {
     if (!fittedOnceRef.current && (scene.curves.length || scene.objects.length)) {
       fittedOnceRef.current = true;
-      fit();
+      fitPoints(visibleBounds ? boundsCorners(visibleBounds) : [], true);
     }
-  }, [fit, scene]);
+  }, [fitPoints, visibleBounds, scene]);
 
   // Apply external commands after commit; acknowledge the resulting render below.
   useEffect(() => {
@@ -1384,11 +1412,11 @@ export function LayoutViewport({
         ? screenPointAtDepth(snapshot.camera, x, y, depth, snapshot.width, snapshot.height)
         : undefined;
       setCamera((current) => zoomCameraAtPoint(current, x, y, deltaY, rect.width, rect.height,
-        focus ? cameraProjector(current, rect.width, rect.height)(focus)?.depth : undefined));
+        focus ? cameraProjector(current, rect.width, rect.height)(focus)?.depth : undefined), burstGroup("wheel"));
     };
     wrapper.addEventListener("wheel", handleWheel, { passive: false });
     return () => wrapper.removeEventListener("wheel", handleWheel);
-  }, []);
+  }, [burstGroup, setCamera]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -2250,6 +2278,7 @@ export function LayoutViewport({
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = pointerCoordinates(event);
     dragRef.current = {
+      cameraGroup: `pointer-${++gestureSequence.current}`,
       startX: event.clientX,
       startY: event.clientY,
       x: event.clientX,
@@ -2277,6 +2306,7 @@ export function LayoutViewport({
       const dy = event.clientY - drag.y;
       const activeMode = drag.button === 2 || event.shiftKey ? "pan" : mode;
       dragRef.current = {
+        cameraGroup: drag.cameraGroup,
         startX: drag.startX,
         startY: drag.startY,
         x: event.clientX,
@@ -2303,10 +2333,10 @@ export function LayoutViewport({
               current.elevation + dy * 0.008,
             ),
           ),
-        }));
+        }), drag.cameraGroup);
       } else if (activeMode === "pan") {
         setZoomRectangle(null);
-        setCamera((current) => panCamera(current, dx, dy, size.width, size.height));
+        setCamera((current) => panCamera(current, dx, dy, size.width, size.height), drag.cameraGroup);
       } else if (activeMode === "zoom-region" && drag.zooming) {
         const point = pointerCoordinates(event);
         setZoomRectangle({
@@ -2771,6 +2801,14 @@ export function LayoutViewport({
             <ScanSearch />
           </ToolButton>
           <span className="toolbar-separator" />
+          <ToolButton label="Previous zoom view" disabled={!cameraHistory.past.length}
+            onClick={() => navigateHistory("back")}>
+            <ArrowLeft />
+          </ToolButton>
+          <ToolButton label="Next zoom view" disabled={!cameraHistory.future.length}
+            onClick={() => navigateHistory("forward")}>
+            <ArrowRight />
+          </ToolButton>
           <ToolButton label="Fit layout" onClick={fit}>
             <Focus />
           </ToolButton>

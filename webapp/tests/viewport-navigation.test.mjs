@@ -10,9 +10,68 @@ after(() => vite.close());
 const {cameraProjector, screenPointAtDepth, zoomCameraAtPoint, zoomCameraToRectangle,
   fitCameraToPoints, panCamera} = await vite.ssrLoadModule("/app/layout-viewport.tsx");
 const {zoomFocusDepth} = await vite.ssrLoadModule("/app/viewport-zoom.ts");
+const {cameraHistoryReducer, initialCameraHistory} = await vite.ssrLoadModule("/app/viewport-history.ts");
 const width = 800, height = 600;
 const base = {azimuth: 0, elevation: 0, distance: 10, target: [0, 0, 0]};
 const close = (a, b, tolerance = 1e-8) => assert.ok(Math.abs(a - b) < tolerance, `${a} != ${b}`);
+
+test("view history groups gestures and restores wheel, fit and region zoom exactly", () => {
+  let history = initialCameraHistory({...base, axisScale: [0.1, 3, 0.4]});
+  const initial = history.present;
+  for (let i = 0; i < 20; i++) history = cameraHistoryReducer(history, {
+    type: "change", group: "wheel-1",
+    update: camera => zoomCameraAtPoint(camera, 420, 270, -12, width, height),
+  });
+  assert.equal(history.past.length, 1);
+  const wheel = history.present;
+  history = cameraHistoryReducer(history, {type: "change", update: camera =>
+    fitCameraToPoints(camera, [[-3, -2, -100], [4, 2, 100]], width, height)});
+  const fitted = history.present;
+  history = cameraHistoryReducer(history, {type: "change", update: camera =>
+    zoomCameraToRectangle(camera, {startX: 100, startY: 100, endX: 400, endY: 300}, width, height)});
+  const region = history.present;
+  for (const expected of [fitted, wheel, initial]) {
+    history = cameraHistoryReducer(history, {type: "back"});
+    assert.deepEqual(history.present, expected);
+  }
+  assert.equal(cameraHistoryReducer(history, {type: "back"}), history);
+  for (const expected of [wheel, fitted, region]) {
+    history = cameraHistoryReducer(history, {type: "forward"});
+    assert.deepEqual(history.present, expected);
+  }
+  assert.equal(cameraHistoryReducer(history, {type: "forward"}), history);
+});
+
+test("view history ignores unchanged views and branches after going back during a gesture", () => {
+  let history = initialCameraHistory(base);
+  history = cameraHistoryReducer(history, {type: "change", group: "wheel-1",
+    update: camera => ({...camera, distance: 5})});
+  history = cameraHistoryReducer(history, {type: "back"});
+  const unchanged = cameraHistoryReducer(history, {type: "change",
+    update: camera => ({...camera, axisScale: [1, 1, 1]})});
+  assert.equal(unchanged, history);
+  assert.equal(unchanged.future.length, 1);
+  history = cameraHistoryReducer(history, {type: "change", group: "wheel-1",
+    update: camera => ({...camera, distance: 7})});
+  assert.equal(history.past.length, 1);
+  assert.equal(history.future.length, 0);
+  assert.equal(history.present.distance, 7);
+  history = cameraHistoryReducer(history, {type: "back"});
+  assert.deepEqual(history.present, base);
+});
+
+test("view history keeps at most 100 steps and initial fitting creates no phantom step", () => {
+  let history = initialCameraHistory(base);
+  for (let i = 0; i < 150; i++) history = cameraHistoryReducer(history, {
+    type: "change", update: camera => ({...camera, distance: camera.distance + 1}),
+  });
+  assert.equal(history.past.length, 100);
+  assert.equal(history.past[0].distance, 60);
+  history = cameraHistoryReducer(history, {type: "change", reset: true,
+    update: camera => fitCameraToPoints(camera, [[0, 0, 0]], width, height)});
+  assert.equal(history.past.length, 0);
+  assert.equal(history.future.length, 0);
+});
 
 test("wheel zoom approaches distant off-center detail instead of stopping at the old target", () => {
   const detail = [20, -10, -500];
