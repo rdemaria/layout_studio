@@ -82,7 +82,7 @@ import {
   type SelectedEntity,
 } from "./layout-data";
 import { FeaturePlacementEditor } from "./feature-placement-editor";
-import { DependencyTree } from "./dependency-tree";
+import { DependencyTree, dependencySelectionNodeId } from "./dependency-tree";
 import { CurveSegmentEditor, SEGMENT_PAGE_SIZE } from "./curve-segment-editor";
 import {
   LayoutViewport,
@@ -266,6 +266,10 @@ export default function Home() {
     kind: "object",
     name: "QF1",
   });
+  const selectedDependencyNode = dependencySelectionNodeId(selection);
+  useEffect(() => {
+    if (selectedDependencyNode) setDependenciesCardOpen(true);
+  }, [selectedDependencyNode]);
   const [selectedLayoutUrl, setSelectedLayoutUrl] = useState("");
   const [urlSuggestions, setUrlSuggestions] = useState<
     LayoutUrlSuggestion[]
@@ -550,12 +554,25 @@ export default function Home() {
         kind: "error",
         message: `${kind === "curve" ? "Curve" : "Object"} ${name} is outside the current viewport scope`,
       });
-      return;
+      return false;
     }
     viewportFitIdRef.current += 1;
     setViewerCardOpen(true);
     setSelection(target);
     setViewportFitRequest({ id: viewportFitIdRef.current, kind, name });
+    return true;
+  };
+
+  const selectFromHierarchy = (next: Exclude<SelectedEntity, null | {kind: "frame"}>) => {
+    if (!fitEntityInViewport(next.kind, next.name)) return;
+    if (next.kind === "object") {
+      setObjectsCardOpen(true);
+      selectObject(next.name);
+    } else {
+      setCurvesCardOpen(true);
+      setSegmentsOpen(true);
+      selectCurve(next.name);
+    }
   };
 
   const selectFrame = (objectName: string, frameName: string) => {
@@ -2449,7 +2466,7 @@ export default function Home() {
                     key={`dependencies-${viewerRevision}`}
                     layout={layout}
                     selection={selection}
-                    onSelect={selectFromViewport}
+                    onSelect={selectFromHierarchy}
                   />}
                 </CardContent>
               </CollapsibleContent>

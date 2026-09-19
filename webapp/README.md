@@ -86,12 +86,19 @@ progress shown while object placement and indexing finish in short, cancellable
 batches. Optional frame and axis layers are built when enabled. Curve snap targets
 are prepared in the background for the detailed objects and layers currently in
 view; segment boundaries and exact analytic curve readouts remain available.
+Selected curves also show snap targets where they cross the visible start,
+center, and end planes of mechanical axes, magnetic axes, and beam interfaces.
+Tilted planes and independently positioned objects are supported; hiding an
+axis removes its snap targets. Only crossings inside the displayed plane count.
 These display choices do not change positioning or exported data.
 
 Pickers match the start of names using the full query, ignoring case, and display
 at most 50 matches. For example, `1R1` matches `1R1` and `1R1.A`, but not
 `MBAS2.1R1` or `1R2`. Large dependency trees start closed, page each branch in
 groups of 50, and expand one branch at a time.
+Selecting an object reveals and highlights it in the dependency tree, opening
+its ancestors and the appropriate child pages. Clicking an entity in the tree
+selects it and fits it in the viewer; clicking it again keeps it selected.
 
 Dependency children sharing a reference curve and reference frame are ordered by
 their placement's curve station, using the sum of their `ts` shifts. Equal stations

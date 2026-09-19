@@ -168,11 +168,13 @@ export const BEAM_BOUNDARY_FRAME_NAMES = [
 ] as const;
 export type BeamBoundaryFrameName =
   (typeof BEAM_BOUNDARY_FRAME_NAMES)[number];
+export const BEAM_FRAME_NAMES = ["beam_entry", "beam_center", "beam_exit"] as const;
+export type BeamFrameName = (typeof BEAM_FRAME_NAMES)[number];
 export type FeatureFrameName =
   | MechanicalFrameName
   | "magnetic_center"
   | MagneticBoundaryFrameName
-  | BeamBoundaryFrameName;
+  | BeamFrameName;
 
 export const SAMPLE_LAYOUT: LayoutData = {
   reference_curves: {

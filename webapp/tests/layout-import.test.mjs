@@ -87,8 +87,8 @@ test("rejects invalid JSON", async () => {
   }
 });
 
-test("reads the shipped SPS and M2 JSON conversions as valid editor layouts", async () => {
-  for (const [machine, count] of [["SPS", 12339], ["M2", 428]]) {
+test("reads the shipped SPS, M2 and LHC JSON conversions as valid editor layouts", async () => {
+  for (const [machine, count] of [["SPS", 12339], ["M2", 428], ["LHC", 161941]]) {
     const name = `${machine}--LS3.json`;
     const bytes = await readFile(new URL(`../public/layouts/${name}`, import.meta.url));
     const layout = parseLayout(await readLayoutJson(new File([bytes], name)));

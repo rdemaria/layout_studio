@@ -8,6 +8,10 @@
     "label": "Xsuite RBend — independent axes"
   },
   {
+    "path": "layouts/LHC--LS3.json",
+    "label": "LHC LS3"
+  },
+  {
     "path": "layouts/SPS--LS3.json",
     "label": "SPS LS3"
   },

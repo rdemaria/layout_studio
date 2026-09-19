@@ -6,10 +6,11 @@ and progressive scene construction. The same complete LHC model is interactive
 in the overview and tested close-ups; the original eager rendering baseline is
 retained below for comparison.
 
-Publication status: the converter, report and profiling tools are committed.
-The 35.6 MB JSON upload failed through the available GitHub connection, so the
-dataset and its catalog entry are not included in that publication. Generate
-the JSON with the command below, or import the separately supplied JSON file.
+The complete LHC LS3 dataset is included in the hosted and standalone catalogs.
+The source snapshot is stored losslessly compressed and expanded automatically
+to the original plain `LHC--LS3.json` for development and standalone builds.
+The hosted build serves that same JSON using transparent HTTP gzip compression
+to fit the static asset size limit; its URL and decoded contents are unchanged.
 
 ## Converted data and validation
 

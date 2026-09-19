@@ -19,8 +19,11 @@ if [[ ! -x "${vinext}" ]]; then
 fi
 
 echo "Running bounded vinext build..."
+node "${SITES_PROJECT_ROOT}/scripts/prepare-layout-catalog.mjs"
 timeout \
   --signal=TERM \
   --kill-after="${SITES_BUILD_KILL_AFTER:-10s}" \
   "${SITES_BUILD_TIMEOUT:-3m}" \
   "${vinext}" build
+
+node "${SITES_PROJECT_ROOT}/scripts/prepare-hosted-layouts.mjs"

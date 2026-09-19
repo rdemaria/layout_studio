@@ -1119,7 +1119,7 @@ test("derives curved magnetic entry and exit frames and aligns magnetic targets"
   assert.equal(scene.magneticFrames.length, 6);
   assert.equal(scene.magneticAxes.length, 2);
   assert.equal(scene.beamAxes.length, 2);
-  assert.equal(scene.beamFrames.length, 4);
+  assert.equal(scene.beamFrames.length, 6);
   assert.equal(frames["A.magnetic_entry"].vertices.length, 4);
   for (const magneticFrame of scene.magneticFrames) {
     for (const vertex of magneticFrame.vertices) {
@@ -1211,6 +1211,7 @@ test("keeps mechanical, magnetic and beam paths independent", () => {
       .map((frame) => [frame.name, frame.frame]),
   );
   approximatelyEqual(beam.beam_entry.o, [1, 0, -2]);
+  approximatelyEqual(beam.beam_center.o, [1, 0, 0]);
   approximatelyEqual(beam.beam_exit.o, [1, 0, 2]);
 
   const objectB = scene.objects.find((object) => object.name === "B");
@@ -1242,7 +1243,7 @@ test("object beam interfaces inherit magnetic geometry and retain per-object ove
   input.types.magnet.magnetic_curvature = 0.7;
   input.types.magnet.magnetic_roll = -0.2;
   const matchesMagnetic = (scene, object) => {
-    for (const suffix of ["entry", "exit"]) {
+    for (const suffix of ["entry", "center", "exit"]) {
       const beam = scene.beamFrames.find((frame) => frame.object === object && frame.name === `beam_${suffix}`);
       const magnetic = scene.magneticFrames.find((frame) => frame.object === object && frame.name === `magnetic_${suffix}`);
       assert.deepEqual(beam.frame, magnetic.frame);

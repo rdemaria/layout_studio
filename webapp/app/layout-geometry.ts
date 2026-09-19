@@ -1,5 +1,5 @@
 import {
-  BEAM_BOUNDARY_FRAME_NAMES,
+  BEAM_FRAME_NAMES,
   canonicalFrameName,
   objectFrameDefinition,
   effectiveBeamFeature,
@@ -9,7 +9,7 @@ import {
   shapePath,
 } from "./layout-data";
 import type {
-  BeamBoundaryFrameName,
+  BeamFrameName,
   Frame,
   FeatureFrameName,
   LayoutData,
@@ -315,7 +315,7 @@ export type MechanicalFrameGeometry = FeatureFrameGeometry<MechanicalFrameName>;
 export type MagneticFrameGeometry =
   FeatureFrameGeometry<"magnetic_entry" | "magnetic_center" | "magnetic_exit">;
 export type BeamFrameGeometry =
-  FeatureFrameGeometry<BeamBoundaryFrameName>;
+  FeatureFrameGeometry<BeamFrameName>;
 export type DeferredScene = {
   objectByName: Map<string, ObjectGeometry>;
   detail: (object: ObjectGeometry) => ObjectGeometry;
@@ -990,7 +990,8 @@ function buildFeatureAxisGeometry(
   curvature: number,
   roll: number,
 ): FeatureAxisGeometry {
-  const steps = featureStepCount(axisLength, curvature);
+  // An even number of steps keeps the exact center on the displayed polyline.
+  const steps = Math.ceil(featureStepCount(axisLength, curvature) / 2) * 2;
   const path = { curvature, roll };
   const samples = Array.from({ length: steps + 1 }, (_, index): CurveSample => {
     const station = -axisLength / 2 + axisLength * index / steps;
@@ -1306,7 +1307,7 @@ export function* buildSceneSteps(
     if (!axis) return {axes: [], frames: []};
     const centerFrame = resolveFrame(objectName, `${kind}_center`, []);
     const names = kind === "mechanical" ? MECHANICAL_FRAME_NAMES
-      : kind === "magnetic" ? MAGNETIC_FRAME_NAMES : BEAM_BOUNDARY_FRAME_NAMES;
+      : kind === "magnetic" ? MAGNETIC_FRAME_NAMES : BEAM_FRAME_NAMES;
     return {axes: [buildFeatureAxisGeometry(objectName, object.type, kind, centerFrame, axis.length, axis.curvature, axis.roll)],
       frames: names.map(name => {
         const frame = resolveFrame(objectName, name, []);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Box as BoxIcon,
   ChevronRight,
@@ -24,6 +24,15 @@ type DependencyTreeProps = {
   selection: SelectedEntity;
   onSelect: (entity: Exclude<SelectedEntity, null | { kind: "frame" }>) => void;
 };
+
+const PAGE_SIZE = 50;
+type ParentBranch = { edge: LayoutDependencyEdge; index: number };
+
+export function dependencySelectionNodeId(selection: SelectedEntity): string | null {
+  if (!selection) return null;
+  return selection.kind === "frame" ? `object:${selection.object}`
+    : `${selection.kind}:${selection.name}`;
+}
 
 function relationLabel(edge: LayoutDependencyEdge): string {
   if (edge.relation === "station_curve") return "ts station curve";
@@ -141,11 +150,66 @@ export function buildLayoutDependencyHierarchy(layout: LayoutData) {
     dependentsByAnchor.set("world", edges);
   }
 
+  const placementParents = new Map<string, ParentBranch>();
   for (const edges of dependentsByAnchor.values()) {
     sortChildrenByPath(edges, graphNodes, layout);
+    edges.forEach((edge, index) => {
+      if (edge.relation === "position_reference" || edge.relation === "starting_frame") {
+        placementParents.set(edge.from, {edge, index});
+      }
+    });
   }
 
-  return { graphNodes, dependentsByAnchor };
+  return { graphNodes, dependentsByAnchor, placementParents };
+}
+
+/** Locate one occurrence without expanding every branch of a large layout. */
+export function dependencySelectionReveal(
+  hierarchy: ReturnType<typeof buildLayoutDependencyHierarchy>,
+  nodeId: string | null,
+) {
+  if (!nodeId || !hierarchy.graphNodes.has(nodeId)) return null;
+  const trace = (parents: Map<string, ParentBranch>) => {
+    const path: ParentBranch[] = [];
+    const visited = new Set<string>();
+    let current = nodeId;
+    while (current !== "world") {
+      const parent = parents.get(current);
+      if (!parent || visited.has(current)) return null;
+      visited.add(current);
+      path.push(parent);
+      current = parent.edge.to;
+    }
+    return path.reverse();
+  };
+  let path = trace(hierarchy.placementParents);
+  if (!path) {
+    // Independent feature references can create an object-level cycle even
+    // when all frame placements are valid. Find a reachable occurrence safely.
+    const parents = new Map<string, ParentBranch>();
+    const visited = new Set(["world"]);
+    const queue = ["world"];
+    for (let cursor = 0; cursor < queue.length && !parents.has(nodeId); cursor++) {
+      const edges = hierarchy.dependentsByAnchor.get(queue[cursor]) ?? [];
+      edges.forEach((edge, index) => {
+        if (visited.has(edge.from)) return;
+        visited.add(edge.from);
+        parents.set(edge.from, {edge, index});
+        queue.push(edge.from);
+      });
+    }
+    path = trace(parents);
+  }
+  if (!path) return null;
+  let branchId = "world";
+  const expanded: string[] = [];
+  const pages = new Map<string, number>();
+  for (const {edge, index} of path) {
+    expanded.push(branchId);
+    pages.set(branchId, Math.floor(index / PAGE_SIZE));
+    branchId = dependencyBranchId(branchId, edge);
+  }
+  return {branchId, expanded, pages};
 }
 
 function isSelected(node: LayoutDependencyNode, selection: SelectedEntity) {
@@ -166,6 +230,8 @@ type DependencyBranchProps = {
   dependentsByAnchor: Map<string, LayoutDependencyEdge[]>;
   selection: SelectedEntity;
   expanded: Set<string>;
+  pages: Map<string, number>;
+  onPage: (id: string, page: number) => void;
   ancestors: Set<string>;
   onToggle: (id: string) => void;
   onSelect: DependencyTreeProps["onSelect"];
@@ -179,12 +245,15 @@ function DependencyBranch({
   dependentsByAnchor,
   selection,
   expanded,
+  pages,
+  onPage,
   ancestors,
   onToggle,
   onSelect,
 }: DependencyBranchProps) {
-  const [page, setPage] = useState(0);
   const edges = dependentsByAnchor.get(node.id) ?? [];
+  const page = Math.min(pages.get(branchId) ?? 0, Math.max(0, Math.ceil(edges.length / PAGE_SIZE) - 1));
+  const setPage = (value: number) => onPage(branchId, value);
   const hasChildren = Boolean(edges.length);
   const isOpen = hasChildren && expanded.has(branchId);
   const selected = isSelected(node, selection);
@@ -218,6 +287,7 @@ function DependencyBranch({
           className="dependency-node-button"
           aria-label={`Select ${node.kind} ${node.name} from dependency tree`}
           aria-current={selected ? "true" : undefined}
+          data-dependency-branch={branchId}
           onClick={() => onSelect({ kind: node.kind, name: node.name })}
         >
           <span className="dependency-node-name">{node.name}</span>
@@ -230,7 +300,7 @@ function DependencyBranch({
 
       {isOpen ? (
         <ul className="dependency-tree-group" role="group">
-          {edges.slice(page * 50, (page + 1) * 50).map((edge) => {
+          {edges.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((edge) => {
             const child = graphNodes.get(edge.from);
             if (!child) return null;
             const childBranchId = dependencyBranchId(branchId, edge);
@@ -263,16 +333,18 @@ function DependencyBranch({
                 dependentsByAnchor={dependentsByAnchor}
                 selection={selection}
                 expanded={expanded}
+                pages={pages}
+                onPage={onPage}
                 ancestors={nextAncestors}
                 onToggle={onToggle}
                 onSelect={onSelect}
               />
             );
           })}
-          {edges.length > 50 && <li role="none" className="dependency-pages">
-            <Button size="xs" variant="ghost" disabled={page === 0} onClick={() => setPage(p => p - 1)}>Previous</Button>
-            <span>{page * 50 + 1}–{Math.min(edges.length, (page + 1) * 50)} of {edges.length}</span>
-            <Button size="xs" variant="ghost" disabled={(page + 1) * 50 >= edges.length} onClick={() => setPage(p => p + 1)}>Next</Button>
+          {edges.length > PAGE_SIZE && <li role="none" className="dependency-pages">
+            <Button size="xs" variant="ghost" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</Button>
+            <span>{page * PAGE_SIZE + 1}–{Math.min(edges.length, (page + 1) * PAGE_SIZE)} of {edges.length}</span>
+            <Button size="xs" variant="ghost" disabled={(page + 1) * PAGE_SIZE >= edges.length} onClick={() => setPage(page + 1)}>Next</Button>
           </li>}
         </ul>
       ) : null}
@@ -285,6 +357,8 @@ type WorldRootProps = {
   dependentsByAnchor: Map<string, LayoutDependencyEdge[]>;
   selection: SelectedEntity;
   expanded: Set<string>;
+  pages: Map<string, number>;
+  onPage: (id: string, page: number) => void;
   onToggle: (id: string) => void;
   onSelect: DependencyTreeProps["onSelect"];
 };
@@ -294,11 +368,14 @@ function WorldRoot({
   dependentsByAnchor,
   selection,
   expanded,
+  pages,
+  onPage,
   onToggle,
   onSelect,
 }: WorldRootProps) {
-  const [page, setPage] = useState(0);
   const edges = dependentsByAnchor.get("world") ?? [];
+  const page = Math.min(pages.get("world") ?? 0, Math.max(0, Math.ceil(edges.length / PAGE_SIZE) - 1));
+  const setPage = (value: number) => onPage("world", value);
   const hasChildren = Boolean(edges.length);
   const isOpen = hasChildren && expanded.has("world");
 
@@ -333,7 +410,7 @@ function WorldRoot({
 
       {isOpen ? (
         <ul className="dependency-tree-group" role="group">
-          {edges.slice(page * 50, (page + 1) * 50).map((edge) => {
+          {edges.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((edge) => {
             const child = graphNodes.get(edge.from);
             if (!child) return null;
             const childBranchId = dependencyBranchId("world", edge);
@@ -347,16 +424,18 @@ function WorldRoot({
                 dependentsByAnchor={dependentsByAnchor}
                 selection={selection}
                 expanded={expanded}
+                pages={pages}
+                onPage={onPage}
                 ancestors={new Set(["world"])}
                 onToggle={onToggle}
                 onSelect={onSelect}
               />
             );
           })}
-          {edges.length > 50 && <li role="none" className="dependency-pages">
-            <Button size="xs" variant="ghost" disabled={page === 0} onClick={() => setPage(p => p - 1)}>Previous</Button>
-            <span>{page * 50 + 1}–{Math.min(edges.length, (page + 1) * 50)} of {edges.length}</span>
-            <Button size="xs" variant="ghost" disabled={(page + 1) * 50 >= edges.length} onClick={() => setPage(p => p + 1)}>Next</Button>
+          {edges.length > PAGE_SIZE && <li role="none" className="dependency-pages">
+            <Button size="xs" variant="ghost" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</Button>
+            <span>{page * PAGE_SIZE + 1}–{Math.min(edges.length, (page + 1) * PAGE_SIZE)} of {edges.length}</span>
+            <Button size="xs" variant="ghost" disabled={(page + 1) * PAGE_SIZE >= edges.length} onClick={() => setPage(page + 1)}>Next</Button>
           </li>}
         </ul>
       ) : null}
@@ -370,10 +449,40 @@ export function DependencyTree({
   onSelect,
 }: DependencyTreeProps) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const { graphNodes, dependentsByAnchor } = useMemo(
+  const [pages, setPages] = useState(() => new Map<string, number>());
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const hierarchy = useMemo(
     () => buildLayoutDependencyHierarchy(layout),
     [layout],
   );
+  const {graphNodes, dependentsByAnchor} = hierarchy;
+  const selectedNodeId = dependencySelectionNodeId(selection);
+  const reveal = useMemo(() => dependencySelectionReveal(hierarchy, selectedNodeId),
+    [hierarchy, selectedNodeId]);
+  const scrolledReveal = useRef<typeof reveal>(null);
+  useEffect(() => {
+    if (!reveal) return;
+    setExpanded(current => new Set([...current, ...reveal.expanded]));
+    setPages(current => new Map([...current, ...reveal.pages]));
+  }, [reveal]);
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!reveal || !container || scrolledReveal.current === reveal) return;
+    const selected = Array.from(container.querySelectorAll<HTMLElement>('[aria-current="true"]'))
+      .find(row => row.dataset.dependencyBranch === reveal.branchId);
+    if (!selected) return;
+    const bounds = selected.getBoundingClientRect();
+    const viewport = container.getBoundingClientRect();
+    // Scroll only the tree, leaving the viewer and object editor in place.
+    if (bounds.top < viewport.top) container.scrollTop += bounds.top - viewport.top;
+    else if (bounds.bottom > viewport.bottom) container.scrollTop += bounds.bottom - viewport.bottom;
+    if (bounds.left < viewport.left) container.scrollLeft += bounds.left - viewport.left;
+    else if (bounds.right > viewport.right) container.scrollLeft += bounds.right - viewport.right;
+    scrolledReveal.current = reveal;
+  }, [reveal, expanded, pages]);
+  const changePage = (id: string, page: number) => {
+    setPages(current => new Map(current).set(id, page));
+  };
   const largeTree = graphNodes.size > 2000;
   const branchIds = useMemo(
     () => largeTree ? ["world"] : expandableBranchIds(dependentsByAnchor),
@@ -419,7 +528,7 @@ export function DependencyTree({
         </div>
       </div>
 
-      <div className="dependency-tree-scroll">
+      <div className="dependency-tree-scroll" ref={scrollRef}>
         <ul
           className="dependency-tree"
           role="tree"
@@ -430,6 +539,8 @@ export function DependencyTree({
             dependentsByAnchor={dependentsByAnchor}
             selection={selection}
             expanded={expanded}
+            pages={pages}
+            onPage={changePage}
             onToggle={toggle}
             onSelect={onSelect}
           />

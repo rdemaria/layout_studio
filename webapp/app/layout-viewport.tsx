@@ -234,6 +234,17 @@ type CurveProbe = {
   sources: CurveStationSource[];
 };
 
+export function projectFeatureFrame(
+  featureFrame: FeatureFrameGeometry,
+  project: Projector,
+): { origin: Projection; polygon: Projection[] } | null {
+  const origin = project(featureFrame.frame.o);
+  const polygon = featureFrame.vertices.map(project);
+  if (!origin || polygon.some((point) => !point)) return null;
+  // Perspective does not preserve midpoints: project the actual frame origin.
+  return { origin, polygon: polygon as Projection[] };
+}
+
 export function syncCanvasDimensions(
   canvas: Pick<HTMLCanvasElement, "width" | "height" | "style">,
   width: number,
@@ -500,6 +511,35 @@ function pointInsideFeaturePlane(
   );
   return pointInPolygon(x, y, polygon) ||
     distanceToPolygon(x, y, polygon) <= extent * 1e-8;
+}
+
+/** Each isolated crossing of a displayed feature plane is a curve snap target. */
+export function* featurePlaneCurveStations(
+  curve: CurveGeometry,
+  layers: Record<"mechanicalFrames" | "magneticFrames" | "beamFrames", FeatureFrameGeometry[]>,
+  visibility: { mechanical: boolean; magnetic: boolean; beam: boolean },
+): Generator<void, CurveStation[]> {
+  const stations: CurveStation[] = [];
+  for (const feature of ["mechanical", "magnetic", "beam"] as const) {
+    if (!visibility[feature]) continue;
+    for (const featureFrame of layers[`${feature}Frames`]) {
+      yield;
+      const intersections = curvePlaneIntersectionPaths(curve, featureFrame.frame);
+      if (intersections.kind === "infinite") continue;
+      for (const path of intersections.paths) {
+        const frame = frameAtCurvePath(curve, path);
+        if (!pointInsideFeaturePlane(frame.o, featureFrame)) continue;
+        const boundary = featureFrame.name.endsWith("_center") ? "center"
+          : featureFrame.name.endsWith("_entry") ? "start" : "end";
+        const label = feature === "beam" ? "beam interface" : `${feature} axis`;
+        stations.push({path, frame, sources: [{
+          kind: "plane", feature, object: featureFrame.object, name: featureFrame.name,
+          label: `${featureFrame.object} ${label} ${boundary} plane`,
+        }]});
+      }
+    }
+  }
+  return stations;
 }
 
 function objectCurveAffiliation(
@@ -1210,55 +1250,10 @@ export function LayoutViewport({
         }
       }
 
-      const addFeaturePlaneStations = function* (
-        feature: "mechanical" | "magnetic" | "beam",
-        featureFrames: FeatureFrameGeometry[],
-      ) {
-        for (const featureFrame of featureFrames) {
-          yield;
-          if (
-            objectCurveAffiliation(
-              layout,
-              featureFrame.object,
-              affiliationCache,
-            ) !== curve.name
-          ) {
-            continue;
-          }
-          const intersections = curvePlaneIntersectionPaths(
-            curve,
-            featureFrame.frame,
-          );
-          if (intersections.kind === "none" || intersections.kind === "infinite") {
-            continue;
-          }
-          const paths = intersections.paths.filter((path) => {
-            const curveFrame = frameAtCurvePath(curve, path);
-            return pointInsideFeaturePlane(curveFrame.o, featureFrame) &&
-              length(cross(
-                normalize(featureFrame.frame.s),
-                normalize(curveFrame.s),
-              )) <= 1e-6;
-          });
-          if (paths.length === 1) {
-            const boundary = featureFrame.name.endsWith("_center") ? "center" : featureFrame.name.endsWith("_entry")
-              ? "entry"
-              : "exit";
-            addStation(paths[0], {
-              kind: "plane",
-              feature,
-              object: featureFrame.object,
-              name: featureFrame.name,
-              label: `${featureFrame.object} ${feature} ${boundary} plane`,
-            });
-          }
-        }
-      };
-      if (showMechanicalAxis) yield* addFeaturePlaneStations("mechanical", visibleLayers.mechanicalFrames);
-      if (showMagneticAxis) {
-        yield* addFeaturePlaneStations("magnetic", visibleLayers.magneticFrames);
-      }
-      if (showBeamAxis) yield* addFeaturePlaneStations("beam", visibleLayers.beamFrames);
+      const featureStations = yield* featurePlaneCurveStations(curve, visibleLayers, {
+        mechanical: showMechanicalAxis, magnetic: showMagneticAxis, beam: showBeamAxis,
+      });
+      for (const station of featureStations) stations.push(station);
 
       stations.sort((a, b) => a.path - b.path);
       const grouped: CurveStation[] = [];
@@ -1614,10 +1609,9 @@ export function LayoutViewport({
       }
 
       for (const featureFrame of boundaryFrames) {
-        const polygon = featureFrame.vertices
-          .map(project)
-          .filter(Boolean) as Projection[];
-        if (polygon.length !== featureFrame.vertices.length) continue;
+        const projectedFrame = projectFeatureFrame(featureFrame, project);
+        if (!projectedFrame) continue;
+        const {polygon, origin: {x, y}} = projectedFrame;
         zoomGeometry.faces.push({polygon});
         const active = selection?.kind === "object" &&
           selection.name === featureFrame.object;
@@ -1640,10 +1634,6 @@ export function LayoutViewport({
         context.strokeStyle = rgba(color, hovering ? 1 : 0.82);
         context.stroke();
         context.restore();
-        const x = polygon.reduce((sum, point) => sum + point.x, 0) /
-          polygon.length;
-        const y = polygon.reduce((sum, point) => sum + point.y, 0) /
-          polygon.length;
         context.font = "650 9px ui-monospace, SFMono-Regular, monospace";
         context.fillStyle = rgba(color, 0.95);
         context.beginPath();
@@ -2172,9 +2162,10 @@ export function LayoutViewport({
     hover: HoverTarget,
   ): CurveProbe | null => {
     if (!showCurves || !selectedCurve) return null;
+    const project = cameraProjector(camera, size.width, size.height);
 
     const hoveredStation = hover && hover.kind !== "curve"
-      ? selectedCurveStations.find((station) =>
+      ? selectedCurveStations.filter((station) =>
           station.sources.some((source) => {
             if (hover.kind === "object") {
               return source.kind === "frame" &&
@@ -2194,7 +2185,13 @@ export function LayoutViewport({
             }
             return false;
           })
-        )
+        ).reduce<CurveStation | undefined>((nearest, station) => {
+          const point = project(station.frame.o);
+          if (!point) return nearest;
+          const previous = nearest && project(nearest.frame.o);
+          return !previous || Math.hypot(x - point.x, y - point.y) <
+            Math.hypot(x - previous.x, y - previous.y) ? station : nearest;
+        }, undefined)
       : undefined;
     if (hoveredStation) {
       return {
@@ -2255,7 +2252,6 @@ export function LayoutViewport({
     );
     const pathWindow = segmentPath *
       (1.5 + 12 / Math.max(1, closestHit.screenLength));
-    const project = cameraProjector(camera, size.width, size.height);
     let snapped: { station: CurveStation; distance: number } | null = null;
     const firstStation = lowerBoundStation(
       selectedCurveStations,
