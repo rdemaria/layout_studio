@@ -35,6 +35,7 @@ import { Slider } from "@/components/ui/slider";
 import { NumberInput } from "./number-input";
 import { zoomFocusDepth, type ZoomGeometry } from "./viewport-zoom";
 import { cameraHistoryReducer, initialCameraHistory, type Camera } from "./viewport-history";
+import { TouchNavigation, type TouchPair } from "./viewport-touch";
 import { beginLayoutProfile, endLayoutProfile } from "./layout-performance";
 import {
   Tooltip,
@@ -629,6 +630,18 @@ export function panCamera(camera: Camera, dx: number, dy: number, width: number,
   return {...camera, target: point};
 }
 
+export function pinchCamera(camera: Camera, start: TouchPair, current: TouchPair, width: number, height: number, depth = camera.distance): Camera {
+  if (start.distance < 2 || current.distance < 2 ||
+      ![start.x, start.y, start.distance, current.x, current.y, current.distance, depth].every(Number.isFinite) ||
+      (start.x === current.x && start.y === current.y && start.distance === current.distance)) return camera;
+  const focus = screenPointAtDepth(camera, start.x, start.y, depth, width, height);
+  const distance = Math.max(minimumCameraDistance(focus), depth * start.distance / current.distance);
+  if (!Number.isFinite(distance)) return camera;
+  // The original point follows the fingers' midpoint, including two-finger pan.
+  const lateral = screenPointAtDepth({...camera, target: [0, 0, 0], distance}, current.x, current.y, distance, width, height);
+  return {...camera, distance, target: sub(focus, lateral)};
+}
+
 const CANONICAL_POLE_EPSILON = 1e-6;
 
 const CANONICAL_VIEWS: { value: CanonicalView; label: string }[] = [
@@ -903,6 +916,7 @@ export function LayoutViewport({
     camera: Camera; width: number; height: number; geometry: ZoomGeometry;
   } | null>(null);
   const dragRef = useRef<{
+    pointerId: number;
     cameraGroup: string;
     startX: number;
     startY: number;
@@ -913,6 +927,11 @@ export function LayoutViewport({
     button: number;
     moved: boolean;
     zooming: boolean;
+  } | null>(null);
+  const touchRef = useRef(new TouchNavigation());
+  const touchGroupRef = useRef("");
+  const pinchRef = useRef<{
+    start: TouchPair; camera: Camera; depth: number; width: number; height: number;
   } | null>(null);
   const fittedOnceRef = useRef(false);
   const handledFitRequestRef = useRef(0);
@@ -1011,6 +1030,8 @@ export function LayoutViewport({
   }, []);
   const navigateHistory = useCallback((direction: "back" | "forward") => {
     dragRef.current = null;
+    pinchRef.current = null;
+    touchRef.current.reset();
     setZoomRectangle(null);
     setHovered(null);
     dispatchCamera({type: direction});
@@ -2277,8 +2298,20 @@ export function LayoutViewport({
   const onPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = pointerCoordinates(event);
+    if (event.pointerType === "touch") {
+      const pair = touchRef.current.start(event.pointerId, point);
+      if (touchRef.current.suppressSinglePointer) {
+        if (!pinchRef.current && pair) startPinch(pair);
+        dragRef.current = null;
+        setZoomRectangle(null);
+        setHovered(null);
+        return;
+      }
+      touchGroupRef.current = `touch-${++gestureSequence.current}`;
+    }
     dragRef.current = {
-      cameraGroup: `pointer-${++gestureSequence.current}`,
+      pointerId: event.pointerId,
+      cameraGroup: event.pointerType === "touch" ? touchGroupRef.current : `pointer-${++gestureSequence.current}`,
       startX: event.clientX,
       startY: event.clientY,
       x: event.clientX,
@@ -2299,13 +2332,35 @@ export function LayoutViewport({
     }
   };
 
+  const startPinch = (pair: TouchPair) => {
+    const snapshot = zoomProjectionRef.current;
+    pinchRef.current = {
+      start: pair, camera, width: size.width, height: size.height,
+      depth: snapshot && snapshot.camera === camera
+        ? zoomFocusDepth(snapshot.geometry, pair.x, pair.y) ?? camera.distance
+        : camera.distance,
+    };
+  };
+
   const onPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (event.pointerType === "touch") {
+      const pair = touchRef.current.move(event.pointerId, pointerCoordinates(event));
+      if (touchRef.current.suppressSinglePointer) {
+        if (pair) {
+          if (!pinchRef.current) startPinch(pair);
+          const pinch = pinchRef.current!;
+          setCamera(() => pinchCamera(pinch.camera, pinch.start, pair, pinch.width, pinch.height, pinch.depth), touchGroupRef.current);
+        }
+        return;
+      }
+    }
     const drag = dragRef.current;
-    if (drag && event.buttons) {
+    if (drag && drag.pointerId === event.pointerId && event.buttons) {
       const dx = event.clientX - drag.x;
       const dy = event.clientY - drag.y;
       const activeMode = drag.button === 2 || event.shiftKey ? "pan" : mode;
       dragRef.current = {
+        pointerId: drag.pointerId,
         cameraGroup: drag.cameraGroup,
         startX: drag.startX,
         startY: drag.startY,
@@ -2365,7 +2420,12 @@ export function LayoutViewport({
   };
 
   const onPointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (event.pointerType === "touch" && touchRef.current.end(event.pointerId)) {
+      pinchRef.current = null;
+      return;
+    }
     const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
     const point = pointerCoordinates(event);
     if (drag?.zooming) {
       const rectangle = {
@@ -2421,8 +2481,12 @@ export function LayoutViewport({
     dragRef.current = null;
   };
 
-  const cancelPointerInteraction = () => {
-    dragRef.current = null;
+  const cancelPointerInteraction = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (event.pointerType === "touch") {
+      touchRef.current.end(event.pointerId);
+      pinchRef.current = null;
+    }
+    if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
     setZoomRectangle(null);
   };
 
@@ -2761,9 +2825,7 @@ export function LayoutViewport({
             setHovered(null);
           }}
           onPointerCancel={cancelPointerInteraction}
-          onLostPointerCapture={() => {
-            if (dragRef.current) cancelPointerInteraction();
-          }}
+          onLostPointerCapture={cancelPointerInteraction}
           onPointerUp={onPointerUp}
         />
         <canvas
@@ -2983,8 +3045,8 @@ export function LayoutViewport({
         </div>
         <div className="viewport-hint">
           {mode === "zoom-region"
-            ? "Draw around a detail to approach it · Shift-drag or right-drag to pan"
-            : `Drag to ${mode} · wheel toward pointer · click again or empty space to clear`}
+            ? "Draw around a detail · Shift-drag to pan · two fingers to zoom"
+            : `Drag to ${mode} · wheel or two fingers to zoom · click to select`}
         </div>
         {(buildProgress || layersLoading || stationsLoading) && <div className="viewport-progress" role="status">{buildProgress || (layersLoading ? "Preparing visible layers…" : "Preparing curve snap targets…")}</div>}
         {geometryError && (

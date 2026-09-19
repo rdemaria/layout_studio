@@ -4,6 +4,10 @@
     "label": "Sample layout"
   },
   {
+    "path": "layouts/xsuite-rbend-axes.json",
+    "label": "Xsuite RBend — independent axes"
+  },
+  {
     "path": "layouts/SPS--LS3.json",
     "label": "SPS LS3"
   },

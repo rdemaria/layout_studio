@@ -226,15 +226,19 @@ resolved, but scene construction, picking, bounds, and fitting are limited to
 that entity and its enabled axis/frame layers. This is a computational scope,
 not just selection or visibility; it does not reduce snapshot transfer size.
 
-The independent `magnetic_axis`, `beam_axis`, and `frames` visibility layers
-default off. A feature-axis layer includes its curved axis, with entry/exit
-frames shown as transverse planes. `frames` contains only the type's stored
-named frames.
+The independent `mechanical_axis`, `magnetic_axis`, `beam_axis`, and `frames`
+visibility layers default off. Mechanical and magnetic layers include their
+axis and entry/center/exit frames. The beam layer includes its axis and
+entry/exit planes. `frames` contains only the type's stored named frames.
 The curves and object-shape layers retain their own switches. For example:
 
 ```python
-viewer.set_visibility(magnetic_axis=True, beam_axis=True, frames=True)
+viewer.set_visibility(mechanical_axis=True, magnetic_axis=True, beam_axis=True, frames=True)
 ```
+
+The [Xsuite RBend example](examples/xsuite_rbend_axes.md) demonstrates independent
+beam interfaces, magnetic axes and mechanical envelopes, including asymmetric
+face angles and sagitta compensation.
 
 The returned `WebViewer` supports `select()`, `fit()`, `set_scope()`,
 `set_mode()` (including `"zoom-region"`), signed-axis `set_view()`,

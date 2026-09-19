@@ -1,0 +1,217 @@
+{
+  "reference_curves": {
+    "symmetric_reference": {
+      "color": "#67b7ff",
+      "starting_frame": {
+        "reference": {
+          "kind": "world"
+        },
+        "transformation": [
+          [
+            "tx",
+            -1.3003346720854505
+          ],
+          [
+            "tt",
+            -2.0
+          ],
+          [
+            "ry",
+            0.2
+          ],
+          [
+            "tt",
+            -0.6
+          ]
+        ]
+      },
+      "segments": [
+        [
+          0.6,
+          0.0,
+          0.0
+        ],
+        [
+          4.026791638137875,
+          0.4,
+          0.0
+        ],
+        [
+          0.6,
+          0.0,
+          0.0
+        ]
+      ]
+    },
+    "asymmetric_reference": {
+      "color": "#67b7ff",
+      "starting_frame": {
+        "reference": {
+          "kind": "world"
+        },
+        "transformation": [
+          [
+            "tx",
+            1.259273505212166
+          ],
+          [
+            "tt",
+            -2.0
+          ],
+          [
+            "ry",
+            0.14
+          ],
+          [
+            "tt",
+            -0.6
+          ]
+        ]
+      },
+      "segments": [
+        [
+          0.6,
+          0.0,
+          0.0
+        ],
+        [
+          4.034050751364315,
+          0.4,
+          0.0
+        ],
+        [
+          0.6,
+          0.0,
+          0.0
+        ]
+      ]
+    }
+  },
+  "types": {
+    "symmetric": {
+      "color": "#8798b3",
+      "frames": {},
+      "shape": [
+        "box",
+        0.85,
+        0.55,
+        4.4,
+        0.0,
+        0.0
+      ],
+      "mechanical_center": {
+        "transformation": []
+      },
+      "magnetic_center": {
+        "transformation": []
+      },
+      "magnetic_length": 4.0,
+      "magnetic_curvature": 0.0,
+      "magnetic_roll": 0.0
+    },
+    "asymmetric": {
+      "color": "#8798b3",
+      "frames": {},
+      "shape": [
+        "box",
+        0.85,
+        0.55,
+        4.4,
+        0.0,
+        0.0
+      ],
+      "mechanical_center": {
+        "transformation": [
+          [
+            "tx",
+            0.18
+          ],
+          [
+            "tt",
+            0.08
+          ],
+          [
+            "ry",
+            0.035
+          ]
+        ]
+      },
+      "magnetic_center": {
+        "transformation": []
+      },
+      "magnetic_length": 4.0,
+      "magnetic_curvature": 0.0,
+      "magnetic_roll": 0.0
+    }
+  },
+  "objects": {
+    "symmetric": {
+      "type": "symmetric",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "world"
+        },
+        "transformation": [
+          [
+            "tx",
+            -1.2
+          ]
+        ]
+      },
+      "beam_center": {
+        "transformation": [
+          [
+            "tx",
+            0.10033467208545056
+          ],
+          [
+            "tt",
+            0.0
+          ],
+          [
+            "ry",
+            -0.0
+          ]
+        ]
+      },
+      "beam_length": 4.026791638137875,
+      "beam_curvature": 0.09933466539753061,
+      "beam_roll": 0.0
+    },
+    "asymmetric": {
+      "type": "asymmetric",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "world"
+        },
+        "transformation": [
+          [
+            "tx",
+            1.2
+          ]
+        ]
+      },
+      "beam_center": {
+        "transformation": [
+          [
+            "tx",
+            0.13979864172047332
+          ],
+          [
+            "tt",
+            0.012054629678792672
+          ],
+          [
+            "ry",
+            -0.06
+          ]
+        ]
+      },
+      "beam_length": 4.034050751364315,
+      "beam_curvature": 0.0991559166340979,
+      "beam_roll": 0.0
+    }
+  }
+}

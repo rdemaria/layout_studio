@@ -69,6 +69,12 @@ wheel. Do not add a second generated HTML copy under `python_api`.
 
 ## Zoom and display proportions
 
+On touch screens, spread two fingers to zoom in and pinch to zoom out. The
+geometry follows the fingers' midpoint, so moving both fingers also pans.
+Pinching works in every navigation mode and each gesture is one Back/Forward
+history step. After a pinch, lift both fingers before starting a single-finger
+drag or tap.
+
 Large machines use automatic detail levels. The overview shows grouped marks and
 centerlines; zooming in restores complete solids. Offscreen geometry is culled,
 and an onscreen selected object always receives full detail. Grouped marks select
@@ -143,7 +149,9 @@ Entries may also provide labels, as in the checked-in sample:
 
 Only same-origin HTTP(S) paths from the catalog are offered. Prefer relative paths
 so a layout continues to work when the app is mounted below an origin root. The
-bundled catalog includes the sample layout and the SPS LS3 and M2 LS3 conversions
+bundled catalog includes the sample layout, the
+[Xsuite RBend independent-axis example](../python_api/examples/xsuite_rbend_axes.md),
+and the SPS LS3 and M2 LS3 conversions
 as plain JSON files.
 
 **Import file** and URL loading use plain `.json`. Files are parsed directly from

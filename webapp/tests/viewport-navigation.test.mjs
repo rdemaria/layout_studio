@@ -8,12 +8,76 @@ const vite = await createServer({configFile: false, appType: "custom", root,
   resolve: {alias: {"@": root}}, server: {middlewareMode: true, hmr: false}});
 after(() => vite.close());
 const {cameraProjector, screenPointAtDepth, zoomCameraAtPoint, zoomCameraToRectangle,
-  fitCameraToPoints, panCamera} = await vite.ssrLoadModule("/app/layout-viewport.tsx");
+  fitCameraToPoints, panCamera, pinchCamera} = await vite.ssrLoadModule("/app/layout-viewport.tsx");
 const {zoomFocusDepth} = await vite.ssrLoadModule("/app/viewport-zoom.ts");
 const {cameraHistoryReducer, initialCameraHistory} = await vite.ssrLoadModule("/app/viewport-history.ts");
+const {TouchNavigation} = await vite.ssrLoadModule("/app/viewport-touch.ts");
 const width = 800, height = 600;
 const base = {azimuth: 0, elevation: 0, distance: 10, target: [0, 0, 0]};
 const close = (a, b, tolerance = 1e-8) => assert.ok(Math.abs(a - b) < tolerance, `${a} != ${b}`);
+
+test("pinch scales around actual geometry and follows the midpoint with unequal display scales", () => {
+  const camera = {...base, azimuth: -0.68, elevation: 0.42, axisScale: [0.2, 3, 0.5]};
+  const start = {x: 530, y: 220, distance: 100};
+  const detail = screenPointAtDepth(camera, start.x, start.y, 400, width, height);
+  const before = cameraProjector(camera, width, height)(detail);
+  for (const ratio of [0.5, 2, 1000]) {
+    const current = {x: 580, y: 190, distance: start.distance * ratio};
+    const next = pinchCamera(camera, start, current, width, height, before.depth);
+    const after = cameraProjector(next, width, height)(detail);
+    close(after.x, current.x); close(after.y, current.y);
+    close(after.scale / before.scale, ratio);
+    assert.equal(next.azimuth, camera.azimuth);
+    assert.equal(next.elevation, camera.elevation);
+  }
+  assert.equal(pinchCamera(camera, start, start, width, height, 400), camera);
+  assert.equal(pinchCamera(camera, start, {...start, distance: 0}, width, height), camera);
+  assert.equal(pinchCamera(camera, start, {...start, distance: NaN}, width, height), camera);
+});
+
+test("one pinch is one reversible history step, and a new pinch replaces the forward branch", () => {
+  const start = {x: 420, y: 270, distance: 100};
+  let history = initialCameraHistory(base);
+  for (const distance of [110, 140, 200]) history = cameraHistoryReducer(history, {
+    type: "change", group: "touch-1", update: () => pinchCamera(base, start, {...start, distance}, width, height),
+  });
+  assert.equal(history.past.length, 1);
+  const zoomed = history.present;
+  history = cameraHistoryReducer(history, {type: "back"});
+  assert.deepEqual(history.present, base);
+  history = cameraHistoryReducer(history, {type: "forward"});
+  assert.deepEqual(history.present, zoomed);
+  history = cameraHistoryReducer(history, {type: "back"});
+  history = cameraHistoryReducer(history, {type: "change", group: "touch-2",
+    update: () => pinchCamera(base, start, {...start, distance: 50}, width, height)});
+  assert.equal(history.future.length, 0);
+  assert.equal(history.present.distance, 20);
+});
+
+test("touch transitions consume remaining fingers after release or cancellation and ignore stray moves", () => {
+  const touch = new TouchNavigation();
+  assert.equal(touch.start(1, {x: 100, y: 100}), null);
+  assert.equal(touch.suppressSinglePointer, false);
+  assert.deepEqual(touch.start(2, {x: 200, y: 100}), {x: 150, y: 100, distance: 100});
+  assert.equal(touch.suppressSinglePointer, true);
+  touch.start(3, {x: 800, y: 900});
+  assert.deepEqual(touch.move(3, {x: 900, y: 900}), {x: 150, y: 100, distance: 100});
+  assert.equal(touch.end(3), true);
+  assert.equal(touch.end(2), true); // pointerup, pointercancel and lost capture use this cleanup
+  assert.equal(touch.move(1, {x: 110, y: 100}), null);
+  assert.equal(touch.suppressSinglePointer, true, "remaining finger cannot select or orbit");
+  assert.equal(touch.end(1), true);
+  assert.equal(touch.suppressSinglePointer, false);
+  assert.equal(touch.move(1, {x: 0, y: 0}), null);
+  touch.start(4, {x: 50, y: 100});
+  assert.equal(touch.start(5, {x: 50, y: 100}), null, "coincident fingers are safe");
+  assert.deepEqual(touch.move(5, {x: 150, y: 100}), {x: 100, y: 100, distance: 100});
+  touch.reset();
+  assert.equal(touch.suppressSinglePointer, false);
+  assert.equal(touch.move(5, {x: 200, y: 100}), null);
+  assert.equal(touch.start(6, {x: 50, y: 100}), null);
+  assert.equal(touch.end(6), false, "a fresh single-finger tap can select");
+});
 
 test("view history groups gestures and restores wheel, fit and region zoom exactly", () => {
   let history = initialCameraHistory({...base, axisScale: [0.1, 3, 0.4]});
