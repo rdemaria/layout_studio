@@ -526,6 +526,9 @@ test("validates complete magnetic and beam feature values", () => {
 test("reserves all conditional implicit frame names", () => {
   for (const name of [
     "anchor",
+    "mechanical_entry",
+    "mechanical_center",
+    "mechanical_exit",
     "magnetic_center",
     "magnetic_entry",
     "magnetic_exit",
@@ -628,6 +631,8 @@ test("exposes only the implicit frames supplied by optional features", () => {
   const expectedReferenceZ = {
     anchor: 12,
     mechanical_center: 12,
+    mechanical_entry: 11,
+    mechanical_exit: 13,
     magnetic_center: 12,
     magnetic_entry: 11,
     magnetic_exit: 13,
@@ -650,6 +655,9 @@ test("exposes only the implicit frames supplied by optional features", () => {
 
   for (const target of [
     "anchor",
+    "mechanical_entry",
+    "mechanical_center",
+    "mechanical_exit",
     "magnetic_center",
     "magnetic_entry",
     "magnetic_exit",
@@ -1108,7 +1116,7 @@ test("derives curved magnetic entry and exit frames and aligns magnetic targets"
     1e-8,
   );
 
-  assert.equal(scene.magneticFrames.length, 4);
+  assert.equal(scene.magneticFrames.length, 6);
   assert.equal(scene.magneticAxes.length, 2);
   assert.equal(scene.beamAxes.length, 2);
   assert.equal(scene.beamFrames.length, 4);
@@ -1857,4 +1865,36 @@ test("solves a curved segment's object-plane crossing analytically", () => {
   });
   assert.equal(rolledResult.kind, "unique");
   approximatelyEqual(rolledResult.paths, [Math.PI / 3], 1e-8);
+});
+
+
+test("mechanical triplet follows the swept shape and referenced center in eager and deferred scenes", () => {
+  for (const shape of [["box", 2, 1, Math.PI, 1, Math.PI / 2], ["cylinder", 1, Math.PI, 1, Math.PI / 2]]) {
+    const input = canonicalLayout();
+    input.types.magnet.shape = shape;
+    input.types.magnet.mechanical_center = {
+      reference: {kind: "world"}, transformation: [["tx", 10], ["ty", 3]],
+    };
+    input.types.magnet.frames.mechanical_start = {transformation: [["tt", -99]]};
+    const layout = parseLayout(input);
+    const eager = buildScene(layout);
+    const deferred = buildScene(layout, undefined, {deferred: true});
+    const expected = {
+      mechanical_entry: {o: [10, 2, -1], s: [0, 1, 0]},
+      mechanical_center: {o: [10, 3, 0], s: [0, 0, 1]},
+      mechanical_exit: {o: [10, 2, 1], s: [0, -1, 0]},
+    };
+    const feature = deferred.deferred.feature("Q1", "mechanical");
+    assert.deepEqual(feature.frames, eager.mechanicalFrames.filter(f => f.object === "Q1"));
+    assert.deepEqual(feature.axes, eager.mechanicalAxes.filter(f => f.object === "Q1"));
+    for (const [name, pose] of Object.entries(expected)) {
+      const frame = feature.frames.find(f => f.name === name).frame;
+      approximatelyEqual(frame.o, pose.o);
+      approximatelyEqual(frame.s, pose.s);
+      assert.deepEqual(frame, deferred.deferred.resolveFrame("Q1", name));
+    }
+    const magnetic = deferred.deferred.feature("Q1", "magnetic");
+    assert.deepEqual(magnetic.frames.find(f => f.name === "magnetic_center").frame, magnetic.axes[0].centerFrame);
+    assert.equal(layout.types.magnet.frames.mechanical_start.transformation[0][1], -99);
+  }
 });

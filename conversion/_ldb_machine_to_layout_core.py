@@ -89,6 +89,8 @@ IMPLICIT_FRAMES = {
     "center",
     "anchor",
     "mechanical_center",
+    "mechanical_entry",
+    "mechanical_exit",
     "magnetic_center",
     "magnetic_entry",
     "magnetic_exit",
@@ -751,7 +753,7 @@ def validate_layout_json(layout: Mapping[str, Any]) -> None:
         type_ = types_[obj["type"]]
         names = {"anchor", *type_["frames"]}
         if "shape" in type_:
-            names.add("mechanical_center")
+            names.update(("mechanical_center", "mechanical_entry", "mechanical_exit"))
         if "magnetic_center" in type_:
             names.update(("magnetic_center", "magnetic_entry", "magnetic_exit"))
         if "beam_center" in obj or "magnetic_center" in type_:

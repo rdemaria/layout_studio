@@ -9,6 +9,8 @@ from conftest import assert_pose
 from layout_studio import (
     AmbiguousStationError,
     Box,
+    Cylinder,
+    ReferenceInUseError,
     Frame,
     Layout,
     NameConflictError,
@@ -353,6 +355,9 @@ def test_implicit_axis_frames_exist_only_for_configured_features():
     "name",
     [
         "center",
+        "mechanical_center",
+        "mechanical_entry",
+        "mechanical_exit",
         "magnetic_center",
         "magnetic_entry",
         "magnetic_exit",
@@ -591,3 +596,39 @@ def test_station_inference_cache_is_fresh_after_live_curve_edit():
 
     with pytest.raises(NoStationSolutionError):
         resolver.infer_station(curve, [0.0, 0.0, 2.5])
+
+
+@pytest.mark.parametrize("shape", [
+    Box(2, 1, math.pi, curvature=1, roll=math.pi / 2),
+    Cylinder(1, math.pi, curvature=1, roll=math.pi / 2),
+])
+def test_mechanical_triplet_follows_shape_and_referenced_center(shape):
+    layout = Layout()
+    type_ = layout.new_type("body", color="#112233", shape=shape,
+                            mechanical_center=Frame("world").tx(10).ty(3))
+    type_.new_frame("mechanical_start", Frame().tt(-99))
+    obj = layout.new_object("A", type=type_, position=Position("world").tx(100))
+    assert_pose(obj.get_frame("mechanical_entry"), origin=[10, 2, -1], tangent=[0, 1, 0])
+    assert_pose(obj.get_frame("mechanical_center"), origin=[10, 3, 0], tangent=[0, 0, 1])
+    assert_pose(obj.get_frame("mechanical_exit"), origin=[10, 2, 1], tangent=[0, -1, 0])
+    assert_pose(obj.get_frame("mechanical_start"), origin=[100, 0, -99])
+    # Stored survey frames and derived geometry frames remain independent.
+    restored = Layout.from_dict(layout.to_dict())
+    assert_pose(restored.objects["A"].get_frame("mechanical_exit"), origin=[10, 2, 1])
+    marker = layout.new_type("marker", color="#112233")
+    layout.new_object("end_marker", type=marker, position=Position("A->mechanical_exit"))
+    with pytest.raises(ReferenceInUseError):
+        type_.remove_shape()
+
+
+def test_mechanical_endpoints_can_align_targets_and_follow_shape_edits():
+    layout = Layout()
+    type_ = layout.new_type("body", color="#112233", shape=Box(1, 1, 4),
+                            mechanical_center=Frame().tx(0.5))
+    obj = layout.new_object("A", type=type_, position=Position("world", target="mechanical_entry"))
+    assert_pose(obj.get_frame("mechanical_entry"), origin=[0, 0, 0])
+    assert_pose(obj.get_frame("mechanical_center"), origin=[0, 0, 2])
+    assert_pose(obj.get_frame("mechanical_exit"), origin=[0, 0, 4])
+    type_.shape = Box(1, 1, 6)
+    assert_pose(obj.get_frame("mechanical_exit"), origin=[0, 0, 6])
+    assert_pose(type_.get_frame("mechanical_entry"), origin=[0.5, 0, -3])

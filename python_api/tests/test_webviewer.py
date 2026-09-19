@@ -702,6 +702,7 @@ def test_public_controls_are_ordered_and_nonblocking(web_viewer):
     assert (
         web_viewer.set_visibility(
             curves=False,
+            mechanical_axis=True,
             magnetic_axis=True,
             beam_axis=False,
             frames=False,
@@ -734,6 +735,7 @@ def test_public_controls_are_ordered_and_nonblocking(web_viewer):
     assert commands[3]["view"] == "-z"
     assert commands[4]["visibility"] == {
         "curves": False,
+        "mechanical_axis": True,
         "magnetic_axis": True,
         "beam_axis": False,
         "frames": False,
@@ -793,6 +795,9 @@ def test_invalid_visibility_and_targets_are_rejected(web_viewer):
 @pytest.mark.parametrize(
     "name",
     [
+        "mechanical_center",
+        "mechanical_entry",
+        "mechanical_exit",
         "magnetic_center",
         "magnetic_entry",
         "magnetic_exit",

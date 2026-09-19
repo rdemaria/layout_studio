@@ -78,6 +78,9 @@ def test_dangling_type_object_and_frame_references_are_rejected():
 @pytest.mark.parametrize(
     "frame_name",
     [
+        "mechanical_center",
+        "mechanical_entry",
+        "mechanical_exit",
         "magnetic_center",
         "magnetic_entry",
         "magnetic_exit",

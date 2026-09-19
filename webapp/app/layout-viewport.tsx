@@ -38,7 +38,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type {
-  FeatureBoundaryFrameName,
+  FeatureFrameName,
   Frame,
   LayoutData,
   SelectedEntity,
@@ -63,7 +63,7 @@ import {
   type CurveGeometry,
   type CurveSample,
   type FeatureAxisGeometry,
-  type FeatureBoundaryFrameGeometry,
+  type FeatureFrameGeometry,
   type SceneGeometry,
   type SceneScope,
   type Bounds,
@@ -109,6 +109,7 @@ export type ViewportCommand =
         curves?: boolean;
         objects?: boolean;
         frames?: boolean;
+        mechanical_axis?: boolean;
         magnetic_axis?: boolean;
         beam_axis?: boolean;
       };
@@ -152,9 +153,9 @@ type HoverTarget =
   | { kind: "frame"; object: string; name: string; x: number; y: number }
   | {
       kind: "feature_frame";
-      feature: "magnetic" | "beam";
+      feature: "mechanical" | "magnetic" | "beam";
       object: string;
-      name: FeatureBoundaryFrameName;
+      name: FeatureFrameName;
       frame: Frame;
       x: number;
       y: number;
@@ -162,7 +163,7 @@ type HoverTarget =
     }
   | {
       kind: "feature_axis";
-      feature: "magnetic" | "beam";
+      feature: "mechanical" | "magnetic" | "beam";
       object: string;
       sample: CurveSample;
       x: number;
@@ -184,7 +185,7 @@ type CurveHitTarget = {
 };
 type FeatureAxisHitTarget = {
   kind: "feature_axis_hit";
-  feature: "magnetic" | "beam";
+  feature: "mechanical" | "magnetic" | "beam";
   object: string;
   ax: number;
   ay: number;
@@ -206,9 +207,9 @@ type CurveStationSource =
   | { kind: "frame"; object: string; name: string; label: string }
   | {
       kind: "plane";
-      feature: "magnetic" | "beam";
+      feature: "mechanical" | "magnetic" | "beam";
       object: string;
-      name: FeatureBoundaryFrameName;
+      name: FeatureFrameName;
       label: string;
     }
   | { kind: "surface"; object: string; name: "shape"; label: string }
@@ -303,6 +304,8 @@ const EMPTY_SCENE: SceneGeometry = {
   curves: [],
   objects: [],
   frames: [],
+  mechanicalAxes: [],
+  mechanicalFrames: [],
   magneticAxes: [],
   magneticFrames: [],
   beamAxes: [],
@@ -316,6 +319,7 @@ export function sceneBoundsForVisibility(
     curves: boolean;
     objects: boolean;
     frames: boolean;
+    mechanicalAxis?: boolean;
     magneticAxis: boolean;
     beamAxis: boolean;
   },
@@ -352,7 +356,7 @@ export function sceneBoundsForVisibility(
   }
   const includeFeature = (
     axes: FeatureAxisGeometry[],
-    frames: FeatureBoundaryFrameGeometry[],
+    frames: FeatureFrameGeometry[],
   ) => {
     for (const axis of axes) {
       for (const sample of axis.samples) include(sample.p);
@@ -361,6 +365,7 @@ export function sceneBoundsForVisibility(
       for (const vertex of frame.vertices) include(vertex);
     }
   };
+  if (visibility.mechanicalAxis) includeFeature(scene.mechanicalAxes, scene.mechanicalFrames);
   if (visibility.magneticAxis) {
     includeFeature(scene.magneticAxes, scene.magneticFrames);
   }
@@ -473,7 +478,7 @@ function distanceToPolygon(
 
 function pointInsideFeaturePlane(
   point: Vec3,
-  featureFrame: FeatureBoundaryFrameGeometry,
+  featureFrame: FeatureFrameGeometry,
 ): boolean {
   const localPoint = sub(point, featureFrame.frame.o);
   const x = dot(localPoint, featureFrame.frame.x);
@@ -948,6 +953,7 @@ export function LayoutViewport({
   const [showCurves, setShowCurves] = useState(true);
   const [showObjects, setShowObjects] = useState(true);
   const [showFrames, setShowFrames] = useState(false);
+  const [showMechanicalAxis, setShowMechanicalAxis] = useState(false);
   const [showMagneticAxis, setShowMagneticAxis] = useState(false);
   const [showBeamAxis, setShowBeamAxis] = useState(false);
   const [layerResult, setLayerResult] = useState<{layers: SceneLayers; index: SpatialIndex} | null>(null);
@@ -955,11 +961,11 @@ export function LayoutViewport({
   useEffect(() => {
     const controller = new AbortController();
     setLayerResult(null);
-    const enabled = Boolean(scene.deferred && (showFrames || showMagneticAxis || showBeamAxis));
+    const enabled = Boolean(scene.deferred && (showFrames || showMechanicalAxis || showMagneticAxis || showBeamAxis));
     setLayersLoading(enabled);
     if (enabled) void (async () => {
       try {
-        const layers = await runCooperatively(buildSceneLayers(scene, {frames: showFrames, magnetic: showMagneticAxis, beam: showBeamAxis}), controller.signal);
+        const layers = await runCooperatively(buildSceneLayers(scene, {frames: showFrames, mechanical: showMechanicalAxis, magnetic: showMagneticAxis, beam: showBeamAxis}), controller.signal);
         const index = await runCooperatively(buildSpatialIndex(layers.objects), controller.signal);
         if (!controller.signal.aborted) {setLayerResult({layers, index}); setLayersLoading(false);}
       } catch (error) {
@@ -967,7 +973,7 @@ export function LayoutViewport({
       }
     })();
     return () => controller.abort();
-  }, [scene, showFrames, showMagneticAxis, showBeamAxis]);
+  }, [scene, showFrames, showMechanicalAxis, showMagneticAxis, showBeamAxis]);
   const [curveProbe, setCurveProbe] = useState<CurveProbe | null>(null);
   const [zoomRectangle, setZoomRectangle] =
     useState<ScreenRectangle | null>(null);
@@ -1022,14 +1028,15 @@ export function LayoutViewport({
   const objectProxies = useMemo(() => compactProxies(detailSelection.proxies), [detailSelection]);
   const layerObjectMap = useMemo(() => new Map(layerResult?.layers.objects.map(object => [object.name, object]) ?? []), [layerResult]);
   const visibleLayers = useMemo(() => {
-    const empty = {frames: scene.frames, magneticAxes: scene.magneticAxes, magneticFrames: scene.magneticFrames,
+    const empty = {frames: scene.frames, mechanicalAxes: scene.mechanicalAxes, mechanicalFrames: scene.mechanicalFrames, magneticAxes: scene.magneticAxes, magneticFrames: scene.magneticFrames,
       beamAxes: scene.beamAxes, beamFrames: scene.beamFrames, proxies: [] as typeof objectProxies};
     if (!layerResult) return empty;
     const layerScene = {...scene, deferred: scene.deferred ? {...scene.deferred,
       objectByName: layerObjectMap} : undefined};
     const visible = selectSceneDetail(layerScene, layerResult.index, cameraBoundsProjector(camera, size.width, size.height), selectedObjectName);
     const records = visible.objects.map(object => layerResult.layers.byObject.get(object.name)!);
-    return {frames: records.flatMap(record => record.frames), magneticAxes: records.flatMap(record => record.magneticAxes),
+    return {frames: records.flatMap(record => record.frames), mechanicalAxes: records.flatMap(record => record.mechanicalAxes),
+      mechanicalFrames: records.flatMap(record => record.mechanicalFrames), magneticAxes: records.flatMap(record => record.magneticAxes),
       magneticFrames: records.flatMap(record => record.magneticFrames), beamAxes: records.flatMap(record => record.beamAxes),
       beamFrames: records.flatMap(record => record.beamFrames), proxies: compactProxies(visible.proxies)};
   }, [scene, layerResult, layerObjectMap, camera, size, selectedObjectName]);
@@ -1155,8 +1162,8 @@ export function LayoutViewport({
       }
 
       const addFeaturePlaneStations = function* (
-        feature: "magnetic" | "beam",
-        featureFrames: FeatureBoundaryFrameGeometry[],
+        feature: "mechanical" | "magnetic" | "beam",
+        featureFrames: FeatureFrameGeometry[],
       ) {
         for (const featureFrame of featureFrames) {
           yield;
@@ -1185,7 +1192,7 @@ export function LayoutViewport({
               )) <= 1e-6;
           });
           if (paths.length === 1) {
-            const boundary = featureFrame.name.endsWith("_entry")
+            const boundary = featureFrame.name.endsWith("_center") ? "center" : featureFrame.name.endsWith("_entry")
               ? "entry"
               : "exit";
             addStation(paths[0], {
@@ -1193,11 +1200,12 @@ export function LayoutViewport({
               feature,
               object: featureFrame.object,
               name: featureFrame.name,
-              label: `${featureFrame.object} ${feature === "magnetic" ? "magnetic" : "beam"} ${boundary} plane`,
+              label: `${featureFrame.object} ${feature} ${boundary} plane`,
             });
           }
         }
       };
+      if (showMechanicalAxis) yield* addFeaturePlaneStations("mechanical", visibleLayers.mechanicalFrames);
       if (showMagneticAxis) {
         yield* addFeaturePlaneStations("magnetic", visibleLayers.magneticFrames);
       }
@@ -1236,6 +1244,7 @@ export function LayoutViewport({
     visibleLayers,
     showBeamAxis,
     showFrames,
+    showMechanicalAxis,
     showMagneticAxis,
     showObjects,
   ]);
@@ -1274,6 +1283,7 @@ export function LayoutViewport({
       curves: showCurves,
       objects: showObjects,
       frames: showFrames,
+      mechanicalAxis: showMechanicalAxis,
       magneticAxis: showMagneticAxis,
       beamAxis: showBeamAxis,
     });
@@ -1289,7 +1299,8 @@ export function LayoutViewport({
       showBeamAxis,
       showCurves,
       showFrames,
-      showMagneticAxis,
+      showMechanicalAxis,
+    showMagneticAxis,
       showObjects,
     ],
   );
@@ -1504,7 +1515,7 @@ export function LayoutViewport({
         zoomGeometry.points.push(marker);
         const record = color ? layerResult?.layers.byObject.get(object.name) : undefined;
         const frame = record?.frames[0];
-        const axis = record?.magneticAxes[0] ?? record?.beamAxes[0];
+        const axis = record?.mechanicalAxes[0] ?? record?.magneticAxes[0] ?? record?.beamAxes[0];
         if (frame) hits.push({kind: "frame", object: object.name, name: frame.name, x, y});
         else if (axis) hits.push({kind: "feature_axis_hit", feature: axis.kind, object: object.name,
           ax:a.x, ay:a.y, bx:b.x, by:b.y, startSample:axis.samples[0], endSample:axis.samples[axis.samples.length-1]});
@@ -1514,18 +1525,18 @@ export function LayoutViewport({
     if (showObjects) drawProxies(objectProxies);
     drawProxies(visibleLayers.proxies, "#ffca75");
     const drawFeature = (
-      feature: "magnetic" | "beam",
+      feature: "mechanical" | "magnetic" | "beam",
       axes: FeatureAxisGeometry[],
-      boundaryFrames: FeatureBoundaryFrameGeometry[],
+      boundaryFrames: FeatureFrameGeometry[],
     ) => {
-      const axisColor = feature === "magnetic" ? "#ffd166" : "#66c7ff";
+      const axisColor = feature === "mechanical" ? "#92dfa1" : feature === "magnetic" ? "#ffd166" : "#66c7ff";
       for (const axis of axes) {
         const projected = axis.samples.map((sample) => project(sample.p));
         const active = selection?.kind === "object" && selection.name === axis.object;
         const hovering = hoverStyleKey ===
           `feature_axis:${feature}:${axis.object}`;
         context.save();
-        context.setLineDash(feature === "magnetic" ? [8, 4] : [3, 3]);
+        context.setLineDash(feature === "mechanical" ? [] : feature === "magnetic" ? [8, 4] : [3, 3]);
         context.lineCap = "round";
         context.lineJoin = "round";
         context.beginPath();
@@ -1564,7 +1575,8 @@ export function LayoutViewport({
         const hovering = hoverStyleKey ===
           `feature_frame:${featureFrame.object}:${featureFrame.name}`;
         const isEntry = featureFrame.name.endsWith("_entry");
-        const color = feature === "magnetic"
+        const isCenter = featureFrame.name.endsWith("_center");
+        const color = feature === "mechanical" ? "#92dfa1" : feature === "magnetic"
           ? (isEntry ? "#ffe29a" : "#f5a742")
           : (isEntry ? "#7ee7ff" : "#659cff");
         context.beginPath();
@@ -1585,7 +1597,10 @@ export function LayoutViewport({
           polygon.length;
         context.font = "650 9px ui-monospace, SFMono-Regular, monospace";
         context.fillStyle = rgba(color, 0.95);
-        context.fillText(isEntry ? "IN" : "OUT", x + 5, y - 5);
+        context.beginPath();
+        context.arc(x, y, isCenter ? 4.5 : 3, 0, Math.PI * 2);
+        context.fill();
+        context.fillText(isCenter ? "CENTER" : feature === "mechanical" ? (isEntry ? "START" : "END") : (isEntry ? "IN" : "OUT"), x + 6, y - 6);
         hits.push({
           kind: "feature_frame",
           feature,
@@ -1598,6 +1613,7 @@ export function LayoutViewport({
         });
       }
     };
+    if (showMechanicalAxis) drawFeature("mechanical", visibleLayers.mechanicalAxes, visibleLayers.mechanicalFrames);
     if (showMagneticAxis) {
       drawFeature("magnetic", visibleLayers.magneticAxes, visibleLayers.magneticFrames);
     }
@@ -1840,6 +1856,7 @@ export function LayoutViewport({
     showBeamAxis,
     showCurves,
     showFrames,
+    showMechanicalAxis,
     showMagneticAxis,
     showObjects,
     size,
@@ -1860,10 +1877,10 @@ export function LayoutViewport({
       hovered?.kind === "curve" && showCurves
         ? hovered.sample.frame
         : hovered?.kind === "feature_axis" &&
-            (hovered.feature === "magnetic" ? showMagneticAxis : showBeamAxis)
+            (hovered.feature === "mechanical" ? showMechanicalAxis : hovered.feature === "magnetic" ? showMagneticAxis : showBeamAxis)
           ? hovered.sample.frame
         : hovered?.kind === "feature_frame" &&
-            (hovered.feature === "magnetic" ? showMagneticAxis : showBeamAxis)
+            (hovered.feature === "mechanical" ? showMechanicalAxis : hovered.feature === "magnetic" ? showMagneticAxis : showBeamAxis)
           ? hovered.frame
         : hovered?.kind === "frame" && showFrames
           ? scene.deferred?.resolveFrame(hovered.object, hovered.name) ?? visibleLayers.frames.find(
@@ -1947,6 +1964,7 @@ export function LayoutViewport({
     showBeamAxis,
     showCurves,
     showFrames,
+    showMechanicalAxis,
     showMagneticAxis,
     showObjects,
     size,
@@ -1965,14 +1983,20 @@ export function LayoutViewport({
     }
     if (closestFrame) return closestFrame.target;
 
+    let closestFeatureMarker: {distance: number; target: FeatureFrameHitTarget} | null = null;
     let closestFeatureFrame: {
       distance: number;
       target: FeatureFrameHitTarget;
     } | null = null;
     for (const target of hitTargetsRef.current) {
       if (target.kind !== "feature_frame") continue;
-      if (target.feature === "magnetic" ? !showMagneticAxis : !showBeamAxis) {
+      if (target.feature === "mechanical" ? !showMechanicalAxis : target.feature === "magnetic" ? !showMagneticAxis : !showBeamAxis) {
         continue;
+      }
+      // A center marker must remain pickable when entry/exit planes overlap it.
+      const markerDistance = Math.hypot(x - target.x, y - target.y);
+      if (markerDistance <= 11 && (!closestFeatureMarker || markerDistance < closestFeatureMarker.distance)) {
+        closestFeatureMarker = {distance: markerDistance, target};
       }
       const distance = distanceToPolygon(x, y, target.polygon);
       if (
@@ -1982,6 +2006,7 @@ export function LayoutViewport({
         closestFeatureFrame = { distance, target };
       }
     }
+    if (closestFeatureMarker) return closestFeatureMarker.target;
     if (closestFeatureFrame) return closestFeatureFrame.target;
 
     let closestFeatureAxis: {
@@ -1993,7 +2018,7 @@ export function LayoutViewport({
     } | null = null;
     for (const target of hitTargetsRef.current) {
       if (target.kind !== "feature_axis_hit") continue;
-      if (target.feature === "magnetic" ? !showMagneticAxis : !showBeamAxis) {
+      if (target.feature === "mechanical" ? !showMechanicalAxis : target.feature === "magnetic" ? !showMagneticAxis : !showBeamAxis) {
         continue;
       }
       const closest = closestPointOnSegment(
@@ -2087,6 +2112,7 @@ export function LayoutViewport({
     showBeamAxis,
     showCurves,
     showFrames,
+    showMechanicalAxis,
     showMagneticAxis,
     showObjects,
   ]);
@@ -2416,19 +2442,19 @@ export function LayoutViewport({
     }
     if (
       hovered?.kind === "feature_frame" &&
-      (hovered.feature === "magnetic" ? showMagneticAxis : showBeamAxis)
+      (hovered.feature === "mechanical" ? showMechanicalAxis : hovered.feature === "magnetic" ? showMagneticAxis : showBeamAxis)
     ) {
       return {
-        label: `${hovered.feature === "magnetic" ? "Magnetic" : "Beam"} ${hovered.name.endsWith("_entry") ? "entry" : "exit"} frame · ${hovered.object}`,
+        label: `${hovered.feature === "mechanical" ? "Mechanical" : hovered.feature === "magnetic" ? "Magnetic" : "Beam"} ${hovered.name.endsWith("_center") ? "center" : hovered.name.endsWith("_entry") ? "entry" : "exit"} frame · ${hovered.object}`,
         frame: hovered.frame,
       };
     }
     if (
       hovered?.kind === "feature_axis" &&
-      (hovered.feature === "magnetic" ? showMagneticAxis : showBeamAxis)
+      (hovered.feature === "mechanical" ? showMechanicalAxis : hovered.feature === "magnetic" ? showMagneticAxis : showBeamAxis)
     ) {
       return {
-        label: `${hovered.feature === "magnetic" ? "Magnetic" : "Beam"} axis · ${hovered.object}`,
+        label: `${hovered.feature === "mechanical" ? "Mechanical" : hovered.feature === "magnetic" ? "Magnetic" : "Beam"} axis · ${hovered.object}`,
         frame: hovered.sample.frame,
       };
     }
@@ -2483,6 +2509,7 @@ export function LayoutViewport({
     showBeamAxis,
     showCurves,
     showFrames,
+    showMechanicalAxis,
     showMagneticAxis,
     showObjects,
   ]);
@@ -2549,10 +2576,11 @@ export function LayoutViewport({
   }, []);
 
   const setFeatureLayerVisible = useCallback((
-    feature: "magnetic" | "beam",
+    feature: "mechanical" | "magnetic" | "beam",
     checked: boolean,
   ) => {
-    if (feature === "magnetic") setShowMagneticAxis(checked);
+    if (feature === "mechanical") setShowMechanicalAxis(checked);
+    else if (feature === "magnetic") setShowMagneticAxis(checked);
     else setShowBeamAxis(checked);
     if (!checked) {
       hitTargetsRef.current = hitTargetsRef.current.filter(
@@ -2573,6 +2601,10 @@ export function LayoutViewport({
       );
     }
   }, []);
+
+  const setMechanicalAxisVisible = useCallback((checked: boolean) => {
+    setFeatureLayerVisible("mechanical", checked);
+  }, [setFeatureLayerVisible]);
 
   const setMagneticAxisVisible = useCallback((checked: boolean) => {
     setFeatureLayerVisible("magnetic", checked);
@@ -2610,6 +2642,9 @@ export function LayoutViewport({
       }
       if (command.visibility.frames !== undefined) {
         setFrameLayerVisible(command.visibility.frames);
+      }
+      if (command.visibility.mechanical_axis !== undefined) {
+        setMechanicalAxisVisible(command.visibility.mechanical_axis);
       }
       if (command.visibility.magnetic_axis !== undefined) {
         setMagneticAxisVisible(command.visibility.magnetic_axis);
@@ -2665,6 +2700,7 @@ export function LayoutViewport({
     setBeamAxisVisible,
     setCurveLayerVisible,
     setFrameLayerVisible,
+    setMechanicalAxisVisible,
     setMagneticAxisVisible,
     setObjectLayerVisible,
   ]);
@@ -2672,14 +2708,14 @@ export function LayoutViewport({
   useEffect(() => {
     if (
       !currentScene || buildProgress || layersLoading ||
-      ((showFrames || showMagneticAxis || showBeamAxis) && scene.deferred && !layerResult && !geometryError) ||
+      ((showFrames || showMechanicalAxis || showMagneticAxis || showBeamAxis) && scene.deferred && !layerResult && !geometryError) ||
       !commandResult ||
       commandResult.id <= reportedCommandRef.current ||
       !onCommandApplied
     ) return;
     reportedCommandRef.current = commandResult.id;
     onCommandApplied(commandResult.id, commandResult.error || geometryError || undefined);
-  }, [commandResult, onCommandApplied, currentScene, buildProgress, layersLoading, layerResult, scene, geometryError, showFrames, showMagneticAxis, showBeamAxis]);
+  }, [commandResult, onCommandApplied, currentScene, buildProgress, layersLoading, layerResult, scene, geometryError, showFrames, showMechanicalAxis, showMagneticAxis, showBeamAxis]);
 
   return (
     <div className="viewport-shell">
@@ -2792,7 +2828,17 @@ export function LayoutViewport({
           </div>
           <div className="viewport-layer-toggle">
             <Switch
-              aria-label="Show magnetic axis and entry and exit frames"
+              aria-label="Show mechanical axis and start, center, and end frames"
+              checked={showMechanicalAxis}
+              id="viewer-mechanical-axis-visible"
+              onCheckedChange={setMechanicalAxisVisible}
+              size="sm"
+            />
+            <label htmlFor="viewer-mechanical-axis-visible">Mechanical axis</label>
+          </div>
+          <div className="viewport-layer-toggle">
+            <Switch
+              aria-label="Show magnetic axis and entry, center, and exit frames"
               checked={showMagneticAxis}
               id="viewer-magnetic-axis-visible"
               onCheckedChange={setMagneticAxisVisible}

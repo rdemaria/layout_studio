@@ -1273,7 +1273,7 @@ def _implicit_object_frames(type_value: object, object_value: object) -> frozens
 
     result = {"anchor"}
     if ("shape" in type_value if isinstance(type_value, Mapping) else getattr(type_value, "shape", None) is not None):
-        result.add("mechanical_center")
+        result.update(("mechanical_center", "mechanical_entry", "mechanical_exit"))
     magnetic = has_center(type_value, "magnetic")
     if magnetic:
         result.update(("magnetic_center", "magnetic_entry", "magnetic_exit"))
@@ -2503,6 +2503,7 @@ class WebViewer:
         *,
         curves: bool | None = None,
         objects: bool | None = None,
+        mechanical_axis: bool | None = None,
         magnetic_axis: bool | None = None,
         beam_axis: bool | None = None,
         frames: bool | None = None,
@@ -2513,6 +2514,7 @@ class WebViewer:
             {
                 "curves": curves,
                 "objects": objects,
+                "mechanical_axis": mechanical_axis,
                 "magnetic_axis": magnetic_axis,
                 "beam_axis": beam_axis,
                 "frames": frames,
@@ -2917,7 +2919,7 @@ def _visibility_values(
         return {}
     if not isinstance(value, Mapping):
         raise TypeError("visibility must be a mapping")
-    allowed = {"curves", "objects", "magnetic_axis", "beam_axis", "frames"}
+    allowed = {"curves", "objects", "mechanical_axis", "magnetic_axis", "beam_axis", "frames"}
     supplied: dict[str, bool] = {}
     for key, item in value.items():
         if key not in allowed:

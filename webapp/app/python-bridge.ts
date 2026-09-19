@@ -16,6 +16,7 @@ export type PythonBridgeVisibility = {
   curves?: boolean;
   objects?: boolean;
   frames?: boolean;
+  mechanical_axis?: boolean;
   magnetic_axis?: boolean;
   beam_axis?: boolean;
 };
@@ -221,7 +222,7 @@ function parseVisibility(value: unknown): Extract<
   }
   requireOnlyKeys(
     value,
-    ["curves", "objects", "frames", "magnetic_axis", "beam_axis"],
+    ["curves", "objects", "frames", "mechanical_axis", "magnetic_axis", "beam_axis"],
     "visibility",
   );
   if (!Object.keys(value).length) {
@@ -232,6 +233,7 @@ function parseVisibility(value: unknown): Extract<
     "curves",
     "objects",
     "frames",
+    "mechanical_axis",
     "magnetic_axis",
     "beam_axis",
   ] as const) {

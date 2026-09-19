@@ -4,17 +4,18 @@ import {
   objectFrameDefinition,
   effectiveBeamFeature,
   hasMagneticFeature,
-  MAGNETIC_BOUNDARY_FRAME_NAMES,
+  MAGNETIC_FRAME_NAMES,
+  MECHANICAL_FRAME_NAMES,
   shapePath,
 } from "./layout-data";
 import type {
   BeamBoundaryFrameName,
   Frame,
-  FeatureBoundaryFrameName,
+  FeatureFrameName,
   LayoutData,
   LayoutObject,
   LayoutType,
-  MagneticBoundaryFrameName,
+  MechanicalFrameName,
   ObjectPosition,
   TransformOperation,
   Transformation,
@@ -296,29 +297,30 @@ export type NamedFrameGeometry = {
 export type FeatureAxisGeometry = {
   object: string;
   typeName: string;
-  kind: "magnetic" | "beam";
+  kind: "mechanical" | "magnetic" | "beam";
   centerFrame: Frame;
   samples: CurveSample[];
 };
-export type FeatureBoundaryFrameGeometry<
-  Name extends FeatureBoundaryFrameName = FeatureBoundaryFrameName,
+export type FeatureFrameGeometry<
+  Name extends FeatureFrameName = FeatureFrameName,
 > = {
   object: string;
   name: Name;
   typeName: string;
-  kind: "magnetic" | "beam";
+  kind: "mechanical" | "magnetic" | "beam";
   frame: Frame;
   vertices: Vec3[];
 };
+export type MechanicalFrameGeometry = FeatureFrameGeometry<MechanicalFrameName>;
 export type MagneticFrameGeometry =
-  FeatureBoundaryFrameGeometry<MagneticBoundaryFrameName>;
+  FeatureFrameGeometry<"magnetic_entry" | "magnetic_center" | "magnetic_exit">;
 export type BeamFrameGeometry =
-  FeatureBoundaryFrameGeometry<BeamBoundaryFrameName>;
+  FeatureFrameGeometry<BeamBoundaryFrameName>;
 export type DeferredScene = {
   objectByName: Map<string, ObjectGeometry>;
   detail: (object: ObjectGeometry) => ObjectGeometry;
   namedFrames: (object: string) => NamedFrameGeometry[];
-  feature: (object: string, kind: "magnetic" | "beam") => {axes: FeatureAxisGeometry[]; frames: FeatureBoundaryFrameGeometry[]};
+  feature: (object: string, kind: "mechanical" | "magnetic" | "beam") => {axes: FeatureAxisGeometry[]; frames: FeatureFrameGeometry[]};
   resolveFrame: (object: string, name: string) => Frame;
   cachedSolids: () => number;
 };
@@ -327,6 +329,8 @@ export type SceneGeometry = {
   curves: CurveGeometry[];
   objects: ObjectGeometry[];
   frames: NamedFrameGeometry[];
+  mechanicalAxes: FeatureAxisGeometry[];
+  mechanicalFrames: MechanicalFrameGeometry[];
   magneticAxes: FeatureAxisGeometry[];
   magneticFrames: MagneticFrameGeometry[];
   beamAxes: FeatureAxisGeometry[];
@@ -980,7 +984,7 @@ function featureStepCount(axisLength: number, curvature: number): number {
 function buildFeatureAxisGeometry(
   object: string,
   typeName: string,
-  kind: "magnetic" | "beam",
+  kind: "mechanical" | "magnetic" | "beam",
   centerFrame: Frame,
   axisLength: number,
   curvature: number,
@@ -1271,7 +1275,7 @@ export function* buildSceneSteps(
     if (points.length) for (let i = 0; i < 3; i++) {
       min[i] = Math.min(...points.map(p => p[i])); max[i] = Math.max(...points.map(p => p[i]));
     }
-    yield {completed: 0, total: objectEntries.length, preview: {curves, objects: [], frames: [], magneticAxes: [], magneticFrames: [], beamAxes: [], beamFrames: [], bounds: {min, max}}};
+    yield {completed: 0, total: objectEntries.length, preview: {curves, objects: [], frames: [], mechanicalAxes: [], mechanicalFrames: [], magneticAxes: [], magneticFrames: [], beamAxes: [], beamFrames: [], bounds: {min, max}}};
   }
   for (const [name, object] of objectEntries) {
     const frame = resolveObject(name, []);
@@ -1294,59 +1298,37 @@ export function* buildSceneSteps(
     })),
   );
 
+  const feature = (objectName: string, kind: "mechanical" | "magnetic" | "beam") => {
+    const object = layout.objects[objectName], type = layout.types[object.type];
+    const axis = kind === "mechanical" ? (type.shape ? shapePath(type.shape) : undefined)
+      : kind === "beam" ? effectiveBeamFeature(type, object) : hasMagneticFeature(type)
+      ? {length: type.magnetic_length!, curvature: type.magnetic_curvature!, roll: type.magnetic_roll!} : undefined;
+    if (!axis) return {axes: [], frames: []};
+    const centerFrame = resolveFrame(objectName, `${kind}_center`, []);
+    const names = kind === "mechanical" ? MECHANICAL_FRAME_NAMES
+      : kind === "magnetic" ? MAGNETIC_FRAME_NAMES : BEAM_BOUNDARY_FRAME_NAMES;
+    return {axes: [buildFeatureAxisGeometry(objectName, object.type, kind, centerFrame, axis.length, axis.curvature, axis.roll)],
+      frames: names.map(name => {
+        const frame = resolveFrame(objectName, name, []);
+        return {object: objectName, name, typeName: object.type, kind, frame, vertices: featurePlaneVertices(type, frame, axis.length)};
+      })};
+  };
+  const mechanicalAxes: FeatureAxisGeometry[] = [];
+  const mechanicalFrames: MechanicalFrameGeometry[] = [];
   const magneticAxes: FeatureAxisGeometry[] = [];
   const magneticFrames: MagneticFrameGeometry[] = [];
   const beamAxes: FeatureAxisGeometry[] = [];
   const beamFrames: BeamFrameGeometry[] = [];
-  for (const [objectName, object] of options.deferred ? [] : objectEntries) {
-    const type = layout.types[object.type];
-    if (hasMagneticFeature(type)) {
-      const centerFrame = resolveFrame(objectName, "magnetic_center", []);
-      magneticAxes.push(buildFeatureAxisGeometry(
-        objectName,
-        object.type,
-        "magnetic",
-        centerFrame,
-        type.magnetic_length!,
-        type.magnetic_curvature!,
-        type.magnetic_roll!,
-      ));
-      for (const name of MAGNETIC_BOUNDARY_FRAME_NAMES) {
-        const frame = resolveFrame(objectName, name, []);
-        magneticFrames.push({
-          object: objectName,
-          name,
-          typeName: object.type,
-          kind: "magnetic",
-          frame,
-          vertices: featurePlaneVertices(type, frame, type.magnetic_length!),
-        });
-      }
-    }
-    const beam = effectiveBeamFeature(type, object);
-    if (beam) {
-      const centerFrame = resolveFrame(objectName, "beam_center", []);
-      beamAxes.push(buildFeatureAxisGeometry(
-        objectName,
-        object.type,
-        "beam",
-        centerFrame,
-        beam.length,
-        beam.curvature,
-        beam.roll,
-      ));
-      for (const name of BEAM_BOUNDARY_FRAME_NAMES) {
-        const frame = resolveFrame(objectName, name, []);
-        beamFrames.push({
-          object: objectName,
-          name,
-          typeName: object.type,
-          kind: "beam",
-          frame,
-          vertices: featurePlaneVertices(type, frame, beam.length),
-        });
-      }
-    }
+  for (const [objectName] of options.deferred ? [] : objectEntries) {
+    const mechanical = feature(objectName, "mechanical");
+    mechanicalAxes.push(...mechanical.axes);
+    mechanicalFrames.push(...mechanical.frames as MechanicalFrameGeometry[]);
+    const magnetic = feature(objectName, "magnetic");
+    magneticAxes.push(...magnetic.axes);
+    magneticFrames.push(...magnetic.frames as MagneticFrameGeometry[]);
+    const beam = feature(objectName, "beam");
+    beamAxes.push(...beam.axes);
+    beamFrames.push(...beam.frames as BeamFrameGeometry[]);
   }
 
   let hasPosition = false;
@@ -1376,10 +1358,10 @@ export function* buildSceneSteps(
     for (const vertex of object.vertices) includePosition(vertex);
   }
   for (const frame of frames) includePosition(frame.frame.o);
-  for (const axis of [...magneticAxes, ...beamAxes]) {
+  for (const axis of [...mechanicalAxes, ...magneticAxes, ...beamAxes]) {
     for (const sample of axis.samples) includePosition(sample.p);
   }
-  for (const boundary of [...magneticFrames, ...beamFrames]) {
+  for (const boundary of [...mechanicalFrames, ...magneticFrames, ...beamFrames]) {
     for (const vertex of boundary.vertices) includePosition(vertex);
   }
   if (!hasPosition) {
@@ -1408,24 +1390,15 @@ export function* buildSceneSteps(
       return Object.keys(layout.types[object.type].frames).map(name => ({object: objectName, name,
         typeName: object.type, frame: resolveFrame(objectName, name, [])}));
     },
-    feature: (objectName, kind) => {
-      const object = layout.objects[objectName], type = layout.types[object.type];
-      const axis = kind === "beam" ? effectiveBeamFeature(type, object) : hasMagneticFeature(type)
-        ? {length: type.magnetic_length!, curvature: type.magnetic_curvature!, roll: type.magnetic_roll!} : undefined;
-      if (!axis) return {axes: [], frames: []};
-      const centerFrame = resolveFrame(objectName, `${kind}_center`, []);
-      return {axes: [buildFeatureAxisGeometry(objectName, object.type, kind, centerFrame, axis.length, axis.curvature, axis.roll)],
-        frames: (kind === "beam" ? BEAM_BOUNDARY_FRAME_NAMES : MAGNETIC_BOUNDARY_FRAME_NAMES).map(name => {
-          const frame = resolveFrame(objectName, name, []);
-          return {object: objectName, name, typeName: object.type, kind, frame, vertices: featurePlaneVertices(type, frame, axis.length)};
-        })};
-    },
+    feature,
   } : undefined;
   return {
     ...(deferred ? {deferred} : {}),
     curves,
     objects,
     frames,
+    mechanicalAxes,
+    mechanicalFrames,
     magneticAxes,
     magneticFrames,
     beamAxes,

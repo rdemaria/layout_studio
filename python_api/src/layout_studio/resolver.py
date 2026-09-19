@@ -56,6 +56,8 @@ RESERVED_TYPE_FRAMES = frozenset(
         "center",
         "anchor",
         "mechanical_center",
+        "mechanical_entry",
+        "mechanical_exit",
         "magnetic_center",
         "magnetic_entry",
         "magnetic_exit",
@@ -1517,7 +1519,7 @@ class Resolver:
     def _frame_names(self, type_: Any, object_: Any = None) -> set[str]:
         names = {"anchor", *[name for name, _ in _mapping_items(getattr(type_, "frames", None))]}
         if getattr(type_, "shape", None) is not None:
-            names.add("mechanical_center")
+            names.update(("mechanical_center", "mechanical_entry", "mechanical_exit"))
         if _axis_feature_values(type_, "magnetic") is not None:
             names.update(("magnetic_center", "magnetic_entry", "magnetic_exit"))
         if object_ is not None and self._object_beam_values(object_) is not None:
@@ -1532,6 +1534,9 @@ class Resolver:
             return {"transformation": []}, None
         if name == "mechanical_center" and getattr(type_, "shape", None) is not None:
             return getattr(type_, "mechanical_center", None) or {"transformation": []}, None
+        if name in {"mechanical_entry", "mechanical_exit"} and getattr(type_, "shape", None) is not None:
+            _, shape = _shape_values(type_.shape)
+            return local("mechanical_center"), ((-0.5 if name.endswith("_entry") else 0.5) * shape["dz"], shape["curvature"], shape["roll"])
         for kind in ("magnetic", "beam"):
             if name not in {f"{kind}_center", f"{kind}_entry", f"{kind}_exit"}:
                 continue

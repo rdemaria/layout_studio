@@ -142,6 +142,8 @@ export const NON_CURVE_TRANSFORM_NAMES: NonCurveTransformName[] = [
 export const IMPLICIT_TYPE_FRAME_NAMES = [
   "anchor",
   "mechanical_center",
+  "mechanical_entry",
+  "mechanical_exit",
   "magnetic_center",
   "magnetic_entry",
   "magnetic_exit",
@@ -151,6 +153,9 @@ export const IMPLICIT_TYPE_FRAME_NAMES = [
 ] as const;
 export type ImplicitTypeFrameName =
   (typeof IMPLICIT_TYPE_FRAME_NAMES)[number];
+export const MECHANICAL_FRAME_NAMES = ["mechanical_entry", "mechanical_center", "mechanical_exit"] as const;
+export type MechanicalFrameName = (typeof MECHANICAL_FRAME_NAMES)[number];
+export const MAGNETIC_FRAME_NAMES = ["magnetic_entry", "magnetic_center", "magnetic_exit"] as const;
 export const MAGNETIC_BOUNDARY_FRAME_NAMES = [
   "magnetic_entry",
   "magnetic_exit",
@@ -163,7 +168,9 @@ export const BEAM_BOUNDARY_FRAME_NAMES = [
 ] as const;
 export type BeamBoundaryFrameName =
   (typeof BEAM_BOUNDARY_FRAME_NAMES)[number];
-export type FeatureBoundaryFrameName =
+export type FeatureFrameName =
+  | MechanicalFrameName
+  | "magnetic_center"
   | MagneticBoundaryFrameName
   | BeamBoundaryFrameName;
 
@@ -327,7 +334,7 @@ export function effectiveBeamFeature(type: LayoutType, object: LayoutObject) {
 
 export function typeFrameNames(type: LayoutType): string[] {
   const implicit = ["anchor"];
-  if (type.shape) implicit.push("mechanical_center");
+  if (type.shape) implicit.push(...MECHANICAL_FRAME_NAMES);
   if (hasMagneticFeature(type)) {
     implicit.push("magnetic_center", ...MAGNETIC_BOUNDARY_FRAME_NAMES);
   }
@@ -357,6 +364,14 @@ export function objectFrameDefinition(
 ): ObjectFrameDefinition | undefined {
   if (name === "mechanical_center" && type.shape) {
     return { placement: type.mechanical_center ?? { transformation: [] } };
+  }
+  if ((name === "mechanical_entry" || name === "mechanical_exit") && type.shape) {
+    const path = shapePath(type.shape);
+    return {
+      placement: { reference: { kind: "local_frame", frame: "mechanical_center" }, transformation: [] },
+      advance: { length: (name === "mechanical_entry" ? -0.5 : 0.5) * path.length,
+        curvature: path.curvature, roll: path.roll },
+    };
   }
   if (name === "magnetic_center" && hasMagneticFeature(type)) {
     return { placement: type.magnetic_center! };

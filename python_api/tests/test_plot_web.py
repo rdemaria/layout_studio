@@ -76,6 +76,7 @@ def test_layout_plot_web_forwards_browser_controls(web_viewer_spy):
         "visibility": {
             "curves": True,
             "objects": True,
+            "mechanical_axis": False,
             "magnetic_axis": False,
             "beam_axis": False,
             "frames": False,
@@ -103,6 +104,7 @@ def test_curve_and_object_plot_web_use_strict_scope(web_viewer_spy):
     assert object_viewer.kwargs["visibility"] == {
         "curves": False,
         "objects": True,
+        "mechanical_axis": False,
         "magnetic_axis": False,
         "beam_axis": False,
         "frames": False,
@@ -114,6 +116,7 @@ def test_plot_web_forwards_each_optional_type_layer_independently(web_viewer_spy
 
     layout.plot_web(
         show=False,
+        mechanical_axis=True,
         magnetic_axis=True,
         beam_axis=False,
         frames=True,
@@ -121,6 +124,7 @@ def test_plot_web_forwards_each_optional_type_layer_independently(web_viewer_spy
     assert web_viewer_spy[-1].kwargs["visibility"] == {
         "curves": True,
         "objects": True,
+        "mechanical_axis": True,
         "magnetic_axis": True,
         "beam_axis": False,
         "frames": True,
@@ -130,6 +134,7 @@ def test_plot_web_forwards_each_optional_type_layer_independently(web_viewer_spy
     assert web_viewer_spy[-1].kwargs["visibility"] == {
         "curves": False,
         "objects": True,
+        "mechanical_axis": False,
         "magnetic_axis": False,
         "beam_axis": True,
         "frames": False,
@@ -183,6 +188,7 @@ def test_object_plot_web_constructs_a_real_scoped_viewer(tmp_path: Path):
         assert command["visibility"] == {
             "curves": False,
             "objects": True,
+            "mechanical_axis": False,
             "magnetic_axis": False,
             "beam_axis": False,
             "frames": False,

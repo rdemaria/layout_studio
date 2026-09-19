@@ -285,6 +285,8 @@ test("scopes emitted geometry while resolving against the full layout", async ()
   const detectorPoints = [
     ...detector.objects.flatMap((item) => item.vertices),
     ...detector.frames.map((item) => item.frame.o),
+    ...detector.mechanicalAxes.flatMap(item => item.samples.map(sample => sample.p)),
+    ...detector.mechanicalFrames.flatMap(item => item.vertices),
     ...detector.magneticAxes.flatMap((item) =>
       item.samples.map((sample) => sample.p)
     ),

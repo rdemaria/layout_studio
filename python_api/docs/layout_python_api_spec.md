@@ -160,7 +160,7 @@ class WebViewer:                            # nonblocking browser bridge
     set_mode(self, mode: ViewerMode) -> str
     set_view(self, direction: ViewerDirection) -> str
     set_visibility(
-        self, *, curves=None, objects=None, magnetic_axis=None,
+        self, *, curves=None, objects=None, mechanical_axis=None, magnetic_axis=None,
         beam_axis=None, frames=None
     ) -> str
     request_layout(self) -> str
@@ -208,7 +208,7 @@ class Layout(JsonValue):
     validate(self) -> None
     resolver(self) -> Resolver
     plot_web(
-        self, *, curves=True, objects=True, magnetic_axis=False,
+        self, *, curves=True, objects=True, mechanical_axis=False, magnetic_axis=False,
         beam_axis=False, frames=False, selection=None, fit=None, show=False,
         width="100%", height=720, visibility=None, **viewer_kwargs,
     ) -> WebViewer
@@ -316,7 +316,7 @@ class Object(OwnedValue):
     set_position(self, position: Position) -> Self
     ref(self, frame: str | Frame = "anchor") -> ObjectReference
     get_frame(self, frame: str | Frame = "anchor") -> Pose
-    plot_web(self, *, magnetic_axis=False, beam_axis=False, frames=False,
+    plot_web(self, *, mechanical_axis=False, magnetic_axis=False, beam_axis=False, frames=False,
              selection=None, fit=None, show=False, width="100%", height=720,
              visibility=None, **viewer_kwargs) -> WebViewer
         # builds browser geometry for this object and enabled frames only
@@ -509,6 +509,14 @@ snapshot or share one active resolver across threads.
 - `shape` is optional. When present, its `dz`, curvature, and roll define the
   mechanical swept geometry centered on `mechanical_center`; without it the type has no
   rendered surface.
+- A shape exposes `mechanical_entry`, `mechanical_center`, and `mechanical_exit`.
+  Entry and exit advance from the resolved center by `−dz/2` and `+dz/2`, using
+  the shape's curvature and roll. Stored survey frames named `mechanical_start`
+  or `mechanical_end` remain independent. These computed frames work with
+  `get_frame()`, references, selection, and anchor-relative positioning targets.
+- `plot_web(mechanical_axis=True, magnetic_axis=True)` displays the mechanical
+  start/center/end and magnetic entry/center/exit markers. The optional layers
+  default to off; `WebViewer.set_visibility(mechanical_axis=True)` controls them.
 - The magnetic axis is an optional type-level four-field group. The beam
   interface is an optional object-level four-field group: center, positive
   length, finite curvature, and finite roll are supplied or omitted together.
@@ -516,7 +524,7 @@ snapshot or share one active resolver across threads.
   magnetic axis dynamically. Without either group, beam frames do not exist.
 - Entry and exit are evaluated at `−length/2` and `+length/2` along the effective
   feature axis. Center placements use local mechanical-path `ts` semantics except when their reference is a curve.
-- `Type.implicit_frames` contains `anchor`, `mechanical_center` when a shape exists, and the present magnetic triplet.
+- `Type.implicit_frames` contains `anchor`, the mechanical triplet when a shape exists, and the present magnetic triplet.
   `Object.implicit_frames` additionally contains `beam_center`, `beam_entry`,
   and `beam_exit` when explicit or inherited. All reserved names remain forbidden
   in `Type.frames`. Type-level queries do not resolve beam frames.

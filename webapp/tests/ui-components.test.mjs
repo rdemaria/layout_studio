@@ -268,7 +268,11 @@ test("renders viewer layers, world axes, and combines curve station with World p
   );
   assert.match(
     html,
-    /<button(?=[^>]*aria-label="Show magnetic axis and entry and exit frames")(?=[^>]*data-state="unchecked")[^>]*>/,
+    /<button(?=[^>]*aria-label="Show mechanical axis and start, center, and end frames")(?=[^>]*data-state="unchecked")[^>]*>/,
+  );
+  assert.match(
+    html,
+    /<button(?=[^>]*aria-label="Show magnetic axis and entry, center, and exit frames")(?=[^>]*data-state="unchecked")[^>]*>/,
   );
   assert.match(
     html,

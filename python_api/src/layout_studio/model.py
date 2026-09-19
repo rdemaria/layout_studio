@@ -65,6 +65,8 @@ _RESERVED_FRAME_NAMES = frozenset(
         "center",
         "anchor",
         "mechanical_center",
+        "mechanical_entry",
+        "mechanical_exit",
         "magnetic_center",
         "magnetic_entry",
         "magnetic_exit",
@@ -1855,7 +1857,7 @@ class Type(OwnedValue):
     def implicit_frames(self) -> frozenset[str]:
         result = {"anchor"}
         if self.shape is not None:
-            result.add("mechanical_center")
+            result.update(("mechanical_center", "mechanical_entry", "mechanical_exit"))
         if self.magnetic_center is not None:
             result.update(("magnetic_center", "magnetic_entry", "magnetic_exit"))
         return frozenset(result)
@@ -2041,7 +2043,7 @@ class Type(OwnedValue):
                 if candidate is not None:
                     layout._check_foreign_links(candidate)
             if self.shape is not None and shape is None:
-                layout._ensure_implicit_frames_not_in_use(self, {"mechanical_center"})
+                layout._ensure_implicit_frames_not_in_use(self, {"mechanical_center", "mechanical_entry", "mechanical_exit"})
             if self.magnetic_center is not None and magnetic[0] is None:
                 layout._ensure_implicit_frames_not_in_use(
                     self,
@@ -2479,6 +2481,7 @@ class Object(OwnedValue):
     def plot_web(
         self,
         *,
+        mechanical_axis: bool = False,
         magnetic_axis: bool = False,
         beam_axis: bool = False,
         frames: bool = False,
@@ -2498,6 +2501,7 @@ class Object(OwnedValue):
         layers = {
             "curves": False,
             "objects": True,
+            "mechanical_axis": bool(mechanical_axis),
             "magnetic_axis": bool(magnetic_axis),
             "beam_axis": bool(beam_axis),
             "frames": bool(frames),
@@ -3374,6 +3378,7 @@ class Layout(JsonValue):
         *,
         curves: bool = True,
         objects: bool = True,
+        mechanical_axis: bool = False,
         magnetic_axis: bool = False,
         beam_axis: bool = False,
         frames: bool = False,
@@ -3392,6 +3397,7 @@ class Layout(JsonValue):
         layers = {
             "curves": bool(curves),
             "objects": bool(objects),
+            "mechanical_axis": bool(mechanical_axis),
             "magnetic_axis": bool(magnetic_axis),
             "beam_axis": bool(beam_axis),
             "frames": bool(frames),

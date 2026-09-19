@@ -29,8 +29,8 @@ test("deferred geometry preserves exact shapes and independently referenced feat
     for (const key of ["frame","mechanicalFrame","vertices","faces","edges"]) assert.deepEqual(detailed[key],before[key],`${object.name}.${key}`);
     for (const point of detailed.vertices) point.forEach((v,i) => assert.ok(v >= object.bounds.min[i]-1e-10 && v <= object.bounds.max[i]+1e-10));
   }
-  const layers = run(buildSceneLayers(lean,{frames:true,magnetic:true,beam:true}));
-  for (const key of ["frames","magneticAxes","magneticFrames","beamAxes","beamFrames"]) {
+  const layers = run(buildSceneLayers(lean,{frames:true,mechanical:true,magnetic:true,beam:true}));
+  for (const key of ["frames","mechanicalAxes","mechanicalFrames","magneticAxes","magneticFrames","beamAxes","beamFrames"]) {
     assert.deepEqual([...layers.byObject.values()].flatMap(layer => layer[key]), full[key]);
   }
   const external = full.frames.find(frame => frame.name === "survey_world");

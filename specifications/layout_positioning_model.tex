@@ -360,7 +360,8 @@ not the corresponding optional group is present:
 \begin{equation}
   \begin{aligned}
   &\texttt{anchor},\quad\texttt{mechanical\_center},\quad
-   \texttt{magnetic\_center},\quad
+   \texttt{mechanical\_entry},\quad\texttt{mechanical\_exit},\\
+  &\texttt{magnetic\_center},\quad
    \texttt{magnetic\_entry},\quad
    \texttt{magnetic\_exit},\\
   &\texttt{beam\_center},\quad
@@ -368,13 +369,28 @@ not the corresponding optional group is present:
    \texttt{beam\_exit}.
   \end{aligned}
 \end{equation}
-The frame \texttt{anchor} always exists. The frame
-\texttt{mechanical\_center} exists when the shape is present. The legacy
+The frame \texttt{anchor} always exists. The three \texttt{mechanical\_*}
+frames exist when the shape is present. The legacy
 name \texttt{center} is also reserved. The three \texttt{magnetic\_*}
 frames exist exactly when the magnetic group is present; the three
 \texttt{beam\_*} frames belong to objects and exist when an explicit object
 beam group or an inherited magnetic axis is available. A type-level frame
 query has no beam frames.
+
+The mechanical entry and exit frames are derived from the resolved mechanical
+center using the shape path operator:
+\begin{align}
+  \Frame_{O.\mathrm{mechanical\_entry}}^W
+    &=\Path_T(\Frame_{O.\mathrm{mechanical\_center}}^W,-d_z/2),\\
+  \Frame_{O.\mathrm{mechanical\_exit}}^W
+    &=\Path_T(\Frame_{O.\mathrm{mechanical\_center}}^W,+d_z/2).
+\end{align}
+The mechanical axis is the locus between these stations; its center is at
+station zero. These frames support the same references and target-alignment
+rules as magnetic frames. Stored survey frames named
+\texttt{mechanical\_start} or \texttt{mechanical\_end} remain independent.
+The viewer's mechanical-axis layer shows start, center, and end; the
+magnetic-axis layer shows entry, center, and exit.
 
 \subsection{Feature placements}
 
