@@ -1,0 +1,152 @@
+{
+  "reference_curves": {
+    "path": {
+      "color": "#176BBD",
+      "starting_frame": {
+        "reference": {
+          "kind": "world"
+        },
+        "transformation": []
+      },
+      "segments": [
+        [
+          8.0,
+          0.8,
+          0.0
+        ]
+      ]
+    }
+  },
+  "types": {
+    "marker_A": {
+      "color": "#263749",
+      "frames": {},
+      "shape": [
+        "box",
+        0.08399999999999999,
+        0.08399999999999999,
+        0.12,
+        0.0,
+        0.0
+      ]
+    },
+    "marker_ProjectionOnly": {
+      "color": "#D55325",
+      "frames": {},
+      "shape": [
+        "box",
+        0.08399999999999999,
+        0.08399999999999999,
+        0.12,
+        0.0,
+        0.0
+      ]
+    },
+    "marker_OffsetRestored": {
+      "color": "#168773",
+      "frames": {},
+      "shape": [
+        "box",
+        0.08399999999999999,
+        0.08399999999999999,
+        0.12,
+        0.0,
+        0.0
+      ]
+    },
+    "marker_ExplicitStation": {
+      "color": "#8B4DA8",
+      "frames": {},
+      "shape": [
+        "box",
+        0.08399999999999999,
+        0.08399999999999999,
+        0.12,
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "objects": {
+    "A": {
+      "type": "marker_A",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "curve",
+          "curve": "path"
+        },
+        "transformation": [
+          [
+            "ts",
+            1.0
+          ],
+          [
+            "tx",
+            1.0
+          ]
+        ]
+      }
+    },
+    "ProjectionOnly": {
+      "type": "marker_ProjectionOnly",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "object_frame",
+          "object": "A",
+          "frame": "anchor"
+        },
+        "reference_curve": "path",
+        "transformation": [
+          [
+            "ts",
+            4.0
+          ]
+        ]
+      }
+    },
+    "OffsetRestored": {
+      "type": "marker_OffsetRestored",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "object_frame",
+          "object": "A",
+          "frame": "anchor"
+        },
+        "reference_curve": "path",
+        "transformation": [
+          [
+            "ts",
+            4.0
+          ],
+          [
+            "tx",
+            1.0
+          ]
+        ]
+      }
+    },
+    "ExplicitStation": {
+      "type": "marker_ExplicitStation",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "curve",
+          "curve": "path"
+        },
+        "transformation": [
+          [
+            "ts",
+            5.0
+          ],
+          [
+            "tx",
+            1.0
+          ]
+        ]
+      }
+    }
+  }
+}

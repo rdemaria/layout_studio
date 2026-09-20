@@ -1,0 +1,199 @@
+{
+  "reference_curves": {
+    "magnetic_path": {
+      "color": "#176BBD",
+      "starting_frame": {
+        "reference": {
+          "kind": "object_frame",
+          "object": "SB",
+          "frame": "magnetic_entry"
+        },
+        "transformation": []
+      },
+      "segments": [
+        [
+          8.0,
+          0.8,
+          0.0
+        ]
+      ]
+    }
+  },
+  "types": {
+    "SB": {
+      "color": "#BCC8D5",
+      "frames": {
+        "offset_then_local_TS": {
+          "reference": {
+            "kind": "local_frame",
+            "frame": "magnetic_entry"
+          },
+          "transformation": [
+            [
+              "tx",
+              1.0
+            ],
+            [
+              "ts",
+              5.0
+            ]
+          ]
+        },
+        "local_TS_then_offset": {
+          "reference": {
+            "kind": "local_frame",
+            "frame": "magnetic_entry"
+          },
+          "transformation": [
+            [
+              "ts",
+              5.0
+            ],
+            [
+              "tx",
+              1.0
+            ]
+          ]
+        }
+      },
+      "shape": [
+        "box",
+        0.5,
+        0.35,
+        8.0,
+        0.1,
+        0.0
+      ],
+      "magnetic_center": {
+        "transformation": []
+      },
+      "magnetic_length": 8.0,
+      "magnetic_curvature": 0.1,
+      "magnetic_roll": 0.0
+    },
+    "marker_LocalFirstOffset": {
+      "color": "#D55325",
+      "frames": {},
+      "shape": [
+        "box",
+        0.08399999999999999,
+        0.08399999999999999,
+        0.12,
+        0.0,
+        0.0
+      ]
+    },
+    "marker_TransportedOffset": {
+      "color": "#168773",
+      "frames": {},
+      "shape": [
+        "box",
+        0.08399999999999999,
+        0.08399999999999999,
+        0.12,
+        0.0,
+        0.0
+      ]
+    },
+    "marker_CurveOffsetFirst": {
+      "color": "#8B4DA8",
+      "frames": {},
+      "shape": [
+        "box",
+        0.08399999999999999,
+        0.08399999999999999,
+        0.12,
+        0.0,
+        0.0
+      ]
+    },
+    "marker_CurveStationFirst": {
+      "color": "#176BBD",
+      "frames": {},
+      "shape": [
+        "box",
+        0.08399999999999999,
+        0.08399999999999999,
+        0.12,
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "objects": {
+    "SB": {
+      "type": "SB",
+      "position": {
+        "target": "magnetic_entry",
+        "reference": {
+          "kind": "world"
+        },
+        "transformation": []
+      }
+    },
+    "LocalFirstOffset": {
+      "type": "marker_LocalFirstOffset",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "object_frame",
+          "object": "SB",
+          "frame": "offset_then_local_TS"
+        },
+        "transformation": []
+      }
+    },
+    "TransportedOffset": {
+      "type": "marker_TransportedOffset",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "object_frame",
+          "object": "SB",
+          "frame": "local_TS_then_offset"
+        },
+        "transformation": []
+      }
+    },
+    "CurveOffsetFirst": {
+      "type": "marker_CurveOffsetFirst",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "curve",
+          "curve": "magnetic_path"
+        },
+        "transformation": [
+          [
+            "tx",
+            1.0
+          ],
+          [
+            "ts",
+            5.0
+          ]
+        ]
+      }
+    },
+    "CurveStationFirst": {
+      "type": "marker_CurveStationFirst",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "curve",
+          "curve": "magnetic_path"
+        },
+        "transformation": [
+          [
+            "ts",
+            5.0
+          ],
+          [
+            "tx",
+            1.0
+          ]
+        ]
+      }
+    }
+  }
+}

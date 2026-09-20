@@ -1,0 +1,225 @@
+{
+  "reference_curves": {
+    "magnetic_path": {
+      "color": "#176BBD",
+      "starting_frame": {
+        "reference": {
+          "kind": "object_frame",
+          "object": "SB",
+          "frame": "magnetic_entry"
+        },
+        "transformation": []
+      },
+      "segments": [
+        [
+          8.0,
+          0.8,
+          0.0
+        ]
+      ]
+    },
+    "offset_path": {
+      "color": "#168773",
+      "starting_frame": {
+        "reference": {
+          "kind": "curve",
+          "curve": "magnetic_path"
+        },
+        "transformation": [
+          [
+            "tx",
+            1.0
+          ]
+        ]
+      },
+      "segments": [
+        [
+          8.8,
+          0.8,
+          0.0
+        ]
+      ]
+    }
+  },
+  "types": {
+    "SB": {
+      "color": "#BCC8D5",
+      "frames": {},
+      "shape": [
+        "box",
+        0.5,
+        0.35,
+        8.0,
+        0.1,
+        0.0
+      ],
+      "magnetic_center": {
+        "transformation": []
+      },
+      "magnetic_length": 8.0,
+      "magnetic_curvature": 0.1,
+      "magnetic_roll": 0.0
+    },
+    "marker_A": {
+      "color": "#263749",
+      "frames": {},
+      "shape": [
+        "box",
+        0.098,
+        0.098,
+        0.14,
+        0.0,
+        0.0
+      ]
+    },
+    "marker_TS": {
+      "color": "#176BBD",
+      "frames": {},
+      "shape": [
+        "box",
+        0.098,
+        0.098,
+        0.14,
+        0.0,
+        0.0
+      ]
+    },
+    "marker_TT": {
+      "color": "#D55325",
+      "frames": {},
+      "shape": [
+        "box",
+        0.098,
+        0.098,
+        0.14,
+        0.0,
+        0.0
+      ]
+    },
+    "marker_EqualPhysicalLength": {
+      "color": "#8B4DA8",
+      "frames": {},
+      "shape": [
+        "box",
+        0.098,
+        0.098,
+        0.14,
+        0.0,
+        0.0
+      ]
+    },
+    "marker_OffsetCurveTS": {
+      "color": "#8B4DA8",
+      "frames": {},
+      "shape": [
+        "box",
+        0.063,
+        0.063,
+        0.09,
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "objects": {
+    "SB": {
+      "type": "SB",
+      "position": {
+        "target": "magnetic_entry",
+        "reference": {
+          "kind": "world"
+        },
+        "transformation": []
+      }
+    },
+    "A": {
+      "type": "marker_A",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "curve",
+          "curve": "magnetic_path"
+        },
+        "transformation": [
+          [
+            "tx",
+            1.0
+          ]
+        ]
+      }
+    },
+    "TS": {
+      "type": "marker_TS",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "curve",
+          "curve": "magnetic_path"
+        },
+        "transformation": [
+          [
+            "ts",
+            5.0
+          ],
+          [
+            "tx",
+            1.0
+          ]
+        ]
+      }
+    },
+    "TT": {
+      "type": "marker_TT",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "object_frame",
+          "object": "A",
+          "frame": "anchor"
+        },
+        "transformation": [
+          [
+            "tt",
+            5.0
+          ]
+        ]
+      }
+    },
+    "EqualPhysicalLength": {
+      "type": "marker_EqualPhysicalLength",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "curve",
+          "curve": "magnetic_path"
+        },
+        "transformation": [
+          [
+            "ts",
+            4.545454545454545
+          ],
+          [
+            "tx",
+            1.0
+          ]
+        ]
+      }
+    },
+    "OffsetCurveTS": {
+      "type": "marker_OffsetCurveTS",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "curve",
+          "curve": "offset_path"
+        },
+        "transformation": [
+          [
+            "ts",
+            5.0
+          ]
+        ]
+      }
+    }
+  }
+}

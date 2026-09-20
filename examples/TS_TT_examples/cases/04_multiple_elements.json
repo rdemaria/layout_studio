@@ -1,0 +1,201 @@
+{
+  "reference_curves": {
+    "composite_reference": {
+      "color": "#176BBD",
+      "starting_frame": {
+        "reference": {
+          "kind": "world"
+        },
+        "transformation": []
+      },
+      "segments": [
+        [
+          5.0,
+          0.0,
+          0.0
+        ],
+        [
+          15.0,
+          0.3,
+          0.0
+        ],
+        [
+          10.0,
+          0.0,
+          0.0
+        ],
+        [
+          15.0,
+          0.3,
+          0.0
+        ],
+        [
+          15.0,
+          0.0,
+          0.0
+        ]
+      ]
+    }
+  },
+  "types": {
+    "E1": {
+      "color": "#BCC8D5",
+      "frames": {},
+      "shape": [
+        "box",
+        1.0,
+        0.35,
+        15.0,
+        0.02,
+        0.0
+      ],
+      "magnetic_center": {
+        "transformation": []
+      },
+      "magnetic_length": 15.0,
+      "magnetic_curvature": 0.02,
+      "magnetic_roll": 0.0
+    },
+    "E3": {
+      "color": "#BCC8D5",
+      "frames": {},
+      "shape": [
+        "box",
+        1.0,
+        0.35,
+        15.0,
+        0.02,
+        0.0
+      ],
+      "magnetic_center": {
+        "transformation": []
+      },
+      "magnetic_length": 15.0,
+      "magnetic_curvature": 0.02,
+      "magnetic_roll": 0.0
+    },
+    "marker_A": {
+      "color": "#263749",
+      "frames": {},
+      "shape": [
+        "box",
+        0.5599999999999999,
+        0.5599999999999999,
+        0.8,
+        0.0,
+        0.0
+      ]
+    },
+    "marker_TS": {
+      "color": "#176BBD",
+      "frames": {},
+      "shape": [
+        "box",
+        0.5599999999999999,
+        0.5599999999999999,
+        0.8,
+        0.0,
+        0.0
+      ]
+    },
+    "marker_TT": {
+      "color": "#D55325",
+      "frames": {},
+      "shape": [
+        "box",
+        0.5599999999999999,
+        0.5599999999999999,
+        0.8,
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "objects": {
+    "E1": {
+      "type": "E1",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "curve",
+          "curve": "composite_reference"
+        },
+        "transformation": [
+          [
+            "ts",
+            12.5
+          ]
+        ]
+      }
+    },
+    "E3": {
+      "type": "E3",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "curve",
+          "curve": "composite_reference"
+        },
+        "transformation": [
+          [
+            "ts",
+            37.5
+          ]
+        ]
+      }
+    },
+    "A": {
+      "type": "marker_A",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "curve",
+          "curve": "composite_reference"
+        },
+        "transformation": [
+          [
+            "tx",
+            0.0
+          ]
+        ]
+      }
+    },
+    "TS": {
+      "type": "marker_TS",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "curve",
+          "curve": "composite_reference"
+        },
+        "transformation": [
+          [
+            "ts",
+            60.0
+          ],
+          [
+            "tx",
+            0.0
+          ]
+        ]
+      }
+    },
+    "TT": {
+      "type": "marker_TT",
+      "position": {
+        "target": "anchor",
+        "reference": {
+          "kind": "object_frame",
+          "object": "A",
+          "frame": "anchor"
+        },
+        "transformation": [
+          [
+            "tt",
+            60.0
+          ]
+        ]
+      }
+    }
+  }
+}

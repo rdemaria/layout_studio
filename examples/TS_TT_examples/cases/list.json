@@ -1,0 +1,42 @@
+[
+  {
+    "label": "01_mechanical_tangent",
+    "path": "01_mechanical_tangent.json"
+  },
+  {
+    "label": "02_sbend_magnetic",
+    "path": "02_sbend_magnetic.json"
+  },
+  {
+    "label": "03_rbend_beam",
+    "path": "03_rbend_beam.json"
+  },
+  {
+    "label": "04_multiple_elements",
+    "path": "04_multiple_elements.json"
+  },
+  {
+    "label": "05_lhc_s12",
+    "path": "05_lhc_s12.json"
+  },
+  {
+    "label": "06_offset_magnetic",
+    "path": "06_offset_magnetic.json"
+  },
+  {
+    "label": "07_offset_beam",
+    "path": "07_offset_beam.json"
+  },
+  {
+    "label": "08_offset_reference",
+    "path": "08_offset_reference.json"
+  },
+  {
+    "label": "09_offset_projection_trap",
+    "path": "09_offset_projection_trap.json"
+  },
+  {
+    "label": "10_local_order_trap",
+    "path": "10_local_order_trap.json"
+  }
+]
