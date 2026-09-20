@@ -4,7 +4,8 @@ import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { NumberInput } from "./number-input";
 
-export const SEGMENT_PAGE_SIZE = 50;
+import {SEGMENT_PAGE_SIZE} from "./layout-ui-state";
+export {SEGMENT_PAGE_SIZE} from "./layout-ui-state";
 
 export function segmentPageRange(count: number, requestedPage: number) {
   const pageCount = Math.max(1, Math.ceil(count / SEGMENT_PAGE_SIZE));

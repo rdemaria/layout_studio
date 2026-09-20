@@ -1799,3 +1799,24 @@ textarea {
   font-size: 14px;
   pointer-events: none;
 }
+.layout-file-drop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  pointer-events: none;
+  background: rgb(12 18 25 / 75%);
+}
+
+.layout-file-drop > div {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  border: 2px dashed currentColor;
+  border-radius: 1rem;
+  padding: 2rem;
+  color: white;
+  background: #17212d;
+}

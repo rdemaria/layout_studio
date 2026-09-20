@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import type {DependencyUiState} from "./layout-ui-state";
 import {
   canonicalFrameName,
   getLayoutDependencyGraph,
@@ -23,6 +24,8 @@ type DependencyTreeProps = {
   layout: LayoutData;
   selection: SelectedEntity;
   onSelect: (entity: Exclude<SelectedEntity, null | { kind: "frame" }>) => void;
+  initialState?: DependencyUiState;
+  onStateChange?: (state: DependencyUiState) => void;
 };
 
 const PAGE_SIZE = 50;
@@ -447,9 +450,11 @@ export function DependencyTree({
   layout,
   selection,
   onSelect,
+  initialState,
+  onStateChange,
 }: DependencyTreeProps) {
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const [pages, setPages] = useState(() => new Map<string, number>());
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(initialState?.expanded));
+  const [pages, setPages] = useState(() => new Map<string, number>(Object.entries(initialState?.pages ?? {})));
   const scrollRef = useRef<HTMLDivElement>(null);
   const hierarchy = useMemo(
     () => buildLayoutDependencyHierarchy(layout),
@@ -457,13 +462,24 @@ export function DependencyTree({
   );
   const {graphNodes, dependentsByAnchor} = hierarchy;
   const selectedNodeId = dependencySelectionNodeId(selection);
+  useEffect(() => {
+    onStateChange?.({expanded: [...expanded], pages: Object.fromEntries(pages), selection: selectedNodeId});
+  }, [expanded, pages, selectedNodeId, onStateChange]);
   const reveal = useMemo(() => dependencySelectionReveal(hierarchy, selectedNodeId),
     [hierarchy, selectedNodeId]);
   const scrolledReveal = useRef<typeof reveal>(null);
+  const restoredReveal = useRef(initialState !== undefined && initialState.selection === selectedNodeId ? reveal : undefined);
   useEffect(() => {
+    if (reveal === restoredReveal.current) return;
+    restoredReveal.current = undefined;
     if (!reveal) return;
-    setExpanded(current => new Set([...current, ...reveal.expanded]));
-    setPages(current => new Map([...current, ...reveal.pages]));
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setExpanded(current => new Set([...current, ...reveal.expanded]));
+      setPages(current => new Map([...current, ...reveal.pages]));
+    });
+    return () => {cancelled = true;};
   }, [reveal]);
   useEffect(() => {
     const container = scrollRef.current;

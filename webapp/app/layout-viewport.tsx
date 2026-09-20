@@ -35,6 +35,7 @@ import { Slider } from "@/components/ui/slider";
 import { NumberInput } from "./number-input";
 import { zoomFocusDepth, type ZoomGeometry } from "./viewport-zoom";
 import { cameraHistoryReducer, initialCameraHistory, type Camera } from "./viewport-history";
+import type {ViewportUiState} from "./layout-ui-state";
 import { TouchNavigation, type TouchPair } from "./viewport-touch";
 import { beginLayoutProfile, endLayoutProfile } from "./layout-performance";
 import {
@@ -944,6 +945,8 @@ export function LayoutViewport({
   command = null,
   onCommandApplied,
   scope = DEFAULT_SCENE_SCOPE,
+  initialState,
+  onStateChange,
 }: {
   layout: LayoutData;
   selection: SelectedEntity;
@@ -952,6 +955,8 @@ export function LayoutViewport({
   command?: ViewportCommand | null;
   onCommandApplied?: ViewportCommandApplied;
   scope?: SceneScope;
+  initialState?: ViewportUiState;
+  onStateChange?: (state: ViewportUiState) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -978,7 +983,7 @@ export function LayoutViewport({
   const pinchRef = useRef<{
     start: TouchPair; camera: Camera; depth: number; width: number; height: number;
   } | null>(null);
-  const fittedOnceRef = useRef(false);
+  const fittedOnceRef = useRef(Boolean(initialState?.camera));
   const handledFitRequestRef = useRef(0);
   const handledCommandRef = useRef(0);
   const reportedCommandRef = useRef(0);
@@ -1019,14 +1024,14 @@ export function LayoutViewport({
   const scene = currentScene ? sceneResult.scene : EMPTY_SCENE;
   const spatialIndex = currentScene ? sceneResult.index : EMPTY_SPATIAL_INDEX;
   const geometryError = sceneResult.error;
-  const [mode, setMode] = useState<NavigationMode>("orbit");
+  const [mode, setMode] = useState<NavigationMode>(initialState?.mode ?? "orbit");
   const [hovered, setHovered] = useState<HoverTarget>(null);
-  const [showCurves, setShowCurves] = useState(true);
-  const [showObjects, setShowObjects] = useState(true);
-  const [showFrames, setShowFrames] = useState(false);
-  const [showMechanicalAxis, setShowMechanicalAxis] = useState(false);
-  const [showMagneticAxis, setShowMagneticAxis] = useState(false);
-  const [showBeamAxis, setShowBeamAxis] = useState(false);
+  const [showCurves, setShowCurves] = useState(initialState?.showCurves ?? true);
+  const [showObjects, setShowObjects] = useState(initialState?.showObjects ?? true);
+  const [showFrames, setShowFrames] = useState(initialState?.showFrames ?? false);
+  const [showMechanicalAxis, setShowMechanicalAxis] = useState(initialState?.showMechanicalAxis ?? false);
+  const [showMagneticAxis, setShowMagneticAxis] = useState(initialState?.showMagneticAxis ?? false);
+  const [showBeamAxis, setShowBeamAxis] = useState(initialState?.showBeamAxis ?? false);
   const [layerResult, setLayerResult] = useState<{layers: SceneLayers; index: SpatialIndex} | null>(null);
   const [layersLoading, setLayersLoading] = useState(false);
   useEffect(() => {
@@ -1052,13 +1057,22 @@ export function LayoutViewport({
     id: number;
     error?: string;
   } | null>(null);
-  const [cameraHistory, dispatchCamera] = useReducer(cameraHistoryReducer, {
-    azimuth: -0.68,
-    elevation: 0.42,
-    distance: 20,
-    target: [0, 0, 4],
-  }, initialCameraHistory);
+  const [cameraHistory, dispatchCamera] = useReducer(cameraHistoryReducer, initialState, (saved) => ({
+    ...initialCameraHistory(saved?.camera ?? {
+      azimuth: -0.68,
+      elevation: 0.42,
+      distance: 20,
+      target: [0, 0, 4],
+    }),
+    past: saved?.camera ? saved.pastViews : [],
+    future: saved?.camera ? saved.futureViews : [],
+  }));
   const camera = cameraHistory.present;
+  useEffect(() => {
+    onStateChange?.({camera, pastViews: cameraHistory.past, futureViews: cameraHistory.future,
+      mode, showCurves, showObjects, showFrames, showMechanicalAxis, showMagneticAxis, showBeamAxis});
+  }, [camera, cameraHistory.past, cameraHistory.future, mode, showCurves, showObjects,
+    showFrames, showMechanicalAxis, showMagneticAxis, showBeamAxis, onStateChange]);
   const setCamera = useCallback((update: (current: Camera) => Camera, group?: string, reset = false) => {
     dispatchCamera({type: "change", update, group, reset});
   }, []);
@@ -2798,6 +2812,7 @@ export function LayoutViewport({
     setMechanicalAxisVisible,
     setMagneticAxisVisible,
     setObjectLayerVisible,
+    setCamera,
   ]);
 
   useEffect(() => {

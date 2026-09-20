@@ -36,6 +36,7 @@ test: install
 	$(NODE) --test tests/feature-references.test.mjs
 	$(NODE) --test tests/viewport-navigation.test.mjs
 	$(NODE) --test tests/layout-import.test.mjs
+	$(NODE) --test tests/layout-ui-state.test.mjs
 	$(NODE) --test tests/sps-performance.test.mjs
 	$(NODE) --test tests/large-layout.test.mjs
 	$(NODE) --test tests/python-bridge.test.mjs

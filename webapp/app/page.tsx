@@ -92,6 +92,8 @@ import {
 } from "./layout-viewport";
 import { editLayout } from "./layout-edit";
 import { loadLayoutAsync } from "./layout-load";
+import {installLayoutFileDrop} from "./layout-file-drop";
+import {restoreLayoutUiState, type LayoutUiState, type ViewportUiState, type DependencyUiState} from "./layout-ui-state";
 import type { SceneScope } from "./layout-geometry";
 import {
   installPythonBridge,
@@ -110,9 +112,6 @@ type Status = {
   kind: "idle" | "loading" | "success" | "error";
   message: string;
 };
-
-const LARGE_SEGMENT_COUNT = 200;
-const LARGE_FRAME_COUNT = 200;
 
 type ViewportCommandBody = ViewportCommand extends infer Command
   ? Command extends ViewportCommand
@@ -266,9 +265,32 @@ export default function Home() {
     kind: "object",
     name: "QF1",
   });
+  const [initialViewportUi, setInitialViewportUi] = useState<ViewportUiState | undefined>(undefined);
+  const [initialDependencyUi, setInitialDependencyUi] = useState<DependencyUiState | undefined>(undefined);
+  const viewportUiRef = useRef<ViewportUiState | undefined>(undefined);
+  const dependencyUiRef = useRef<DependencyUiState | undefined>(undefined);
+  const restoredSelectionRef = useRef<string | null | undefined>(undefined);
+  const captureViewportUi = useCallback((state: ViewportUiState) => {viewportUiRef.current = state;}, []);
+  const captureDependencyUi = useCallback((state: DependencyUiState) => {dependencyUiRef.current = state;}, []);
+  const changeViewerCardOpen = (open: boolean) => {
+    if (open) {
+      setInitialViewportUi(viewportUiRef.current);
+      setViewportFitRequest(null);
+    }
+    setViewerCardOpen(open);
+  };
+  const changeDependenciesCardOpen = (open: boolean) => {
+    if (open) setInitialDependencyUi(dependencyUiRef.current);
+    setDependenciesCardOpen(open);
+  };
+  const [fileDragActive, setFileDragActive] = useState(false);
   const selectedDependencyNode = dependencySelectionNodeId(selection);
   useEffect(() => {
-    if (selectedDependencyNode) setDependenciesCardOpen(true);
+    if (selectedDependencyNode && selectedDependencyNode !== restoredSelectionRef.current) {
+      setInitialDependencyUi(dependencyUiRef.current);
+      setDependenciesCardOpen(true);
+    }
+    restoredSelectionRef.current = undefined;
   }, [selectedDependencyNode]);
   const [selectedLayoutUrl, setSelectedLayoutUrl] = useState("");
   const [urlSuggestions, setUrlSuggestions] = useState<
@@ -361,35 +383,36 @@ export default function Home() {
     editingRef.current?.abort();
     pendingEditRef.current = null;
     const preserveViewport = options.preserveViewport ?? false;
+    const ui = restoreLayoutUiState(parsed);
     const nextScope =
       options.scope ??
       (preserveViewport
         ? viewportScopeRef.current
-        : { kind: "layout" as const });
+        : ui.scope);
     validateScope(parsed, nextScope);
 
     layoutRef.current = parsed;
     viewportScopeRef.current = nextScope;
-    const firstCurve = Object.keys(parsed.reference_curves)[0] ?? "";
-    const firstType = Object.keys(parsed.types)[0] ?? "";
-    const firstObject = Object.keys(parsed.objects)[0] ?? "";
-    const activeType = parsed.objects[firstObject]?.type ?? firstType;
-    const firstFrame = Object.keys(parsed.types[activeType]?.frames ?? {})[0] ?? "";
     setLayout(parsed);
-    setDependenciesCardOpen(Object.keys(parsed.objects).length < 20000);
-    setSelectedCurve(firstCurve);
-    setSegmentPage(0);
-    setSelectedType(activeType);
-    setSelectedObject(firstObject);
-    setSelectedTypeFrame(firstFrame);
-    setSegmentsOpen(
-      (parsed.reference_curves[firstCurve]?.segments.length ?? 0) <=
-        LARGE_SEGMENT_COUNT,
-    );
-    setTypeFramesOpen(
-      Object.keys(parsed.types[activeType]?.frames ?? {}).length <=
-        LARGE_FRAME_COUNT,
-    );
+    setSelectedCurve(ui.editor.selectedCurve);
+    setSegmentPage(ui.editor.segmentPage);
+    setSelectedType(ui.editor.selectedType);
+    setSelectedObject(ui.editor.selectedObject);
+    setSelectedTypeFrame(ui.editor.selectedTypeFrame);
+    setSegmentsOpen(ui.cards.segments);
+    setTypeFramesOpen(ui.cards.typeFrames);
+    if (!preserveViewport) {
+      viewportUiRef.current = ui.viewport;
+      setInitialViewportUi(ui.viewport);
+      dependencyUiRef.current = parsed.ui_state?.version === 1 ? ui.dependencies : undefined;
+      setInitialDependencyUi(dependencyUiRef.current);
+      restoredSelectionRef.current = dependencySelectionNodeId(ui.editor.selection);
+      setCurvesCardOpen(ui.cards.curves);
+      setTypesCardOpen(ui.cards.types);
+      setObjectsCardOpen(ui.cards.objects);
+      setViewerCardOpen(ui.cards.viewer);
+      setDependenciesCardOpen(ui.cards.dependencies);
+    }
     setViewportFitRequest(null);
     setViewportScope((current) =>
       sameScope(current, nextScope) ? current : nextScope,
@@ -403,7 +426,7 @@ export default function Home() {
       );
     } else {
       setViewerRevision((current) => current + 1);
-      setSelection(null);
+      setSelection(selectionIsInScope(ui.editor.selection, nextScope) ? ui.editor.selection : null);
     }
     setStatus({ kind: "success", message: `Loaded ${source}` });
   }, []);
@@ -455,7 +478,7 @@ export default function Home() {
     return () => controller.abort();
   }, [importUrl]);
 
-  const importFile = async (file: File | undefined) => {
+  const importFile = useCallback(async (file: File | undefined) => {
     if (!file) return;
     loadingRef.current?.abort();
     editingRef.current?.abort(); pendingEditRef.current = null;
@@ -463,7 +486,10 @@ export default function Home() {
     setStatus({ kind: "loading", message: `Reading ${file.name}…` });
     try {
       const parsed = await loadLayoutAsync({file}, controller.signal);
-      if (!controller.signal.aborted) loadValue(parsed, file.name, {validated: true});
+      if (!controller.signal.aborted) {
+        loadValue(parsed, file.name, {validated: true});
+        setSelectedLayoutUrl("");
+      }
     } catch (error) {
       if (controller.signal.aborted) return;
       setStatus({
@@ -473,10 +499,26 @@ export default function Home() {
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
-  };
+  }, [loadValue]);
+
+  useEffect(() => installLayoutFileDrop(window,
+    file => {void importFile(file);}, setFileDragActive,
+    message => setStatus({kind: "error", message}),
+  ), [importFile]);
 
   const downloadLayout = () => {
-    const blob = new Blob([`${JSON.stringify(layout, null, 2)}\n`], {
+    const defaults = restoreLayoutUiState(layout);
+    const ui: LayoutUiState = {
+      version: 1,
+      editor: {selectedCurve, selectedType, selectedObject, selectedTypeFrame, segmentPage, selection},
+      cards: {curves: curvesCardOpen, types: typesCardOpen, objects: objectsCardOpen,
+        viewer: viewerCardOpen, dependencies: dependenciesCardOpen, segments: segmentsOpen, typeFrames: typeFramesOpen},
+      scope: viewportScope,
+      viewport: viewportUiRef.current ?? defaults.viewport,
+      dependencies: dependencyUiRef.current ?? defaults.dependencies,
+    };
+    const savedLayout = {...layout, ui_state: {...layout.ui_state, ...ui}};
+    const blob = new Blob([`${JSON.stringify(savedLayout, null, 2)}\n`], {
       type: "application/json",
     });
     const href = URL.createObjectURL(blob);
@@ -490,21 +532,7 @@ export default function Home() {
 
   const clearLayout = () => {
     loadingRef.current?.abort(); editingRef.current?.abort(); pendingEditRef.current = null;
-    const fullLayoutScope: SceneScope = { kind: "layout" };
-    viewportScopeRef.current = fullLayoutScope;
-    setViewportScope(fullLayoutScope);
-    layoutRef.current = createEmptyLayout();
-    setLayout(createEmptyLayout());
-    setSelectedCurve("");
-    setSegmentPage(0);
-    setSelectedType("");
-    setSelectedObject("");
-    setSelectedTypeFrame("");
-    setSegmentsOpen(true);
-    setTypeFramesOpen(true);
-    setViewportFitRequest(null);
-    setViewerRevision((current) => current + 1);
-    setSelection(null);
+    loadValue(createEmptyLayout(), "empty layout", {validated: true});
     setSelectedLayoutUrl("");
     if (fileInputRef.current) fileInputRef.current.value = "";
     setStatus({ kind: "success", message: "Started an empty layout" });
@@ -557,6 +585,7 @@ export default function Home() {
       return false;
     }
     viewportFitIdRef.current += 1;
+    setInitialViewportUi(viewportUiRef.current);
     setViewerCardOpen(true);
     setSelection(target);
     setViewportFitRequest({ id: viewportFitIdRef.current, kind, name });
@@ -649,6 +678,8 @@ export default function Home() {
         id: viewportCommandIdRef.current,
         ...body,
       } as ViewportCommand;
+      setInitialViewportUi(viewportUiRef.current);
+      setViewportFitRequest(null);
       setViewerCardOpen(true);
       return new Promise<void>((resolve, reject) => {
         const queue = viewportCommandQueueRef.current;
@@ -815,6 +846,8 @@ export default function Home() {
       case "set_scope":
         validateScope(layoutRef.current, command.scope);
         viewportScopeRef.current = command.scope;
+        setInitialViewportUi(viewportUiRef.current);
+        setViewportFitRequest(null);
         setViewerCardOpen(true);
         setViewportScope((current) =>
           sameScope(current, command.scope) ? current : command.scope,
@@ -1295,6 +1328,9 @@ export default function Home() {
   return (
     <TooltipProvider>
       <main className="app-shell">
+        {fileDragActive && <div className="layout-file-drop" role="status">
+          <div><Upload aria-hidden="true" /><strong>Drop a layout JSON file to open it</strong></div>
+        </div>}
         <header className="topbar">
           <div className="brand">
             <div className="brand-mark" aria-hidden="true">
@@ -1458,6 +1494,7 @@ export default function Home() {
             <Button
               type="button"
               variant="outline"
+              title="Import a JSON file, or drag and drop it anywhere on the page"
               onClick={() => fileInputRef.current?.click()}
             >
               <Upload /> Import file
@@ -2383,7 +2420,7 @@ export default function Home() {
           <Collapsible
             asChild
             open={viewerCardOpen}
-            onOpenChange={setViewerCardOpen}
+            onOpenChange={changeViewerCardOpen}
           >
             <Card className="viewport-card">
             <CardHeader>
@@ -2421,6 +2458,8 @@ export default function Home() {
                   command={viewportCommand}
                   onCommandApplied={handleViewportCommandApplied}
                   scope={viewportScope}
+                  initialState={initialViewportUi}
+                  onStateChange={captureViewportUi}
                 />
               </CardContent>
             </CollapsibleContent>
@@ -2430,7 +2469,7 @@ export default function Home() {
           <Collapsible
             asChild
             open={dependenciesCardOpen}
-            onOpenChange={setDependenciesCardOpen}
+            onOpenChange={changeDependenciesCardOpen}
           >
             <Card id="dependencies-card" className="dependency-card">
               <CardHeader>
@@ -2467,6 +2506,8 @@ export default function Home() {
                     layout={layout}
                     selection={selection}
                     onSelect={selectFromHierarchy}
+                    initialState={initialDependencyUi}
+                    onStateChange={captureDependencyUi}
                   />}
                 </CardContent>
               </CollapsibleContent>

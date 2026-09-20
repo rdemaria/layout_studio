@@ -2558,7 +2558,9 @@ class Layout(JsonValue):
         curves: Mapping[str, Curve] | None = None,
         types: Mapping[str, Type] | None = None,
         objects: Mapping[str, Object] | None = None,
+        ui_state: Mapping[str, object] | None = None,
     ) -> None:
+        self.ui_state = self._copy_ui_state(ui_state) if ui_state is not None else None
         self._curves: EntityMap[Curve] = EntityMap(self, "curve")
         self._types: EntityMap[Type] = EntityMap(self, "type")
         self._objects: EntityMap[Object] = EntityMap(self, "object")
@@ -2608,7 +2610,8 @@ class Layout(JsonValue):
 
     @classmethod
     def from_dict(cls, dct: object) -> Layout:
-        mapping = _mapping(dct, required=("reference_curves", "types", "objects"))
+        mapping = _mapping(dct, required=("reference_curves", "types", "objects"), optional=("ui_state",))
+        ui_state = cls._copy_ui_state(mapping["ui_state"]) if "ui_state" in mapping else None
         curves = mapping["reference_curves"]
         types = mapping["types"]
         objects = mapping["objects"]
@@ -2620,6 +2623,7 @@ class Layout(JsonValue):
             if not isinstance(value, Mapping):
                 raise _fail(f"{label} must be a JSON object", path=label)
         result = cls(
+            ui_state=ui_state,
             curves={
                 _name(
                     name, "curve name", path=f"reference_curves.{name}"
@@ -2643,6 +2647,7 @@ class Layout(JsonValue):
     def to_dict(self) -> dict[str, object]:
         self.validate()
         return {
+            **({"ui_state": self._copy_ui_state(self.ui_state)} if self.ui_state is not None else {}),
             "reference_curves": {
                 name: curve.to_dict() for name, curve in self.curves.items()
             },
@@ -2654,6 +2659,16 @@ class Layout(JsonValue):
                 for name, object_value in self.objects.items()
             },
         }
+
+    @staticmethod
+    def _copy_ui_state(value: object) -> dict[str, object]:
+        """Preserve optional presentation metadata independently of geometry."""
+        if not isinstance(value, Mapping):
+            raise _fail("ui_state must be a JSON object", path="ui_state")
+        try:
+            return json.loads(json.dumps(dict(value), allow_nan=False))
+        except (TypeError, ValueError) as exc:
+            raise _fail("ui_state must contain JSON values with finite numbers", path="ui_state") from exc
 
     def new_curve(self, name: str, **attributes: object) -> Curve:
         name = self._require_available_name("curve", name)

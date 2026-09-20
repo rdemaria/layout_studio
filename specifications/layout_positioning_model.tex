@@ -221,12 +221,21 @@ Sections~\ref{sec:reference-transform} and~\ref{sec:type-local}.
 
 \subsection{Layout}
 
-A layout is a strict JSON object with exactly three name-indexed dictionaries:
+A layout is a strict JSON object with three required name-indexed dictionaries:
 \begin{equation}
   \mathcal{L}=(\texttt{reference\_curves},\texttt{types},\texttt{objects}).
 \end{equation}
 Names are non-empty strings and are unique within their dictionary.  Every
 symbolic reference must resolve.
+
+An optional top-level \texttt{ui\_state} JSON object stores versioned
+presentation metadata (editor selection, card visibility, camera, display
+layers, scene scope, and navigation history). It is not part of the positioning
+model and has no effect on frame resolution. Readers and writers preserve its
+contents, including unknown members and versions. The web editor interprets
+supported versions, falling back to defaults for invalid settings or stale
+entity names. Its version~1 structure is documented in
+\texttt{webapp/UI-STATE.md}. Layouts without this member remain valid.
 
 JSON object member names must be unique after decoding JSON string escapes,
 at every nesting level. Duplicate members are errors, even if their values
@@ -239,7 +248,8 @@ position targets; it does not rename objects, types, or curves.
 
 All numeric values are JSON numbers, converted to finite IEEE~754 binary64
 values. Strings and booleans are not numbers. Omission is distinct from
-\texttt{null}; no member in this format permits \texttt{null}. Unsupported
+\texttt{null}; no geometry member in this format permits \texttt{null}
+(opaque \texttt{ui\_state} metadata may contain it). Unsupported
 members are errors. Empty root dictionaries and empty \texttt{frames} or
 \texttt{transformation} collections are valid; a curve's segment list is not
 empty. Writers preserve omitted optional groups and emit \texttt{anchor}

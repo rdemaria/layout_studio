@@ -286,3 +286,10 @@ The browser must be able to reach the kernel-side
 directly. Remote notebooks require an explicit port-forward/proxy; setting
 `viewer_url=` changes the embedded application only and does not expose the
 loopback data bridge.
+
+## Viewer state in exported JSON
+
+Layout Studio downloads may include optional `ui_state` metadata. The Python
+API preserves it through `Layout.from_json` and `Layout.to_json`, and exposes
+it as `layout.ui_state` (a dictionary, or `None` when absent). Geometry and frame
+resolution ignore it. See [the UI state format](../webapp/UI-STATE.md).

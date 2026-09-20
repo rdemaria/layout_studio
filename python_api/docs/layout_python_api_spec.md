@@ -11,6 +11,8 @@ independently from the installable package.
 - Canonical JSON contains `reference_curves`, `types`, `objects`, type-local
   `frames`, and `{kind: "object_frame", object, frame}`. Type shape and magnetic
   axis are optional; each object's beam interface defaults to its magnetic axis.
+- Optional top-level `ui_state` stores opaque presentation metadata. Python preserves it
+  as `Layout.ui_state`; frame resolution ignores it. Nested metadata can contain null.
 - Python exposes `Layout.curves` as the shorter name for `reference_curves`.
 - Distances are in metres, rotations in radians, and curvature in m⁻¹.
 - `Frame` means an editable symbolic transformation. `Pose` means an immutable
@@ -22,7 +24,7 @@ independently from the installable package.
 - References accept concise strings when their meaning is syntactically
   unambiguous; explicit reference classes remain the lossless fallback.
 - JSON text rejects duplicate member names, including names spelled with
-  different equivalent escapes. Optional members must be omitted rather than
+  different equivalent escapes. Optional geometry members must be omitted rather than
   set to `null`, including `reference_curve`.
 - Geometry follows revision 1 of `specifications/layout_positioning_model.tex`
   and its schema and conformance corpus. `Layout.validate()` and
@@ -178,7 +180,9 @@ class Layout(JsonValue):
     types: EntityMap[Type]
     objects: EntityMap[Object]
 
-    __init__(self, *, curves=None, types=None, objects=None)
+    ui_state: dict[str, object] | None      # optional viewer metadata
+
+    __init__(self, *, curves=None, types=None, objects=None, ui_state=None)
     new_curve(self, name: str, **attributes) -> Curve
     add_curve(self, name: str, curve: Curve) -> Curve
     new_type(self, name: str, **attributes) -> Type

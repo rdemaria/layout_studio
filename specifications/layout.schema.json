@@ -5,6 +5,10 @@
   "description": "Structural grammar. Duplicate-member checks, name resolution, frame dependencies, target anchoring and numerical resolution are additional normative checks.",
   "type": "object",
   "properties": {
+    "ui_state": {
+      "type": "object",
+      "description": "Optional versioned presentation metadata. Preserved by readers and writers; ignored by the positioning solver. See webapp/UI-STATE.md."
+    },
     "reference_curves": {
       "type": "object",
       "propertyNames": {

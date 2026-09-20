@@ -69,6 +69,8 @@ export type LayoutData = {
   reference_curves: Record<string, ReferenceCurve>;
   types: Record<string, LayoutType>;
   objects: Record<string, LayoutObject>;
+  /** Optional presentation metadata; never participates in geometry resolution. */
+  ui_state?: Record<string, unknown>;
 };
 
 export type LayoutDependencyKind = "curve" | "object";
@@ -847,7 +849,20 @@ export function parseLayout(value: unknown): LayoutData {
   ) {
     throw new Error("Expected reference_curves, types and objects dictionaries");
   }
-  assertOnlyKeys(value, "layout", ["reference_curves", "types", "objects"]);
+  assertOnlyKeys(value, "layout", ["reference_curves", "types", "objects", "ui_state"]);
+  if (value.ui_state !== undefined && !isRecord(value.ui_state)) {
+    throw new Error("layout.ui_state must be a JSON object");
+  }
+  if (value.ui_state !== undefined) {
+    const pending: unknown[] = [value.ui_state];
+    while (pending.length) {
+      const item = pending.pop();
+      if (item === null || typeof item === "string" || typeof item === "boolean") continue;
+      if (typeof item === "number" && Number.isFinite(item)) continue;
+      if (Array.isArray(item) || isRecord(item)) pending.push(...Object.values(item));
+      else throw new Error("layout.ui_state must contain JSON values with finite numbers");
+    }
+  }
 
   const reference_curves: Record<string, ReferenceCurve> = {};
   for (const [name, raw] of Object.entries(value.reference_curves)) {
@@ -967,7 +982,9 @@ export function parseLayout(value: unknown): LayoutData {
     }
   }
 
-  const result = { reference_curves, types, objects };
+  const result: LayoutData = { reference_curves, types, objects,
+    ...(value.ui_state === undefined ? {} : {ui_state: structuredClone(value.ui_state as Record<string, unknown>)}),
+  };
   forEachTransformation(result, (transformation, label) => {
     const reference = transformation.reference;
     if (

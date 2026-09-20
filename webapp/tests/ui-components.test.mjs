@@ -810,7 +810,7 @@ test("renders collapsible controls for every main card", async () => {
   const segmentSource = await readFile(path.join(root, "app/curve-segment-editor.tsx"), "utf8");
   assert.match(segmentSource, /segments\.length > 4/);
   assert.match(pageSource, /key=\{`dependencies-\$\{viewerRevision\}`\}/);
-  assert.match(dependencySource, /useState<Set<string>>\(\(\) => new Set\(\)\)/);
+  assert.match(dependencySource, /useState<Set<string>>\(\(\) => new Set\(initialState\?\.expanded\)\)/);
   assert.match(dependencySource, /dependentsByAnchor\.get\(edge\.to\)/);
   assert.match(dependencySource, /graphNodes\.get\(edge\.from\)/);
   assert.match(dependencySource, /expandableBranchIds\(dependentsByAnchor\)/);
@@ -833,9 +833,7 @@ test("renders a guarded top-bar action for starting an empty layout", async () =
   const pageSource = await readFile(path.join(root, "app/page.tsx"), "utf8");
   assert.match(pageSource, /<AlertDialogTitle>Clear the layout\?<\/AlertDialogTitle>/);
   assert.match(pageSource, /<AlertDialogAction variant="destructive" onClick=\{clearLayout\}>/);
-  assert.match(pageSource, /setLayout\(createEmptyLayout\(\)\)/);
-  assert.match(pageSource, /setSelectedTypeFrame\(""\)/);
-  assert.match(pageSource, /setTypeFramesOpen\(true\)/);
+  assert.match(pageSource, /loadValue\(createEmptyLayout\(\), "empty layout", \{validated: true\}\)/);
   assert.match(pageSource, /setSelection\(null\)/);
   assert.match(pageSource, /<LayoutViewport\s+key=\{viewerRevision\}/);
 });

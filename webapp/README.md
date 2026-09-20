@@ -3,6 +3,11 @@
 This directory contains the complete React/Vinext source for the Layout Studio editor
 and its interactive 3D viewer.
 
+Drop a layout `.json` file anywhere on the page to open it. **Download JSON**
+saves the layout together with its UI state, including the camera and zoom
+history, visible layers, selections, card visibility, and dependency branches.
+Reopening that JSON restores the view. See [UI state format](UI-STATE.md).
+
 ## Development
 
 Requirements: Node.js 22.13 or newer on Linux.
