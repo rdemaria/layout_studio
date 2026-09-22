@@ -13,6 +13,8 @@ From the repository root:
 python -m pip install -r conversion/requirements.txt
 python conversion/sps/convert.py
 python conversion/m2/convert.py
+python conversion/br/convert.py
+python conversion/pr/convert.py
 python conversion/lhc/convert.py --output conversion/lhc/LHC--LS3.json
 ```
 
@@ -160,11 +162,37 @@ source class may have built with the LHC default circumference. Override
 ambiguous cases with `--machine-length`. Missing object ancestors are reported
 and skipped with their descendants; `--dangling error` aborts instead.
 
+## BR and PR rings
+
+The [BR policy](br/README.md) maps the `PSB` root to the `BR` curve and treats
+`PSB PERIOD` containers as spans. Its four ring copies supply identical bend
+stations, lengths, angles, and rolls. The reference path includes each identical
+bend geometry once; all four sets of physical objects retain their source
+placements. The snapshot does not separate their vertical positions.
+
+The [PR policy](pr/README.md) maps `PS` to `PR` and treats `PS RING SECTOR`,
+`PS RING SECTION`, `PS RING STRAIGHT SECTION`, and
+`PS RING UNIT ASSEMBLY SECTION` as spans. Its consecutive focusing/defocusing
+bends touch, so intervening drifts with absolute length at most `1e-10 m` are
+omitted. Larger overlaps are rejected. Both policies preserve straight hardware
+mechanics and rebase span-boundary references at the ring seam as for LHC.
+Reports record the path adjustments and missing-parent omissions.
+
+The committed models are compressed. To load them with the viewer's **Import
+file** action, generate plain JSON (and its matching report and manifest):
+
+```bash
+python conversion/br/convert.py --output /tmp/BR--LS3.json
+python conversion/pr/convert.py --output /tmp/PR--LS3.json
+```
+
 ## Validation
 
 ```bash
 python conversion/validate.py conversion/sps/SPS--LS3.pickle conversion/sps/SPS--LS3.json.gz
 python conversion/validate.py conversion/m2/M2--LS3.pickle conversion/m2/M2--LS3.json.gz
+python conversion/validate.py conversion/br/BR--LS3.pickle conversion/br/BR--LS3.json.gz
+python conversion/validate.py conversion/pr/PR--LS3.pickle conversion/pr/PR--LS3.json.gz
 python conversion/validate.py conversion/lhc/LHC--LS3.pickle conversion/lhc/LHC--LS3.json
 PYTHONPATH=python_api/src python -m pytest conversion/tests
 ```
@@ -174,4 +202,6 @@ resolve every object and available frame, compare reference-curve boundaries
 with `LDBPoint.to_madpoint()`, and compare span frames at their source stations.
 Regression tests cover all six axis mappings, rotation signs, mixed curved
 spans, independent straight mechanics, object beam overrides, exact zero-length
-anchors, root aliases, missing parents, and reproducible gzip output.
+anchors, root aliases, missing parents, coincident BR bends, touching PR bends,
+closed-ring seams, and reproducible gzip output. BR/PR validation rebuilds the
+source path using the same documented bend policies before comparing frames.

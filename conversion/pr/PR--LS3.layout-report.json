@@ -1,0 +1,2192 @@
+{
+  "machine": "PR",
+  "version": "LS3",
+  "curve_name": "PR",
+  "machine_length": 628.3185000000001,
+  "machine_length_source": "direct coverage of LDB root 'PS'",
+  "input_transformations": 4889,
+  "output_objects": 4623,
+  "skipped_objects": {
+    "PE.BFA09P21P.RKCAP001": "depends on skipped object 'PE.BFA09P21P.RKRCF001'",
+    "PE.BFA09P21P.RKDIO001": "depends on skipped object 'PE.BFA09P21P.RKDSK001'",
+    "PE.BFA09P21P.RKDIO002": "depends on skipped object 'PE.BFA09P21P.RKDSK001'",
+    "PE.BFA09P21P.RKDIO003": "depends on skipped object 'PE.BFA09P21P.RKDSK001'",
+    "PE.BFA09P21P.RKDIO004": "depends on skipped object 'PE.BFA09P21P.RKDSK001'",
+    "PE.BFA09P21P.RKDIO005": "depends on skipped object 'PE.BFA09P21P.RKDSK001'",
+    "PE.BFA09P21P.RKDIO006": "depends on skipped object 'PE.BFA09P21P.RKDSK001'",
+    "PE.BFA09P21P.RKDIO007": "depends on skipped object 'PE.BFA09P21P.RKDSK001'",
+    "PE.BFA09P21P.RKDIO008": "depends on skipped object 'PE.BFA09P21P.RKDSK001'",
+    "PE.BFA09P21P.RKDIO009": "depends on skipped object 'PE.BFA09P21P.RKDSK001'",
+    "PE.BFA09P21P.RKDSK001": "depends on skipped object 'PE.BFA09P21P.RKSWT001'",
+    "PE.BFA09P21P.RKMSW001": "depends on skipped object 'PE.BFA09P21P.RKSWT001'",
+    "PE.BFA09P21P.RKPFN001": "depends on skipped object 'PE.BFA09P21P.RKSWT001'",
+    "PE.BFA09P21P.RKPGN001": "references missing LDB object 'PE.BFA09P21P.RK'",
+    "PE.BFA09P21P.RKRCF001": "depends on skipped object 'PE.BFA09P21P.RKSWT001'",
+    "PE.BFA09P21P.RKRCF002": "depends on skipped object 'PE.BFA09P21P.RKPGN001'",
+    "PE.BFA09P21P.RKRDC001": "depends on skipped object 'PE.BFA09P21P.RKRSK001'",
+    "PE.BFA09P21P.RKRDC002": "depends on skipped object 'PE.BFA09P21P.RKRSK001'",
+    "PE.BFA09P21P.RKRDC003": "depends on skipped object 'PE.BFA09P21P.RKRSK001'",
+    "PE.BFA09P21P.RKRDC004": "depends on skipped object 'PE.BFA09P21P.RKRSK001'",
+    "PE.BFA09P21P.RKRDC05": "depends on skipped object 'PE.BFA09P21P.RKRSK002'",
+    "PE.BFA09P21P.RKRDC06": "depends on skipped object 'PE.BFA09P21P.RKRSK002'",
+    "PE.BFA09P21P.RKRDC07": "depends on skipped object 'PE.BFA09P21P.RKRSK002'",
+    "PE.BFA09P21P.RKRDC08": "depends on skipped object 'PE.BFA09P21P.RKRSK002'",
+    "PE.BFA09P21P.RKRDC09": "depends on skipped object 'PE.BFA09P21P.RKRSK002'",
+    "PE.BFA09P21P.RKRDC10": "depends on skipped object 'PE.BFA09P21P.RKRSK002'",
+    "PE.BFA09P21P.RKRDC11": "depends on skipped object 'PE.BFA09P21P.RKRSK002'",
+    "PE.BFA09P21P.RKRDC12": "depends on skipped object 'PE.BFA09P21P.RKRSK002'",
+    "PE.BFA09P21P.RKRDC13": "depends on skipped object 'PE.BFA09P21P.RKRSK002'",
+    "PE.BFA09P21P.RKRDC14": "depends on skipped object 'PE.BFA09P21P.RKRSK002'",
+    "PE.BFA09P21P.RKRDC15": "depends on skipped object 'PE.BFA09P21P.RKRSK002'",
+    "PE.BFA09P21P.RKRDC16": "depends on skipped object 'PE.BFA09P21P.RKRSK002'",
+    "PE.BFA09P21P.RKRDC17": "depends on skipped object 'PE.BFA09P21P.RKRSK002'",
+    "PE.BFA09P21P.RKRDC18": "depends on skipped object 'PE.BFA09P21P.RKRSK002'",
+    "PE.BFA09P21P.RKRLC001": "depends on skipped object 'PE.BFA09P21P.RKPGN001'",
+    "PE.BFA09P21P.RKRSK001": "depends on skipped object 'PE.BFA09P21P.RKRCF001'",
+    "PE.BFA09P21P.RKRSK002": "depends on skipped object 'PE.BFA09P21P.RKTRS001'",
+    "PE.BFA09P21P.RKSWT001": "depends on skipped object 'PE.BFA09P21P.RKPGN001'",
+    "PE.BFA09P21P.RKTHY01M": "depends on skipped object 'PE.BFA09P21P.RKPFN001'",
+    "PE.BFA09P21P.RKTRA001": "depends on skipped object 'PE.BFA09P21P.RKSWT001'",
+    "PE.BFA09P21P.RKTRC001": "depends on skipped object 'PE.BFA09P21P.RKPGN001'",
+    "PE.BFA09P21P.RKTRC002": "depends on skipped object 'PE.BFA09P21P.RKPGN001'",
+    "PE.BFA09P21P.RKTRC003": "depends on skipped object 'PE.BFA09P21P.RKPGN001'",
+    "PE.BFA09P21P.RKTRC004": "depends on skipped object 'PE.BFA09P21P.RKPGN001'",
+    "PE.BFA09P21P.RKTRC005": "depends on skipped object 'PE.BFA09P21P.RKPGN001'",
+    "PE.BFA09P21P.RKTRC006": "depends on skipped object 'PE.BFA09P21P.RKPGN001'",
+    "PE.BFA09P21P.RKTRS001": "depends on skipped object 'PE.BFA09P21P.RKTRC006'",
+    "PE.BFA21P.MKKFA001": "references missing LDB object 'PE.BFA21P.MK'",
+    "PE.BFA21P.MKMAG001": "depends on skipped object 'PE.BFA21P.MKKFA001'",
+    "PE.BFA21P.MKMCB001": "depends on skipped object 'PE.BFA21P.MKMAG001'",
+    "PE.BFA21P.MKMOD001": "depends on skipped object 'PE.BFA21P.MKMAG001'",
+    "PE.BFA21P.RKCAP001": "depends on skipped object 'PE.BFA21P.RKRCF001'",
+    "PE.BFA21P.RKDIO001": "depends on skipped object 'PE.BFA21P.RKDSK001'",
+    "PE.BFA21P.RKDIO002": "depends on skipped object 'PE.BFA21P.RKDSK001'",
+    "PE.BFA21P.RKDIO003": "depends on skipped object 'PE.BFA21P.RKDSK001'",
+    "PE.BFA21P.RKDIO004": "depends on skipped object 'PE.BFA21P.RKDSK001'",
+    "PE.BFA21P.RKDIO005": "depends on skipped object 'PE.BFA21P.RKDSK001'",
+    "PE.BFA21P.RKDIO006": "depends on skipped object 'PE.BFA21P.RKDSK001'",
+    "PE.BFA21P.RKDIO007": "depends on skipped object 'PE.BFA21P.RKDSK001'",
+    "PE.BFA21P.RKDIO008": "depends on skipped object 'PE.BFA21P.RKDSK001'",
+    "PE.BFA21P.RKDIO009": "depends on skipped object 'PE.BFA21P.RKDSK001'",
+    "PE.BFA21P.RKDSK001": "depends on skipped object 'PE.BFA21P.RKSWT001'",
+    "PE.BFA21P.RKMSW001": "depends on skipped object 'PE.BFA21P.RKSWT001'",
+    "PE.BFA21P.RKPFN001": "depends on skipped object 'PE.BFA21P.RKSWT001'",
+    "PE.BFA21P.RKPGN001": "references missing LDB object 'PE.BFA21P.RK'",
+    "PE.BFA21P.RKRCF001": "depends on skipped object 'PE.BFA21P.RKSWT001'",
+    "PE.BFA21P.RKRCF002": "depends on skipped object 'PE.BFA21P.RKPGN001'",
+    "PE.BFA21P.RKRDC001": "depends on skipped object 'PE.BFA21P.RKRSK001'",
+    "PE.BFA21P.RKRDC002": "depends on skipped object 'PE.BFA21P.RKRSK001'",
+    "PE.BFA21P.RKRDC003": "depends on skipped object 'PE.BFA21P.RKRSK001'",
+    "PE.BFA21P.RKRDC004": "depends on skipped object 'PE.BFA21P.RKRSK001'",
+    "PE.BFA21P.RKRDC05": "depends on skipped object 'PE.BFA21P.RKRSK002'",
+    "PE.BFA21P.RKRDC06": "depends on skipped object 'PE.BFA21P.RKRSK002'",
+    "PE.BFA21P.RKRDC07": "depends on skipped object 'PE.BFA21P.RKRSK002'",
+    "PE.BFA21P.RKRDC08": "depends on skipped object 'PE.BFA21P.RKRSK002'",
+    "PE.BFA21P.RKRDC09": "depends on skipped object 'PE.BFA21P.RKRSK002'",
+    "PE.BFA21P.RKRDC10": "depends on skipped object 'PE.BFA21P.RKRSK002'",
+    "PE.BFA21P.RKRDC11": "depends on skipped object 'PE.BFA21P.RKRSK002'",
+    "PE.BFA21P.RKRDC12": "depends on skipped object 'PE.BFA21P.RKRSK002'",
+    "PE.BFA21P.RKRDC13": "depends on skipped object 'PE.BFA21P.RKRSK002'",
+    "PE.BFA21P.RKRDC14": "depends on skipped object 'PE.BFA21P.RKRSK002'",
+    "PE.BFA21P.RKRDC15": "depends on skipped object 'PE.BFA21P.RKRSK002'",
+    "PE.BFA21P.RKRDC16": "depends on skipped object 'PE.BFA21P.RKRSK002'",
+    "PE.BFA21P.RKRDC17": "depends on skipped object 'PE.BFA21P.RKRSK002'",
+    "PE.BFA21P.RKRDC18": "depends on skipped object 'PE.BFA21P.RKRSK002'",
+    "PE.BFA21P.RKRLC001": "depends on skipped object 'PE.BFA21P.RKPGN001'",
+    "PE.BFA21P.RKRSK001": "depends on skipped object 'PE.BFA21P.RKRCF001'",
+    "PE.BFA21P.RKRSK002": "depends on skipped object 'PE.BFA21P.RKTRS001'",
+    "PE.BFA21P.RKSWT001": "depends on skipped object 'PE.BFA21P.RKPGN001'",
+    "PE.BFA21P.RKTHY01M": "depends on skipped object 'PE.BFA21P.RKMSW001'",
+    "PE.BFA21P.RKTRA001": "depends on skipped object 'PE.BFA21P.RKSWT001'",
+    "PE.BFA21P.RKTRC001": "depends on skipped object 'PE.BFA21P.RKPGN001'",
+    "PE.BFA21P.RKTRC002": "depends on skipped object 'PE.BFA21P.RKPGN001'",
+    "PE.BFA21P.RKTRC003": "depends on skipped object 'PE.BFA21P.RKPGN001'",
+    "PE.BFA21P.RKTRC004": "depends on skipped object 'PE.BFA21P.RKPGN001'",
+    "PE.BFA21P.RKTRC005": "depends on skipped object 'PE.BFA21P.RKPGN001'",
+    "PE.BFA21P.RKTRC006": "depends on skipped object 'PE.BFA21P.RKPGN001'",
+    "PE.BFA21P.RKTRS001": "depends on skipped object 'PE.BFA21P.RKPGN001'",
+    "PE.BFA21S.MKKFA001": "references missing LDB object 'PE.BFA21S.MK'",
+    "PE.BFA21S.MKMAG001": "depends on skipped object 'PE.BFA21S.MKKFA001'",
+    "PE.BFA21S.MKMCB001": "depends on skipped object 'PE.BFA21S.MKMAG001'",
+    "PE.BFA21S.MKMOD001": "depends on skipped object 'PE.BFA21S.MKMAG001'",
+    "PE.BFA21S.MKMOD002": "depends on skipped object 'PE.BFA21S.MKMAG001'",
+    "PE.BFA21S.MKMOD003": "depends on skipped object 'PE.BFA21S.MKMAG001'",
+    "PE.BFA21S.RKDFT001": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKDIO001": "depends on skipped object 'PE.BFA21S.RKDSK001'",
+    "PE.BFA21S.RKDIO002": "depends on skipped object 'PE.BFA21S.RKDSK001'",
+    "PE.BFA21S.RKDIO003": "depends on skipped object 'PE.BFA21S.RKDSK001'",
+    "PE.BFA21S.RKDIO004": "depends on skipped object 'PE.BFA21S.RKDSK001'",
+    "PE.BFA21S.RKDIO005": "depends on skipped object 'PE.BFA21S.RKDSK001'",
+    "PE.BFA21S.RKDIO006": "depends on skipped object 'PE.BFA21S.RKDSK001'",
+    "PE.BFA21S.RKDIO007": "depends on skipped object 'PE.BFA21S.RKDSK001'",
+    "PE.BFA21S.RKDIO008": "depends on skipped object 'PE.BFA21S.RKDSK001'",
+    "PE.BFA21S.RKDIO009": "depends on skipped object 'PE.BFA21S.RKDSK001'",
+    "PE.BFA21S.RKDIO010": "depends on skipped object 'PE.BFA21S.RKDSK001'",
+    "PE.BFA21S.RKDIO011": "depends on skipped object 'PE.BFA21S.RKDSK001'",
+    "PE.BFA21S.RKDIO012": "depends on skipped object 'PE.BFA21S.RKDSK001'",
+    "PE.BFA21S.RKDIO013": "depends on skipped object 'PE.BFA21S.RKDSK001'",
+    "PE.BFA21S.RKDIO014": "depends on skipped object 'PE.BFA21S.RKDSK001'",
+    "PE.BFA21S.RKDIO015": "depends on skipped object 'PE.BFA21S.RKDSK001'",
+    "PE.BFA21S.RKDIO016": "depends on skipped object 'PE.BFA21S.RKDSK002'",
+    "PE.BFA21S.RKDIO017": "depends on skipped object 'PE.BFA21S.RKDSK002'",
+    "PE.BFA21S.RKDIO018": "depends on skipped object 'PE.BFA21S.RKDSK002'",
+    "PE.BFA21S.RKDIO019": "depends on skipped object 'PE.BFA21S.RKDSK002'",
+    "PE.BFA21S.RKDIO020": "depends on skipped object 'PE.BFA21S.RKDSK002'",
+    "PE.BFA21S.RKDIO021": "depends on skipped object 'PE.BFA21S.RKDSK002'",
+    "PE.BFA21S.RKDIO022": "depends on skipped object 'PE.BFA21S.RKDSK002'",
+    "PE.BFA21S.RKDIO023": "depends on skipped object 'PE.BFA21S.RKDSK002'",
+    "PE.BFA21S.RKDIO024": "depends on skipped object 'PE.BFA21S.RKDSK002'",
+    "PE.BFA21S.RKDIO025": "depends on skipped object 'PE.BFA21S.RKDSK002'",
+    "PE.BFA21S.RKDIO026": "depends on skipped object 'PE.BFA21S.RKDSK002'",
+    "PE.BFA21S.RKDIO027": "depends on skipped object 'PE.BFA21S.RKDSK002'",
+    "PE.BFA21S.RKDIO028": "depends on skipped object 'PE.BFA21S.RKDSK002'",
+    "PE.BFA21S.RKDIO029": "depends on skipped object 'PE.BFA21S.RKDSK002'",
+    "PE.BFA21S.RKDIO030": "depends on skipped object 'PE.BFA21S.RKDSK002'",
+    "PE.BFA21S.RKDIO031": "depends on skipped object 'PE.BFA21S.RKDSK003'",
+    "PE.BFA21S.RKDIO032": "depends on skipped object 'PE.BFA21S.RKDSK003'",
+    "PE.BFA21S.RKDIO033": "depends on skipped object 'PE.BFA21S.RKDSK003'",
+    "PE.BFA21S.RKDIO034": "depends on skipped object 'PE.BFA21S.RKDSK003'",
+    "PE.BFA21S.RKDIO035": "depends on skipped object 'PE.BFA21S.RKDSK003'",
+    "PE.BFA21S.RKDIO036": "depends on skipped object 'PE.BFA21S.RKDSK003'",
+    "PE.BFA21S.RKDIO037": "depends on skipped object 'PE.BFA21S.RKDSK003'",
+    "PE.BFA21S.RKDIO038": "depends on skipped object 'PE.BFA21S.RKDSK003'",
+    "PE.BFA21S.RKDIO039": "depends on skipped object 'PE.BFA21S.RKDSK003'",
+    "PE.BFA21S.RKDIO040": "depends on skipped object 'PE.BFA21S.RKDSK003'",
+    "PE.BFA21S.RKDIO041": "depends on skipped object 'PE.BFA21S.RKDSK003'",
+    "PE.BFA21S.RKDIO042": "depends on skipped object 'PE.BFA21S.RKDSK003'",
+    "PE.BFA21S.RKDIO043": "depends on skipped object 'PE.BFA21S.RKDSK003'",
+    "PE.BFA21S.RKDIO044": "depends on skipped object 'PE.BFA21S.RKDSK003'",
+    "PE.BFA21S.RKDIO045": "depends on skipped object 'PE.BFA21S.RKDSK003'",
+    "PE.BFA21S.RKDIO046": "depends on skipped object 'PE.BFA21S.RKDSK004'",
+    "PE.BFA21S.RKDIO047": "depends on skipped object 'PE.BFA21S.RKDSK004'",
+    "PE.BFA21S.RKDIO048": "depends on skipped object 'PE.BFA21S.RKDSK004'",
+    "PE.BFA21S.RKDIO049": "depends on skipped object 'PE.BFA21S.RKDSK004'",
+    "PE.BFA21S.RKDIO050": "depends on skipped object 'PE.BFA21S.RKDSK004'",
+    "PE.BFA21S.RKDIO051": "depends on skipped object 'PE.BFA21S.RKDSK004'",
+    "PE.BFA21S.RKDIO052": "depends on skipped object 'PE.BFA21S.RKDSK004'",
+    "PE.BFA21S.RKDIO053": "depends on skipped object 'PE.BFA21S.RKDSK004'",
+    "PE.BFA21S.RKDIO054": "depends on skipped object 'PE.BFA21S.RKDSK004'",
+    "PE.BFA21S.RKDIO055": "depends on skipped object 'PE.BFA21S.RKDSK004'",
+    "PE.BFA21S.RKDIO056": "depends on skipped object 'PE.BFA21S.RKDSK004'",
+    "PE.BFA21S.RKDIO057": "depends on skipped object 'PE.BFA21S.RKDSK004'",
+    "PE.BFA21S.RKDIO058": "depends on skipped object 'PE.BFA21S.RKDSK004'",
+    "PE.BFA21S.RKDIO059": "depends on skipped object 'PE.BFA21S.RKDSK004'",
+    "PE.BFA21S.RKDIO060": "depends on skipped object 'PE.BFA21S.RKDSK004'",
+    "PE.BFA21S.RKDIO061": "depends on skipped object 'PE.BFA21S.RKDSK005'",
+    "PE.BFA21S.RKDIO062": "depends on skipped object 'PE.BFA21S.RKDSK005'",
+    "PE.BFA21S.RKDIO063": "depends on skipped object 'PE.BFA21S.RKDSK005'",
+    "PE.BFA21S.RKDIO064": "depends on skipped object 'PE.BFA21S.RKDSK005'",
+    "PE.BFA21S.RKDIO065": "depends on skipped object 'PE.BFA21S.RKDSK005'",
+    "PE.BFA21S.RKDIO066": "depends on skipped object 'PE.BFA21S.RKDSK005'",
+    "PE.BFA21S.RKDIO067": "depends on skipped object 'PE.BFA21S.RKDSK005'",
+    "PE.BFA21S.RKDIO068": "depends on skipped object 'PE.BFA21S.RKDSK005'",
+    "PE.BFA21S.RKDIO069": "depends on skipped object 'PE.BFA21S.RKDSK005'",
+    "PE.BFA21S.RKDIO070": "depends on skipped object 'PE.BFA21S.RKDSK005'",
+    "PE.BFA21S.RKDIO071": "depends on skipped object 'PE.BFA21S.RKDSK005'",
+    "PE.BFA21S.RKDIO072": "depends on skipped object 'PE.BFA21S.RKDSK005'",
+    "PE.BFA21S.RKDIO073": "depends on skipped object 'PE.BFA21S.RKDSK005'",
+    "PE.BFA21S.RKDIO074": "depends on skipped object 'PE.BFA21S.RKDSK005'",
+    "PE.BFA21S.RKDIO075": "depends on skipped object 'PE.BFA21S.RKDSK005'",
+    "PE.BFA21S.RKDIO076": "depends on skipped object 'PE.BFA21S.RKDSK006'",
+    "PE.BFA21S.RKDIO077": "depends on skipped object 'PE.BFA21S.RKDSK006'",
+    "PE.BFA21S.RKDMP001": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKDRS001": "depends on skipped object 'PE.BFA21S.RKDFT001'",
+    "PE.BFA21S.RKDSK001": "depends on skipped object 'PE.BFA21S.RKSWT001'",
+    "PE.BFA21S.RKDSK002": "depends on skipped object 'PE.BFA21S.RKSWT002'",
+    "PE.BFA21S.RKDSK003": "depends on skipped object 'PE.BFA21S.RKSWT003'",
+    "PE.BFA21S.RKDSK004": "depends on skipped object 'PE.BFA21S.RKSWT004'",
+    "PE.BFA21S.RKDSK005": "depends on skipped object 'PE.BFA21S.RKSWT005'",
+    "PE.BFA21S.RKDSK006": "depends on skipped object 'PE.BFA21S.RKDMP001'",
+    "PE.BFA21S.RKMSW001": "depends on skipped object 'PE.BFA21S.RKSWT001'",
+    "PE.BFA21S.RKMSW002": "depends on skipped object 'PE.BFA21S.RKSWT002'",
+    "PE.BFA21S.RKMSW003": "depends on skipped object 'PE.BFA21S.RKSWT003'",
+    "PE.BFA21S.RKMSW004": "depends on skipped object 'PE.BFA21S.RKSWT004'",
+    "PE.BFA21S.RKMSW005": "depends on skipped object 'PE.BFA21S.RKSWT005'",
+    "PE.BFA21S.RKPFL001": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKPFL002": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKPFL003": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKPFL004": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKPFL005": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKPGN001": "references missing LDB object 'PE.BFA21S.RK'",
+    "PE.BFA21S.RKRDC001": "depends on skipped object 'PE.BFA21S.RKRSK006'",
+    "PE.BFA21S.RKRDC002": "depends on skipped object 'PE.BFA21S.RKRSK006'",
+    "PE.BFA21S.RKRDC003": "depends on skipped object 'PE.BFA21S.RKRSK006'",
+    "PE.BFA21S.RKRDC004": "depends on skipped object 'PE.BFA21S.RKRSK006'",
+    "PE.BFA21S.RKRDC005": "depends on skipped object 'PE.BFA21S.RKRSK006'",
+    "PE.BFA21S.RKRDC006": "depends on skipped object 'PE.BFA21S.RKRSK006'",
+    "PE.BFA21S.RKRDC007": "depends on skipped object 'PE.BFA21S.RKRSK006'",
+    "PE.BFA21S.RKRDC008": "depends on skipped object 'PE.BFA21S.RKRSK006'",
+    "PE.BFA21S.RKRDC009": "depends on skipped object 'PE.BFA21S.RKRSK006'",
+    "PE.BFA21S.RKRDC010": "depends on skipped object 'PE.BFA21S.RKRSK006'",
+    "PE.BFA21S.RKRDC011": "depends on skipped object 'PE.BFA21S.RKRSK006'",
+    "PE.BFA21S.RKRDC012": "depends on skipped object 'PE.BFA21S.RKRSK006'",
+    "PE.BFA21S.RKRDC013": "depends on skipped object 'PE.BFA21S.RKRSK006'",
+    "PE.BFA21S.RKRDC014": "depends on skipped object 'PE.BFA21S.RKRSK006'",
+    "PE.BFA21S.RKRES001": "depends on skipped object 'PE.BFA21S.RKRSK001'",
+    "PE.BFA21S.RKRES002": "depends on skipped object 'PE.BFA21S.RKRSK001'",
+    "PE.BFA21S.RKRES003": "depends on skipped object 'PE.BFA21S.RKRSK002'",
+    "PE.BFA21S.RKRES004": "depends on skipped object 'PE.BFA21S.RKRSK002'",
+    "PE.BFA21S.RKRES005": "depends on skipped object 'PE.BFA21S.RKRSK003'",
+    "PE.BFA21S.RKRES006": "depends on skipped object 'PE.BFA21S.RKRSK003'",
+    "PE.BFA21S.RKRES007": "depends on skipped object 'PE.BFA21S.RKRSK004'",
+    "PE.BFA21S.RKRES008": "depends on skipped object 'PE.BFA21S.RKRSK004'",
+    "PE.BFA21S.RKRES009": "depends on skipped object 'PE.BFA21S.RKRSK005'",
+    "PE.BFA21S.RKRES010": "depends on skipped object 'PE.BFA21S.RKRSK005'",
+    "PE.BFA21S.RKRSK001": "depends on skipped object 'PE.BFA21S.RKSWT001'",
+    "PE.BFA21S.RKRSK002": "depends on skipped object 'PE.BFA21S.RKSWT002'",
+    "PE.BFA21S.RKRSK003": "depends on skipped object 'PE.BFA21S.RKSWT003'",
+    "PE.BFA21S.RKRSK004": "depends on skipped object 'PE.BFA21S.RKSWT004'",
+    "PE.BFA21S.RKRSK005": "depends on skipped object 'PE.BFA21S.RKSWT005'",
+    "PE.BFA21S.RKRSK006": "depends on skipped object 'PE.BFA21S.RKDRS001'",
+    "PE.BFA21S.RKSWT001": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKSWT002": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKSWT003": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKSWT004": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKSWT005": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKTHY01M": "depends on skipped object 'PE.BFA21S.RKMSW001'",
+    "PE.BFA21S.RKTHY02M": "depends on skipped object 'PE.BFA21S.RKMSW002'",
+    "PE.BFA21S.RKTHY03M": "depends on skipped object 'PE.BFA21S.RKMSW003'",
+    "PE.BFA21S.RKTHY04M": "depends on skipped object 'PE.BFA21S.RKMSW004'",
+    "PE.BFA21S.RKTHY05M": "depends on skipped object 'PE.BFA21S.RKMSW005'",
+    "PE.BFA21S.RKTRA001": "depends on skipped object 'PE.BFA21S.RKSWT001'",
+    "PE.BFA21S.RKTRA002": "depends on skipped object 'PE.BFA21S.RKSWT001'",
+    "PE.BFA21S.RKTRA003": "depends on skipped object 'PE.BFA21S.RKSWT001'",
+    "PE.BFA21S.RKTRA004": "depends on skipped object 'PE.BFA21S.RKSWT002'",
+    "PE.BFA21S.RKTRA005": "depends on skipped object 'PE.BFA21S.RKSWT002'",
+    "PE.BFA21S.RKTRA006": "depends on skipped object 'PE.BFA21S.RKSWT002'",
+    "PE.BFA21S.RKTRA007": "depends on skipped object 'PE.BFA21S.RKSWT003'",
+    "PE.BFA21S.RKTRA008": "depends on skipped object 'PE.BFA21S.RKSWT003'",
+    "PE.BFA21S.RKTRA009": "depends on skipped object 'PE.BFA21S.RKSWT003'",
+    "PE.BFA21S.RKTRA010": "depends on skipped object 'PE.BFA21S.RKSWT004'",
+    "PE.BFA21S.RKTRA011": "depends on skipped object 'PE.BFA21S.RKSWT004'",
+    "PE.BFA21S.RKTRA012": "depends on skipped object 'PE.BFA21S.RKSWT004'",
+    "PE.BFA21S.RKTRA013": "depends on skipped object 'PE.BFA21S.RKSWT005'",
+    "PE.BFA21S.RKTRA014": "depends on skipped object 'PE.BFA21S.RKSWT005'",
+    "PE.BFA21S.RKTRA015": "depends on skipped object 'PE.BFA21S.RKSWT005'",
+    "PE.BFA21S.RKTRC001": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKTRC002": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKTRC003": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKTRC004": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKTRC005": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKTRC006": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKTRC007": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKTRC008": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKTRC009": "depends on skipped object 'PE.BFA21S.RKPGN001'",
+    "PE.BFA21S.RKTRC010": "depends on skipped object 'PE.BFA21S.RKPGN001'"
+  },
+  "input_type_names": 291,
+  "output_types": 595,
+  "split_type_names": {
+    "PS RING SECTION": [
+      "PS RING SECTION__P_01",
+      "PS RING SECTION__P_02",
+      "PS RING SECTION__P_03",
+      "PS RING SECTION__P_04",
+      "PS RING SECTION__P_05",
+      "PS RING SECTION__P_06",
+      "PS RING SECTION__P_07",
+      "PS RING SECTION__P_08",
+      "PS RING SECTION__P_09",
+      "PS RING SECTION__P_10",
+      "PS RING SECTION__P_11",
+      "PS RING SECTION__P_12",
+      "PS RING SECTION__P_13",
+      "PS RING SECTION__P_14",
+      "PS RING SECTION__P_15",
+      "PS RING SECTION__P_16",
+      "PS RING SECTION__P_17",
+      "PS RING SECTION__P_18",
+      "PS RING SECTION__P_19",
+      "PS RING SECTION__P_20",
+      "PS RING SECTION__P_21",
+      "PS RING SECTION__P_22",
+      "PS RING SECTION__P_23",
+      "PS RING SECTION__P_24",
+      "PS RING SECTION__P_25",
+      "PS RING SECTION__P_26",
+      "PS RING SECTION__P_27",
+      "PS RING SECTION__P_28",
+      "PS RING SECTION__P_29",
+      "PS RING SECTION__P_30",
+      "PS RING SECTION__P_31",
+      "PS RING SECTION__P_32",
+      "PS RING SECTION__P_33",
+      "PS RING SECTION__P_34",
+      "PS RING SECTION__P_35",
+      "PS RING SECTION__P_36",
+      "PS RING SECTION__P_37",
+      "PS RING SECTION__P_38",
+      "PS RING SECTION__P_39",
+      "PS RING SECTION__P_40",
+      "PS RING SECTION__P_41",
+      "PS RING SECTION__P_42",
+      "PS RING SECTION__P_43",
+      "PS RING SECTION__P_44",
+      "PS RING SECTION__P_45",
+      "PS RING SECTION__P_46",
+      "PS RING SECTION__P_47",
+      "PS RING SECTION__P_48",
+      "PS RING SECTION__P_49",
+      "PS RING SECTION__P_50",
+      "PS RING SECTION__P_51",
+      "PS RING SECTION__P_52",
+      "PS RING SECTION__P_53",
+      "PS RING SECTION__P_54",
+      "PS RING SECTION__P_55",
+      "PS RING SECTION__P_56",
+      "PS RING SECTION__P_57",
+      "PS RING SECTION__P_58",
+      "PS RING SECTION__P_59",
+      "PS RING SECTION__P_60",
+      "PS RING SECTION__P_61",
+      "PS RING SECTION__P_62",
+      "PS RING SECTION__P_63",
+      "PS RING SECTION__P_64",
+      "PS RING SECTION__P_65",
+      "PS RING SECTION__P_66",
+      "PS RING SECTION__P_67",
+      "PS RING SECTION__P_68",
+      "PS RING SECTION__P_69",
+      "PS RING SECTION__P_70",
+      "PS RING SECTION__P_71",
+      "PS RING SECTION__P_72",
+      "PS RING SECTION__P_73",
+      "PS RING SECTION__P_74",
+      "PS RING SECTION__P_75",
+      "PS RING SECTION__P_76",
+      "PS RING SECTION__P_77",
+      "PS RING SECTION__P_78",
+      "PS RING SECTION__P_79",
+      "PS RING SECTION__P_80",
+      "PS RING SECTION__P_81",
+      "PS RING SECTION__P_82",
+      "PS RING SECTION__P_83",
+      "PS RING SECTION__P_84",
+      "PS RING SECTION__P_85",
+      "PS RING SECTION__P_86",
+      "PS RING SECTION__P_87",
+      "PS RING SECTION__P_88",
+      "PS RING SECTION__P_89",
+      "PS RING SECTION__P_90",
+      "PS RING SECTION__P_91",
+      "PS RING SECTION__P_92",
+      "PS RING SECTION__P_93",
+      "PS RING SECTION__P_94",
+      "PS RING SECTION__P_95",
+      "PS RING SECTION__P_96",
+      "PS RING SECTION__P_97",
+      "PS RING SECTION__P_98",
+      "PS RING SECTION__P_99",
+      "PS RING SECTION__P_100"
+    ],
+    "PS RING SECTOR": [
+      "PS RING SECTOR__P_01",
+      "PS RING SECTOR__P_02",
+      "PS RING SECTOR__P_03",
+      "PS RING SECTOR__P_04",
+      "PS RING SECTOR__P_05",
+      "PS RING SECTOR__P_06",
+      "PS RING SECTOR__P_07",
+      "PS RING SECTOR__P_08",
+      "PS RING SECTOR__P_09",
+      "PS RING SECTOR__P_10"
+    ],
+    "PS RING STRAIGHT SECTION": [
+      "PS RING STRAIGHT SECTION__P_01",
+      "PS RING STRAIGHT SECTION__P_02",
+      "PS RING STRAIGHT SECTION__P_03",
+      "PS RING STRAIGHT SECTION__P_04",
+      "PS RING STRAIGHT SECTION__P_05",
+      "PS RING STRAIGHT SECTION__P_06",
+      "PS RING STRAIGHT SECTION__P_07",
+      "PS RING STRAIGHT SECTION__P_08",
+      "PS RING STRAIGHT SECTION__P_09",
+      "PS RING STRAIGHT SECTION__P_10",
+      "PS RING STRAIGHT SECTION__P_11",
+      "PS RING STRAIGHT SECTION__P_12",
+      "PS RING STRAIGHT SECTION__P_13",
+      "PS RING STRAIGHT SECTION__P_14",
+      "PS RING STRAIGHT SECTION__P_15",
+      "PS RING STRAIGHT SECTION__P_16",
+      "PS RING STRAIGHT SECTION__P_17",
+      "PS RING STRAIGHT SECTION__P_18",
+      "PS RING STRAIGHT SECTION__P_19",
+      "PS RING STRAIGHT SECTION__P_20",
+      "PS RING STRAIGHT SECTION__P_21",
+      "PS RING STRAIGHT SECTION__P_22",
+      "PS RING STRAIGHT SECTION__P_23",
+      "PS RING STRAIGHT SECTION__P_24",
+      "PS RING STRAIGHT SECTION__P_25",
+      "PS RING STRAIGHT SECTION__P_26",
+      "PS RING STRAIGHT SECTION__P_27",
+      "PS RING STRAIGHT SECTION__P_28",
+      "PS RING STRAIGHT SECTION__P_29",
+      "PS RING STRAIGHT SECTION__P_30",
+      "PS RING STRAIGHT SECTION__P_31",
+      "PS RING STRAIGHT SECTION__P_32",
+      "PS RING STRAIGHT SECTION__P_33",
+      "PS RING STRAIGHT SECTION__P_34",
+      "PS RING STRAIGHT SECTION__P_35",
+      "PS RING STRAIGHT SECTION__P_36",
+      "PS RING STRAIGHT SECTION__P_37",
+      "PS RING STRAIGHT SECTION__P_38",
+      "PS RING STRAIGHT SECTION__P_39",
+      "PS RING STRAIGHT SECTION__P_40",
+      "PS RING STRAIGHT SECTION__P_41",
+      "PS RING STRAIGHT SECTION__P_42",
+      "PS RING STRAIGHT SECTION__P_43",
+      "PS RING STRAIGHT SECTION__P_44",
+      "PS RING STRAIGHT SECTION__P_45",
+      "PS RING STRAIGHT SECTION__P_46",
+      "PS RING STRAIGHT SECTION__P_47",
+      "PS RING STRAIGHT SECTION__P_48",
+      "PS RING STRAIGHT SECTION__P_49",
+      "PS RING STRAIGHT SECTION__P_50",
+      "PS RING STRAIGHT SECTION__P_51",
+      "PS RING STRAIGHT SECTION__P_52",
+      "PS RING STRAIGHT SECTION__P_53",
+      "PS RING STRAIGHT SECTION__P_54",
+      "PS RING STRAIGHT SECTION__P_55",
+      "PS RING STRAIGHT SECTION__P_56",
+      "PS RING STRAIGHT SECTION__P_57",
+      "PS RING STRAIGHT SECTION__P_58",
+      "PS RING STRAIGHT SECTION__P_59",
+      "PS RING STRAIGHT SECTION__P_60",
+      "PS RING STRAIGHT SECTION__P_61",
+      "PS RING STRAIGHT SECTION__P_62",
+      "PS RING STRAIGHT SECTION__P_63",
+      "PS RING STRAIGHT SECTION__P_64",
+      "PS RING STRAIGHT SECTION__P_65",
+      "PS RING STRAIGHT SECTION__P_66",
+      "PS RING STRAIGHT SECTION__P_67",
+      "PS RING STRAIGHT SECTION__P_68",
+      "PS RING STRAIGHT SECTION__P_69",
+      "PS RING STRAIGHT SECTION__P_70",
+      "PS RING STRAIGHT SECTION__P_71",
+      "PS RING STRAIGHT SECTION__P_72",
+      "PS RING STRAIGHT SECTION__P_73",
+      "PS RING STRAIGHT SECTION__P_74",
+      "PS RING STRAIGHT SECTION__P_75",
+      "PS RING STRAIGHT SECTION__P_76",
+      "PS RING STRAIGHT SECTION__P_77",
+      "PS RING STRAIGHT SECTION__P_78",
+      "PS RING STRAIGHT SECTION__P_79",
+      "PS RING STRAIGHT SECTION__P_80",
+      "PS RING STRAIGHT SECTION__P_81",
+      "PS RING STRAIGHT SECTION__P_82",
+      "PS RING STRAIGHT SECTION__P_83",
+      "PS RING STRAIGHT SECTION__P_84",
+      "PS RING STRAIGHT SECTION__P_85",
+      "PS RING STRAIGHT SECTION__P_86",
+      "PS RING STRAIGHT SECTION__P_87",
+      "PS RING STRAIGHT SECTION__P_88",
+      "PS RING STRAIGHT SECTION__P_89",
+      "PS RING STRAIGHT SECTION__P_90",
+      "PS RING STRAIGHT SECTION__P_91",
+      "PS RING STRAIGHT SECTION__P_92",
+      "PS RING STRAIGHT SECTION__P_93",
+      "PS RING STRAIGHT SECTION__P_94",
+      "PS RING STRAIGHT SECTION__P_95",
+      "PS RING STRAIGHT SECTION__P_96",
+      "PS RING STRAIGHT SECTION__P_97",
+      "PS RING STRAIGHT SECTION__P_98"
+    ],
+    "PS RING UNIT ASSEMBLY SECTION": [
+      "PS RING UNIT ASSEMBLY SECTION__P_01",
+      "PS RING UNIT ASSEMBLY SECTION__P_02",
+      "PS RING UNIT ASSEMBLY SECTION__P_03",
+      "PS RING UNIT ASSEMBLY SECTION__P_04",
+      "PS RING UNIT ASSEMBLY SECTION__P_05",
+      "PS RING UNIT ASSEMBLY SECTION__P_06",
+      "PS RING UNIT ASSEMBLY SECTION__P_07",
+      "PS RING UNIT ASSEMBLY SECTION__P_08",
+      "PS RING UNIT ASSEMBLY SECTION__P_09",
+      "PS RING UNIT ASSEMBLY SECTION__P_10",
+      "PS RING UNIT ASSEMBLY SECTION__P_11",
+      "PS RING UNIT ASSEMBLY SECTION__P_12",
+      "PS RING UNIT ASSEMBLY SECTION__P_13",
+      "PS RING UNIT ASSEMBLY SECTION__P_14",
+      "PS RING UNIT ASSEMBLY SECTION__P_15",
+      "PS RING UNIT ASSEMBLY SECTION__P_16",
+      "PS RING UNIT ASSEMBLY SECTION__P_17",
+      "PS RING UNIT ASSEMBLY SECTION__P_18",
+      "PS RING UNIT ASSEMBLY SECTION__P_19",
+      "PS RING UNIT ASSEMBLY SECTION__P_20",
+      "PS RING UNIT ASSEMBLY SECTION__P_21",
+      "PS RING UNIT ASSEMBLY SECTION__P_22",
+      "PS RING UNIT ASSEMBLY SECTION__P_23",
+      "PS RING UNIT ASSEMBLY SECTION__P_24",
+      "PS RING UNIT ASSEMBLY SECTION__P_25",
+      "PS RING UNIT ASSEMBLY SECTION__P_26",
+      "PS RING UNIT ASSEMBLY SECTION__P_27",
+      "PS RING UNIT ASSEMBLY SECTION__P_28",
+      "PS RING UNIT ASSEMBLY SECTION__P_29",
+      "PS RING UNIT ASSEMBLY SECTION__P_30",
+      "PS RING UNIT ASSEMBLY SECTION__P_31",
+      "PS RING UNIT ASSEMBLY SECTION__P_32",
+      "PS RING UNIT ASSEMBLY SECTION__P_33",
+      "PS RING UNIT ASSEMBLY SECTION__P_34",
+      "PS RING UNIT ASSEMBLY SECTION__P_35",
+      "PS RING UNIT ASSEMBLY SECTION__P_36",
+      "PS RING UNIT ASSEMBLY SECTION__P_37",
+      "PS RING UNIT ASSEMBLY SECTION__P_38",
+      "PS RING UNIT ASSEMBLY SECTION__P_39",
+      "PS RING UNIT ASSEMBLY SECTION__P_40",
+      "PS RING UNIT ASSEMBLY SECTION__P_41",
+      "PS RING UNIT ASSEMBLY SECTION__P_42",
+      "PS RING UNIT ASSEMBLY SECTION__P_43",
+      "PS RING UNIT ASSEMBLY SECTION__P_44",
+      "PS RING UNIT ASSEMBLY SECTION__P_45",
+      "PS RING UNIT ASSEMBLY SECTION__P_46",
+      "PS RING UNIT ASSEMBLY SECTION__P_47",
+      "PS RING UNIT ASSEMBLY SECTION__P_48",
+      "PS RING UNIT ASSEMBLY SECTION__P_49",
+      "PS RING UNIT ASSEMBLY SECTION__P_50",
+      "PS RING UNIT ASSEMBLY SECTION__P_51",
+      "PS RING UNIT ASSEMBLY SECTION__P_52",
+      "PS RING UNIT ASSEMBLY SECTION__P_53",
+      "PS RING UNIT ASSEMBLY SECTION__P_54",
+      "PS RING UNIT ASSEMBLY SECTION__P_55",
+      "PS RING UNIT ASSEMBLY SECTION__P_56",
+      "PS RING UNIT ASSEMBLY SECTION__P_57",
+      "PS RING UNIT ASSEMBLY SECTION__P_58",
+      "PS RING UNIT ASSEMBLY SECTION__P_59",
+      "PS RING UNIT ASSEMBLY SECTION__P_60",
+      "PS RING UNIT ASSEMBLY SECTION__P_61",
+      "PS RING UNIT ASSEMBLY SECTION__P_62",
+      "PS RING UNIT ASSEMBLY SECTION__P_63",
+      "PS RING UNIT ASSEMBLY SECTION__P_64",
+      "PS RING UNIT ASSEMBLY SECTION__P_65",
+      "PS RING UNIT ASSEMBLY SECTION__P_66",
+      "PS RING UNIT ASSEMBLY SECTION__P_67",
+      "PS RING UNIT ASSEMBLY SECTION__P_68",
+      "PS RING UNIT ASSEMBLY SECTION__P_69",
+      "PS RING UNIT ASSEMBLY SECTION__P_70",
+      "PS RING UNIT ASSEMBLY SECTION__P_71",
+      "PS RING UNIT ASSEMBLY SECTION__P_72",
+      "PS RING UNIT ASSEMBLY SECTION__P_73",
+      "PS RING UNIT ASSEMBLY SECTION__P_74",
+      "PS RING UNIT ASSEMBLY SECTION__P_75",
+      "PS RING UNIT ASSEMBLY SECTION__P_76",
+      "PS RING UNIT ASSEMBLY SECTION__P_77",
+      "PS RING UNIT ASSEMBLY SECTION__P_78",
+      "PS RING UNIT ASSEMBLY SECTION__P_79",
+      "PS RING UNIT ASSEMBLY SECTION__P_80",
+      "PS RING UNIT ASSEMBLY SECTION__P_81",
+      "PS RING UNIT ASSEMBLY SECTION__P_82",
+      "PS RING UNIT ASSEMBLY SECTION__P_83",
+      "PS RING UNIT ASSEMBLY SECTION__P_84",
+      "PS RING UNIT ASSEMBLY SECTION__P_85",
+      "PS RING UNIT ASSEMBLY SECTION__P_86",
+      "PS RING UNIT ASSEMBLY SECTION__P_87",
+      "PS RING UNIT ASSEMBLY SECTION__P_88",
+      "PS RING UNIT ASSEMBLY SECTION__P_89",
+      "PS RING UNIT ASSEMBLY SECTION__P_90",
+      "PS RING UNIT ASSEMBLY SECTION__P_91",
+      "PS RING UNIT ASSEMBLY SECTION__P_92",
+      "PS RING UNIT ASSEMBLY SECTION__P_93",
+      "PS RING UNIT ASSEMBLY SECTION__P_94",
+      "PS RING UNIT ASSEMBLY SECTION__P_95",
+      "PS RING UNIT ASSEMBLY SECTION__P_96",
+      "PS RING UNIT ASSEMBLY SECTION__P_97",
+      "PS RING UNIT ASSEMBLY SECTION__P_98",
+      "PS RING UNIT ASSEMBLY SECTION__P_99",
+      "PS RING UNIT ASSEMBLY SECTION__P_100"
+    ]
+  },
+  "curve_segments": 300,
+  "curve_total_angle": 6.283185307000001,
+  "zero_mechanical_length_objects": 3476,
+  "zero_optic_length_objects": 4133,
+  "zero_length_display_value": 0.1,
+  "root_name": "PS",
+  "root_name_source": "explicit argument",
+  "mechanical_models": {
+    "PS RING SECTION": "span",
+    "PS RING SECTOR": "span",
+    "PS RING STRAIGHT SECTION": "span",
+    "PS RING UNIT ASSEMBLY SECTION": "span"
+  },
+  "span_objects": {
+    "PR.SD95": {
+      "start": 590.89939,
+      "center": 591.69939,
+      "end": 592.49939
+    },
+    "PR.UA63": {
+      "start": 391.99747,
+      "center": 394.1990625,
+      "end": 396.40065500000003
+    },
+    "PR-SECTOR-07": {
+      "start": 376.9911,
+      "center": 408.40702500000003,
+      "end": 439.82295000000005
+    },
+    "PR.UA31": {
+      "start": 191.49554999999998,
+      "center": 193.69714249999998,
+      "end": 195.898735
+    },
+    "PR.SD37": {
+      "start": 227.31465999999998,
+      "center": 228.11466,
+      "end": 228.91466
+    },
+    "PR.SD78": {
+      "start": 484.645245,
+      "center": 485.445245,
+      "end": 486.245245
+    },
+    "PR.UA91": {
+      "start": 568.48665,
+      "center": 570.6882425,
+      "end": 572.889835
+    },
+    "PR-SECTOR-10": {
+      "start": 565.48665,
+      "center": 596.9025750000001,
+      "end": 628.3185000000001
+    },
+    "PR-SECTION-00": {
+      "start": 622.315315,
+      "center": 625.3169075000001,
+      "end": 628.3185000000001
+    },
+    "PR.UA24": {
+      "start": 146.673255,
+      "center": 148.87484750000002,
+      "end": 151.07644000000002
+    },
+    "PR-SECTION-49": {
+      "start": 302.15288,
+      "center": 305.1544725,
+      "end": 308.156065
+    },
+    "PR.SD80": {
+      "start": 496.651615,
+      "center": 497.451615,
+      "end": 498.251615
+    },
+    "PR.UA93": {
+      "start": 580.4930200000001,
+      "center": 582.6946125000001,
+      "end": 584.896205
+    },
+    "PR-SECTION-68": {
+      "start": 421.813395,
+      "center": 424.81498750000003,
+      "end": 427.81658000000004
+    },
+    "PR.SD18": {
+      "start": 107.654145,
+      "center": 108.454145,
+      "end": 109.254145
+    },
+    "PR.UA05": {
+      "start": 27.01274,
+      "center": 29.2143325,
+      "end": 31.415925
+    },
+    "PR-SECTION-62": {
+      "start": 384.394285,
+      "center": 387.39587750000004,
+      "end": 390.39747000000006
+    },
+    "PR-SECTION-22": {
+      "start": 133.066885,
+      "center": 136.0684775,
+      "end": 139.07007
+    },
+    "PR.SD54": {
+      "start": 333.568805,
+      "center": 334.368805,
+      "end": 335.168805
+    },
+    "PR.UA47": {
+      "start": 291.74651000000006,
+      "center": 293.94810250000006,
+      "end": 296.14969500000007
+    },
+    "PR.UA79": {
+      "start": 492.24843,
+      "center": 494.4500225,
+      "end": 496.651615
+    },
+    "PR.UA58": {
+      "start": 360.581545,
+      "center": 362.7831375,
+      "end": 364.98473
+    },
+    "PR-SECTION-09": {
+      "start": 50.82548,
+      "center": 53.8270725,
+      "end": 56.828665
+    },
+    "PR.SD49": {
+      "start": 302.15288,
+      "center": 302.95288,
+      "end": 303.75288
+    },
+    "PR-SECTION-64": {
+      "start": 396.40065500000003,
+      "center": 399.40224750000004,
+      "end": 402.40384000000006
+    },
+    "PR.UA53": {
+      "start": 329.16562,
+      "center": 331.3672125,
+      "end": 333.568805
+    },
+    "PR.UA99": {
+      "start": 617.91213,
+      "center": 620.1137225,
+      "end": 622.3153149999999
+    },
+    "PR.SD65": {
+      "start": 402.40384,
+      "center": 403.20384,
+      "end": 404.00384
+    },
+    "PR.SD77": {
+      "start": 478.64206,
+      "center": 479.44206,
+      "end": 480.24206000000004
+    },
+    "PR.UA72": {
+      "start": 448.826135,
+      "center": 451.0277275,
+      "end": 453.22932000000003
+    },
+    "PR-SECTION-47": {
+      "start": 290.14651000000003,
+      "center": 293.14810250000005,
+      "end": 296.14969500000007
+    },
+    "PR-SECTION-71": {
+      "start": 439.82295,
+      "center": 443.5245425,
+      "end": 447.226135
+    },
+    "PR.SD91": {
+      "start": 565.48665,
+      "center": 566.98665,
+      "end": 568.48665
+    },
+    "PR.UA18": {
+      "start": 109.254145,
+      "center": 111.4557375,
+      "end": 113.65733
+    },
+    "PR-SECTION-67": {
+      "start": 415.81021000000004,
+      "center": 418.81180250000006,
+      "end": 421.81339500000007
+    },
+    "PR-SECTION-78": {
+      "start": 484.645245,
+      "center": 487.6468375,
+      "end": 490.64843
+    },
+    "PR-SECTION-63": {
+      "start": 390.39747,
+      "center": 393.3990625,
+      "end": 396.40065500000003
+    },
+    "PR.UA97": {
+      "start": 605.9057600000001,
+      "center": 608.1073525,
+      "end": 610.308945
+    },
+    "PR.SD05": {
+      "start": 25.41274,
+      "center": 26.21274,
+      "end": 27.01274
+    },
+    "PR.SD45": {
+      "start": 276.74014,
+      "center": 277.54014,
+      "end": 278.34014
+    },
+    "PR.UA34": {
+      "start": 209.505105,
+      "center": 211.7066975,
+      "end": 213.90829
+    },
+    "PR.UA11": {
+      "start": 65.83185,
+      "center": 68.0334425,
+      "end": 70.23503500000001
+    },
+    "PR-SECTION-69": {
+      "start": 427.81658000000004,
+      "center": 430.81817250000006,
+      "end": 433.8197650000001
+    },
+    "PR.UA52": {
+      "start": 323.162435,
+      "center": 325.3640275,
+      "end": 327.56562
+    },
+    "PR.UA83": {
+      "start": 517.6611700000001,
+      "center": 519.8627625,
+      "end": 522.064355
+    },
+    "PR.UA87": {
+      "start": 543.0739100000001,
+      "center": 545.2755025,
+      "end": 547.477095
+    },
+    "PR-SECTION-01": {
+      "start": 0.0,
+      "center": 3.7015925,
+      "end": 7.403185
+    },
+    "PR.UA50": {
+      "start": 309.75606500000004,
+      "center": 311.95765750000004,
+      "end": 314.15925000000004
+    },
+    "PR.UA64": {
+      "start": 398.00065500000005,
+      "center": 400.20224750000006,
+      "end": 402.40384000000006
+    },
+    "PR.SD88": {
+      "start": 547.477095,
+      "center": 548.2770949999999,
+      "end": 549.0770949999999
+    },
+    "PR.UA08": {
+      "start": 46.422295,
+      "center": 48.623887499999995,
+      "end": 50.82547999999999
+    },
+    "PR.SD46": {
+      "start": 282.743325,
+      "center": 284.243325,
+      "end": 285.743325
+    },
+    "PR.SD26": {
+      "start": 157.07962500000002,
+      "center": 158.57962500000002,
+      "end": 160.07962500000002
+    },
+    "PR.UA62": {
+      "start": 385.99428500000005,
+      "center": 388.19587750000005,
+      "end": 390.39747000000006
+    },
+    "PR-SECTION-07": {
+      "start": 38.81911,
+      "center": 41.8207025,
+      "end": 44.822295000000004
+    },
+    "PR.UA39": {
+      "start": 240.92102999999997,
+      "center": 243.12262249999998,
+      "end": 245.32421499999998
+    },
+    "PR-SECTION-05": {
+      "start": 25.41274,
+      "center": 28.4143325,
+      "end": 31.415925
+    },
+    "PR.UA55": {
+      "start": 341.17199,
+      "center": 343.3735825,
+      "end": 345.575175
+    },
+    "PR-SECTION-86": {
+      "start": 534.070725,
+      "center": 537.7723175,
+      "end": 541.4739099999999
+    },
+    "PR.UA33": {
+      "start": 203.50191999999998,
+      "center": 205.7035125,
+      "end": 207.905105
+    },
+    "PR.UA07": {
+      "start": 40.41911,
+      "center": 42.6207025,
+      "end": 44.822295
+    },
+    "PR-SECTION-27": {
+      "start": 164.48281000000003,
+      "center": 167.48440250000002,
+      "end": 170.485995
+    },
+    "PR.SD44": {
+      "start": 270.736955,
+      "center": 271.53695500000003,
+      "end": 272.33695500000005
+    },
+    "PR-SECTION-10": {
+      "start": 56.828665,
+      "center": 59.8302575,
+      "end": 62.83185
+    },
+    "PR-SECTOR-02": {
+      "start": 62.83185,
+      "center": 94.247775,
+      "end": 125.6637
+    },
+    "PR.UA45": {
+      "start": 278.34014,
+      "center": 280.5417325,
+      "end": 282.743325
+    },
+    "PR-SECTION-98": {
+      "start": 610.308945,
+      "center": 613.3105375,
+      "end": 616.31213
+    },
+    "PR-SECTION-06": {
+      "start": 31.415924999999998,
+      "center": 35.1175175,
+      "end": 38.819109999999995
+    },
+    "PR.SD31": {
+      "start": 188.49554999999998,
+      "center": 189.99554999999998,
+      "end": 191.49554999999998
+    },
+    "PR.SD99": {
+      "start": 616.31213,
+      "center": 617.11213,
+      "end": 617.9121299999999
+    },
+    "PR-SECTION-26": {
+      "start": 157.07962500000002,
+      "center": 160.78121750000003,
+      "end": 164.48281000000003
+    },
+    "PR.SD90": {
+      "start": 559.483465,
+      "center": 560.283465,
+      "end": 561.0834649999999
+    },
+    "PR-SECTION-46": {
+      "start": 282.743325,
+      "center": 286.44491750000003,
+      "end": 290.14651000000003
+    },
+    "PR.UA00": {
+      "start": 623.9153150000001,
+      "center": 626.1169075,
+      "end": 628.3185
+    },
+    "PR-SECTION-32": {
+      "start": 195.898735,
+      "center": 198.90032749999997,
+      "end": 201.90191999999996
+    },
+    "PR.UA73": {
+      "start": 454.82932,
+      "center": 457.0309125,
+      "end": 459.232505
+    },
+    "PR.UA78": {
+      "start": 486.245245,
+      "center": 488.4468375,
+      "end": 490.64843
+    },
+    "PR.SD43": {
+      "start": 264.73377,
+      "center": 265.53377,
+      "end": 266.33377
+    },
+    "PR-SECTION-39": {
+      "start": 239.32102999999998,
+      "center": 242.32262249999997,
+      "end": 245.32421499999995
+    },
+    "PR-SECTION-52": {
+      "start": 321.562435,
+      "center": 324.5640275,
+      "end": 327.56562
+    },
+    "PR-SECTOR-01": {
+      "start": 0.0,
+      "center": 31.415925,
+      "end": 62.83185
+    },
+    "PR-SECTION-97": {
+      "start": 604.3057600000001,
+      "center": 607.3073525000001,
+      "end": 610.3089450000001
+    },
+    "PR-SECTION-91": {
+      "start": 565.48665,
+      "center": 569.1882425,
+      "end": 572.889835
+    },
+    "PR-SECTION-21": {
+      "start": 125.6637,
+      "center": 129.3652925,
+      "end": 133.066885
+    },
+    "PR.UA41": {
+      "start": 254.3274,
+      "center": 256.5289925,
+      "end": 258.730585
+    },
+    "PR.UA48": {
+      "start": 297.74969500000003,
+      "center": 299.95128750000003,
+      "end": 302.15288000000004
+    },
+    "PR.SD92": {
+      "start": 572.8898350000001,
+      "center": 573.689835,
+      "end": 574.489835
+    },
+    "PR.UA49": {
+      "start": 303.75288,
+      "center": 305.9544725,
+      "end": 308.156065
+    },
+    "PR-SECTOR-04": {
+      "start": 188.49554999999998,
+      "center": 219.911475,
+      "end": 251.3274
+    },
+    "PR-SECTION-51": {
+      "start": 314.15925,
+      "center": 317.8608425,
+      "end": 321.562435
+    },
+    "PR.UA90": {
+      "start": 561.083465,
+      "center": 563.2850575,
+      "end": 565.4866499999999
+    },
+    "PR-SECTION-24": {
+      "start": 145.07325500000002,
+      "center": 148.0748475,
+      "end": 151.07644
+    },
+    "PR.SD12": {
+      "start": 70.235035,
+      "center": 71.035035,
+      "end": 71.83503499999999
+    },
+    "PR-SECTION-37": {
+      "start": 227.31465999999998,
+      "center": 230.31625249999996,
+      "end": 233.31784499999995
+    },
+    "PR.SD30": {
+      "start": 182.492365,
+      "center": 183.29236500000002,
+      "end": 184.09236500000003
+    },
+    "PR.SD23": {
+      "start": 139.07007000000002,
+      "center": 139.87007000000003,
+      "end": 140.67007000000004
+    },
+    "PR.SD21": {
+      "start": 125.6637,
+      "center": 127.1637,
+      "end": 128.6637
+    },
+    "PR-SECTION-36": {
+      "start": 219.911475,
+      "center": 223.6130675,
+      "end": 227.31466
+    },
+    "PR.SD89": {
+      "start": 553.48028,
+      "center": 554.28028,
+      "end": 555.0802799999999
+    },
+    "PR-SECTION-42": {
+      "start": 258.730585,
+      "center": 261.73217750000003,
+      "end": 264.73377000000005
+    },
+    "PR-SECTION-13": {
+      "start": 76.23822,
+      "center": 79.2398125,
+      "end": 82.241405
+    },
+    "PR-SECTION-87": {
+      "start": 541.47391,
+      "center": 544.4755025000001,
+      "end": 547.4770950000001
+    },
+    "PR.SD32": {
+      "start": 195.898735,
+      "center": 196.698735,
+      "end": 197.498735
+    },
+    "PR-SECTION-65": {
+      "start": 402.40384,
+      "center": 405.4054325,
+      "end": 408.40702500000003
+    },
+    "PR-SECTION-17": {
+      "start": 101.65096,
+      "center": 104.6525525,
+      "end": 107.654145
+    },
+    "PR-SECTION-45": {
+      "start": 276.74014,
+      "center": 279.7417325,
+      "end": 282.743325
+    },
+    "PR-SECTION-82": {
+      "start": 510.05798500000003,
+      "center": 513.0595775,
+      "end": 516.0611700000001
+    },
+    "PR-SECTION-41": {
+      "start": 251.3274,
+      "center": 255.02899250000002,
+      "end": 258.730585
+    },
+    "PR-SECTION-70": {
+      "start": 433.819765,
+      "center": 436.82135750000003,
+      "end": 439.82295000000005
+    },
+    "PR.SD34": {
+      "start": 207.905105,
+      "center": 208.705105,
+      "end": 209.50510500000001
+    },
+    "PR-SECTION-33": {
+      "start": 201.90192,
+      "center": 204.90351249999998,
+      "end": 207.90510499999996
+    },
+    "PR.UA89": {
+      "start": 555.08028,
+      "center": 557.2818725,
+      "end": 559.4834649999999
+    },
+    "PR-SECTION-15": {
+      "start": 88.24459,
+      "center": 91.2461825,
+      "end": 94.247775
+    },
+    "PR.SD35": {
+      "start": 213.90828999999997,
+      "center": 214.70828999999998,
+      "end": 215.50829
+    },
+    "PR.UA61": {
+      "start": 379.9911,
+      "center": 382.1926925,
+      "end": 384.394285
+    },
+    "PR.UA10": {
+      "start": 58.428665,
+      "center": 60.6302575,
+      "end": 62.831849999999996
+    },
+    "PR.SD40": {
+      "start": 245.32421499999998,
+      "center": 246.124215,
+      "end": 246.924215
+    },
+    "PR.UA14": {
+      "start": 83.841405,
+      "center": 86.0429975,
+      "end": 88.24459
+    },
+    "PR.SD55": {
+      "start": 339.57198999999997,
+      "center": 340.37199,
+      "end": 341.17199
+    },
+    "PR.UA03": {
+      "start": 15.006369999999997,
+      "center": 17.207962499999997,
+      "end": 19.409554999999997
+    },
+    "PR.UA59": {
+      "start": 366.58473000000004,
+      "center": 368.78632250000004,
+      "end": 370.98791500000004
+    },
+    "PR.SD36": {
+      "start": 219.911475,
+      "center": 221.411475,
+      "end": 222.911475
+    },
+    "PR.SD14": {
+      "start": 82.241405,
+      "center": 83.041405,
+      "end": 83.841405
+    },
+    "PR-SECTION-75": {
+      "start": 465.23569,
+      "center": 468.2372825,
+      "end": 471.238875
+    },
+    "PR-SECTION-95": {
+      "start": 590.89939,
+      "center": 593.9009825,
+      "end": 596.9025750000001
+    },
+    "PR.UA27": {
+      "start": 166.08281000000002,
+      "center": 168.28440250000003,
+      "end": 170.48599500000003
+    },
+    "PR-SECTION-81": {
+      "start": 502.6548,
+      "center": 506.3563925,
+      "end": 510.05798500000003
+    },
+    "PR.SD75": {
+      "start": 465.23569,
+      "center": 466.03569,
+      "end": 466.83569
+    },
+    "PR.SD83": {
+      "start": 516.0611700000001,
+      "center": 516.86117,
+      "end": 517.66117
+    },
+    "PR-SECTION-77": {
+      "start": 478.64206,
+      "center": 481.64365250000003,
+      "end": 484.64524500000005
+    },
+    "PR.UA42": {
+      "start": 260.33058500000004,
+      "center": 262.53217750000005,
+      "end": 264.73377000000005
+    },
+    "PR.UA95": {
+      "start": 592.4993900000001,
+      "center": 594.7009825,
+      "end": 596.902575
+    },
+    "PR.SD39": {
+      "start": 239.32102999999998,
+      "center": 240.12103,
+      "end": 240.92103
+    },
+    "PR.UA25": {
+      "start": 152.67644,
+      "center": 154.87803250000002,
+      "end": 157.07962500000002
+    },
+    "PR.SD73": {
+      "start": 453.22932,
+      "center": 454.02932,
+      "end": 454.82932
+    },
+    "PR-SECTION-57": {
+      "start": 352.97836,
+      "center": 355.9799525,
+      "end": 358.98154500000004
+    },
+    "PR.UA19": {
+      "start": 115.25733,
+      "center": 117.4589225,
+      "end": 119.660515
+    },
+    "PR-SECTION-25": {
+      "start": 151.07644000000002,
+      "center": 154.0780325,
+      "end": 157.079625
+    },
+    "PR.SD09": {
+      "start": 50.82548,
+      "center": 51.625479999999996,
+      "end": 52.42547999999999
+    },
+    "PR.SD69": {
+      "start": 427.81658000000004,
+      "center": 428.61658000000006,
+      "end": 429.41658000000007
+    },
+    "PR-SECTION-55": {
+      "start": 339.57198999999997,
+      "center": 342.5735825,
+      "end": 345.575175
+    },
+    "PR.SD76": {
+      "start": 471.238875,
+      "center": 472.738875,
+      "end": 474.238875
+    },
+    "PR.UA75": {
+      "start": 466.83569,
+      "center": 469.0372825,
+      "end": 471.238875
+    },
+    "PR.UA15": {
+      "start": 89.84459,
+      "center": 92.0461825,
+      "end": 94.247775
+    },
+    "PR.UA28": {
+      "start": 172.085995,
+      "center": 174.2875875,
+      "end": 176.48918
+    },
+    "PR.UA94": {
+      "start": 586.496205,
+      "center": 588.6977975,
+      "end": 590.8993899999999
+    },
+    "PR-SECTION-19": {
+      "start": 113.65733,
+      "center": 116.6589225,
+      "end": 119.660515
+    },
+    "PR-SECTION-60": {
+      "start": 370.987915,
+      "center": 373.9895075,
+      "end": 376.9911
+    },
+    "PR-SECTION-80": {
+      "start": 496.651615,
+      "center": 499.6532075,
+      "end": 502.6548
+    },
+    "PR.UA23": {
+      "start": 140.67007,
+      "center": 142.8716625,
+      "end": 145.07325500000002
+    },
+    "PR.UA44": {
+      "start": 272.33695500000005,
+      "center": 274.53854750000005,
+      "end": 276.74014000000005
+    },
+    "PR.SD20": {
+      "start": 119.660515,
+      "center": 120.460515,
+      "end": 121.260515
+    },
+    "PR.UA36": {
+      "start": 222.911475,
+      "center": 225.1130675,
+      "end": 227.31466
+    },
+    "PR.SD82": {
+      "start": 510.05798500000003,
+      "center": 510.85798500000004,
+      "end": 511.65798500000005
+    },
+    "PR.UA60": {
+      "start": 372.587915,
+      "center": 374.7895075,
+      "end": 376.9911
+    },
+    "PR.UA16": {
+      "start": 97.247775,
+      "center": 99.44936750000001,
+      "end": 101.65096000000001
+    },
+    "PR-SECTION-03": {
+      "start": 13.406369999999999,
+      "center": 16.4079625,
+      "end": 19.409555
+    },
+    "PR.UA21": {
+      "start": 128.6637,
+      "center": 130.8652925,
+      "end": 133.066885
+    },
+    "PR.UA96": {
+      "start": 599.9025750000001,
+      "center": 602.1041675,
+      "end": 604.30576
+    },
+    "PR.UA01": {
+      "start": 3.0000000000000004,
+      "center": 5.2015925,
+      "end": 7.403185000000001
+    },
+    "PR.SD57": {
+      "start": 352.97836,
+      "center": 353.77836,
+      "end": 354.57836000000003
+    },
+    "PR.SD93": {
+      "start": 578.8930200000001,
+      "center": 579.69302,
+      "end": 580.49302
+    },
+    "PR.SD42": {
+      "start": 258.730585,
+      "center": 259.53058500000003,
+      "end": 260.33058500000004
+    },
+    "PR-SECTION-90": {
+      "start": 559.483465,
+      "center": 562.4850575,
+      "end": 565.48665
+    },
+    "PR-SECTION-29": {
+      "start": 176.48918000000003,
+      "center": 179.49077250000002,
+      "end": 182.492365
+    },
+    "PR-SECTION-58": {
+      "start": 358.981545,
+      "center": 361.9831375,
+      "end": 364.98473
+    },
+    "PR.SD70": {
+      "start": 433.819765,
+      "center": 434.61976500000003,
+      "end": 435.41976500000004
+    },
+    "PR.UA74": {
+      "start": 460.832505,
+      "center": 463.03409750000003,
+      "end": 465.23569000000003
+    },
+    "PR-SECTION-89": {
+      "start": 553.48028,
+      "center": 556.4818725,
+      "end": 559.483465
+    },
+    "PR.UA32": {
+      "start": 197.49873499999998,
+      "center": 199.7003275,
+      "end": 201.90192
+    },
+    "PR.UA65": {
+      "start": 404.00384,
+      "center": 406.20543250000003,
+      "end": 408.40702500000003
+    },
+    "PR.SD52": {
+      "start": 321.562435,
+      "center": 322.362435,
+      "end": 323.162435
+    },
+    "PR.SD22": {
+      "start": 133.066885,
+      "center": 133.86688500000002,
+      "end": 134.66688500000004
+    },
+    "PR.SD17": {
+      "start": 101.65096,
+      "center": 102.45096,
+      "end": 103.25095999999999
+    },
+    "PR.SD64": {
+      "start": 396.40065500000003,
+      "center": 397.20065500000004,
+      "end": 398.00065500000005
+    },
+    "PR.SD72": {
+      "start": 447.226135,
+      "center": 448.026135,
+      "end": 448.826135
+    },
+    "PR-SECTOR-06": {
+      "start": 314.15925,
+      "center": 345.575175,
+      "end": 376.9911
+    },
+    "PR.UA35": {
+      "start": 215.50828999999996,
+      "center": 217.70988249999996,
+      "end": 219.91147499999997
+    },
+    "PR.UA84": {
+      "start": 523.664355,
+      "center": 525.8659475,
+      "end": 528.0675399999999
+    },
+    "PR.SD98": {
+      "start": 610.308945,
+      "center": 611.108945,
+      "end": 611.9089449999999
+    },
+    "PR.SD28": {
+      "start": 170.485995,
+      "center": 171.285995,
+      "end": 172.08599500000003
+    },
+    "PR.SD66": {
+      "start": 408.40702500000003,
+      "center": 409.90702500000003,
+      "end": 411.40702500000003
+    },
+    "PR.SD58": {
+      "start": 358.981545,
+      "center": 359.781545,
+      "end": 360.581545
+    },
+    "PR.UA92": {
+      "start": 574.4898350000001,
+      "center": 576.6914275,
+      "end": 578.89302
+    },
+    "PR.SD53": {
+      "start": 327.56561999999997,
+      "center": 328.36562,
+      "end": 329.16562
+    },
+    "PR.UA80": {
+      "start": 498.251615,
+      "center": 500.4532075,
+      "end": 502.6548
+    },
+    "PR.SD25": {
+      "start": 151.07644000000002,
+      "center": 151.87644000000003,
+      "end": 152.67644000000004
+    },
+    "PR.SD04": {
+      "start": 19.409555,
+      "center": 20.209555,
+      "end": 21.009555000000002
+    },
+    "PR-SECTION-23": {
+      "start": 139.07007000000002,
+      "center": 142.0716625,
+      "end": 145.073255
+    },
+    "PR.UA70": {
+      "start": 435.41976500000004,
+      "center": 437.62135750000004,
+      "end": 439.82295000000005
+    },
+    "PR.SD03": {
+      "start": 13.406369999999999,
+      "center": 14.20637,
+      "end": 15.00637
+    },
+    "PR-SECTION-88": {
+      "start": 547.477095,
+      "center": 550.4786875,
+      "end": 553.48028
+    },
+    "PR.SD47": {
+      "start": 290.14651000000003,
+      "center": 290.94651000000005,
+      "end": 291.74651000000006
+    },
+    "PR-SECTOR-09": {
+      "start": 502.6548,
+      "center": 534.070725,
+      "end": 565.48665
+    },
+    "PR-SECTION-44": {
+      "start": 270.736955,
+      "center": 273.73854750000004,
+      "end": 276.74014000000005
+    },
+    "PR.SD71": {
+      "start": 439.82295,
+      "center": 441.32295,
+      "end": 442.82295
+    },
+    "PR.SD07": {
+      "start": 38.81911,
+      "center": 39.61911,
+      "end": 40.419109999999996
+    },
+    "PR.UA02": {
+      "start": 9.003185,
+      "center": 11.2047775,
+      "end": 13.40637
+    },
+    "PR.SD19": {
+      "start": 113.65733,
+      "center": 114.45733,
+      "end": 115.25733
+    },
+    "PR.SD11": {
+      "start": 62.83185,
+      "center": 64.33185,
+      "end": 65.83185
+    },
+    "PR.SD48": {
+      "start": 296.149695,
+      "center": 296.949695,
+      "end": 297.74969500000003
+    },
+    "PR.SD68": {
+      "start": 421.813395,
+      "center": 422.613395,
+      "end": 423.41339500000004
+    },
+    "PR.SD63": {
+      "start": 390.39747,
+      "center": 391.19747,
+      "end": 391.99747
+    },
+    "PR-SECTION-61": {
+      "start": 376.9911,
+      "center": 380.6926925,
+      "end": 384.394285
+    },
+    "PR-SECTION-08": {
+      "start": 44.822295,
+      "center": 47.8238875,
+      "end": 50.82548
+    },
+    "PR.UA04": {
+      "start": 21.009555000000002,
+      "center": 23.211147500000003,
+      "end": 25.412740000000003
+    },
+    "PR.UA26": {
+      "start": 160.07962500000002,
+      "center": 162.28121750000003,
+      "end": 164.48281000000003
+    },
+    "PR.SD97": {
+      "start": 604.3057600000001,
+      "center": 605.10576,
+      "end": 605.90576
+    },
+    "PR.UA85": {
+      "start": 529.66754,
+      "center": 531.8691325,
+      "end": 534.0707249999999
+    },
+    "PR-SECTION-74": {
+      "start": 459.232505,
+      "center": 462.2340975,
+      "end": 465.23569000000003
+    },
+    "PR.UA46": {
+      "start": 285.743325,
+      "center": 287.94491750000003,
+      "end": 290.14651000000003
+    },
+    "PR.SD79": {
+      "start": 490.64842999999996,
+      "center": 491.44843,
+      "end": 492.24843
+    },
+    "PR.UA57": {
+      "start": 354.57836000000003,
+      "center": 356.77995250000004,
+      "end": 358.98154500000004
+    },
+    "PR.UA82": {
+      "start": 511.657985,
+      "center": 513.8595775,
+      "end": 516.06117
+    },
+    "PR-SECTION-59": {
+      "start": 364.98473,
+      "center": 367.9863225,
+      "end": 370.98791500000004
+    },
+    "PR.UA17": {
+      "start": 103.25095999999999,
+      "center": 105.4525525,
+      "end": 107.654145
+    },
+    "PR.UA69": {
+      "start": 429.41658000000007,
+      "center": 431.61817250000007,
+      "end": 433.8197650000001
+    },
+    "PR.SD15": {
+      "start": 88.24459,
+      "center": 89.04459,
+      "end": 89.84459
+    },
+    "PR.SD96": {
+      "start": 596.9025750000001,
+      "center": 598.4025750000001,
+      "end": 599.9025750000001
+    },
+    "PR-SECTION-94": {
+      "start": 584.896205,
+      "center": 587.8977975,
+      "end": 590.89939
+    },
+    "PR.UA40": {
+      "start": 246.92421499999998,
+      "center": 249.12580749999998,
+      "end": 251.32739999999998
+    },
+    "PR.UA06": {
+      "start": 34.415925,
+      "center": 36.6175175,
+      "end": 38.819109999999995
+    },
+    "PR.UA22": {
+      "start": 134.666885,
+      "center": 136.8684775,
+      "end": 139.07007000000002
+    },
+    "PR.UA54": {
+      "start": 335.168805,
+      "center": 337.3703975,
+      "end": 339.57199
+    },
+    "PR-SECTION-40": {
+      "start": 245.32421499999998,
+      "center": 248.32580749999997,
+      "end": 251.32739999999995
+    },
+    "PR.SD27": {
+      "start": 164.48281000000003,
+      "center": 165.28281000000004,
+      "end": 166.08281000000005
+    },
+    "PR-SECTION-02": {
+      "start": 7.403185,
+      "center": 10.4047775,
+      "end": 13.406369999999999
+    },
+    "PR.SD51": {
+      "start": 314.15925,
+      "center": 315.65925,
+      "end": 317.15925
+    },
+    "PR.UA76": {
+      "start": 474.238875,
+      "center": 476.4404675,
+      "end": 478.64206
+    },
+    "PR.SD85": {
+      "start": 528.06754,
+      "center": 528.86754,
+      "end": 529.6675399999999
+    },
+    "PR.SD08": {
+      "start": 44.822295,
+      "center": 45.622294999999994,
+      "end": 46.42229499999999
+    },
+    "PR-SECTION-48": {
+      "start": 296.149695,
+      "center": 299.1512875,
+      "end": 302.15288000000004
+    },
+    "PR-SECTION-28": {
+      "start": 170.485995,
+      "center": 173.4875875,
+      "end": 176.48917999999998
+    },
+    "PR.UA43": {
+      "start": 266.33377,
+      "center": 268.5353625,
+      "end": 270.736955
+    },
+    "PR.SD67": {
+      "start": 415.81021000000004,
+      "center": 416.61021000000005,
+      "end": 417.41021000000006
+    },
+    "PR.SD13": {
+      "start": 76.23822,
+      "center": 77.03822,
+      "end": 77.83821999999999
+    },
+    "PR.UA09": {
+      "start": 52.42548,
+      "center": 54.6270725,
+      "end": 56.828664999999994
+    },
+    "PR.SD81": {
+      "start": 502.6548,
+      "center": 504.1548,
+      "end": 505.6548
+    },
+    "PR-SECTION-31": {
+      "start": 188.49554999999998,
+      "center": 192.19714249999998,
+      "end": 195.898735
+    },
+    "PR.UA98": {
+      "start": 611.908945,
+      "center": 614.1105375,
+      "end": 616.3121299999999
+    },
+    "PR-SECTION-18": {
+      "start": 107.654145,
+      "center": 110.6557375,
+      "end": 113.65733
+    },
+    "PR.UA30": {
+      "start": 184.092365,
+      "center": 186.2939575,
+      "end": 188.49555
+    },
+    "PR-SECTION-30": {
+      "start": 182.492365,
+      "center": 185.4939575,
+      "end": 188.49554999999998
+    },
+    "PR-SECTION-53": {
+      "start": 327.56561999999997,
+      "center": 330.5672125,
+      "end": 333.568805
+    },
+    "PR.SD29": {
+      "start": 176.48918000000003,
+      "center": 177.28918000000004,
+      "end": 178.08918000000006
+    },
+    "PR-SECTION-99": {
+      "start": 616.31213,
+      "center": 619.3137225,
+      "end": 622.315315
+    },
+    "PR.SD00": {
+      "start": 622.315315,
+      "center": 623.115315,
+      "end": 623.915315
+    },
+    "PR.SD62": {
+      "start": 384.394285,
+      "center": 385.19428500000004,
+      "end": 385.99428500000005
+    },
+    "PR.UA20": {
+      "start": 121.260515,
+      "center": 123.4621075,
+      "end": 125.6637
+    },
+    "PR-SECTION-76": {
+      "start": 471.238875,
+      "center": 474.9404675,
+      "end": 478.64206
+    },
+    "PR-SECTION-11": {
+      "start": 62.83185000000001,
+      "center": 66.5334425,
+      "end": 70.23503500000001
+    },
+    "PR.UA13": {
+      "start": 77.83821999999999,
+      "center": 80.0398125,
+      "end": 82.241405
+    },
+    "PR-SECTION-12": {
+      "start": 70.235035,
+      "center": 73.2366275,
+      "end": 76.23822
+    },
+    "PR.SD87": {
+      "start": 541.47391,
+      "center": 542.27391,
+      "end": 543.07391
+    },
+    "PR-SECTION-04": {
+      "start": 19.409555,
+      "center": 22.411147500000002,
+      "end": 25.412740000000003
+    },
+    "PR.UA81": {
+      "start": 505.6548,
+      "center": 507.8563925,
+      "end": 510.05798500000003
+    },
+    "PR.UA66": {
+      "start": 411.40702500000003,
+      "center": 413.60861750000004,
+      "end": 415.81021000000004
+    },
+    "PR.SD74": {
+      "start": 459.232505,
+      "center": 460.032505,
+      "end": 460.832505
+    },
+    "PR-SECTION-38": {
+      "start": 233.31784499999998,
+      "center": 236.31943749999996,
+      "end": 239.32102999999995
+    },
+    "PR-SECTION-66": {
+      "start": 408.40702500000003,
+      "center": 412.10861750000004,
+      "end": 415.81021000000004
+    },
+    "PR.SD33": {
+      "start": 201.90192,
+      "center": 202.70192,
+      "end": 203.50192
+    },
+    "PR-SECTION-16": {
+      "start": 94.247775,
+      "center": 97.94936750000001,
+      "end": 101.65096000000001
+    },
+    "PR.SD86": {
+      "start": 534.070725,
+      "center": 535.570725,
+      "end": 537.070725
+    },
+    "PR.SD41": {
+      "start": 251.3274,
+      "center": 252.8274,
+      "end": 254.3274
+    },
+    "PR.UA71": {
+      "start": 442.82295,
+      "center": 445.0245425,
+      "end": 447.226135
+    },
+    "PR.SD10": {
+      "start": 56.828665,
+      "center": 57.628665,
+      "end": 58.428664999999995
+    },
+    "PR-SECTION-14": {
+      "start": 82.241405,
+      "center": 85.2429975,
+      "end": 88.24459
+    },
+    "PR.SD60": {
+      "start": 370.987915,
+      "center": 371.787915,
+      "end": 372.587915
+    },
+    "PR-SECTION-92": {
+      "start": 572.8898350000001,
+      "center": 575.8914275000001,
+      "end": 578.8930200000001
+    },
+    "PR-SECTION-83": {
+      "start": 516.0611700000001,
+      "center": 519.0627625000001,
+      "end": 522.0643550000001
+    },
+    "PR.SD84": {
+      "start": 522.064355,
+      "center": 522.8643549999999,
+      "end": 523.6643549999999
+    },
+    "PR-SECTION-93": {
+      "start": 578.8930200000001,
+      "center": 581.8946125000001,
+      "end": 584.8962050000001
+    },
+    "PR-SECTOR-08": {
+      "start": 439.82295,
+      "center": 471.238875,
+      "end": 502.6548
+    },
+    "PR.UA86": {
+      "start": 537.070725,
+      "center": 539.2723175,
+      "end": 541.4739099999999
+    },
+    "PR.UA38": {
+      "start": 234.91784499999997,
+      "center": 237.11943749999998,
+      "end": 239.32102999999998
+    },
+    "PR.UA77": {
+      "start": 480.24206000000004,
+      "center": 482.44365250000004,
+      "end": 484.64524500000005
+    },
+    "PR-SECTION-79": {
+      "start": 490.64842999999996,
+      "center": 493.6500225,
+      "end": 496.651615
+    },
+    "PR-SECTION-50": {
+      "start": 308.156065,
+      "center": 311.1576575,
+      "end": 314.15925000000004
+    },
+    "PR.SD59": {
+      "start": 364.98473,
+      "center": 365.78473,
+      "end": 366.58473000000004
+    },
+    "PR.UA37": {
+      "start": 228.91465999999997,
+      "center": 231.11625249999997,
+      "end": 233.31784499999998
+    },
+    "PR.UA12": {
+      "start": 71.83503499999999,
+      "center": 74.0366275,
+      "end": 76.23822
+    },
+    "PR-SECTION-20": {
+      "start": 119.660515,
+      "center": 122.6621075,
+      "end": 125.6637
+    },
+    "PR-SECTION-35": {
+      "start": 213.90828999999997,
+      "center": 216.90988249999995,
+      "end": 219.91147499999994
+    },
+    "PR.SD02": {
+      "start": 7.403185,
+      "center": 8.203185,
+      "end": 9.003185
+    },
+    "PR-SECTION-96": {
+      "start": 596.9025750000001,
+      "center": 600.6041675,
+      "end": 604.30576
+    },
+    "PR.UA29": {
+      "start": 178.08918000000003,
+      "center": 180.29077250000003,
+      "end": 182.49236500000004
+    },
+    "PR-SECTION-73": {
+      "start": 453.22932,
+      "center": 456.2309125,
+      "end": 459.232505
+    },
+    "PR-SECTION-72": {
+      "start": 447.226135,
+      "center": 450.2277275,
+      "end": 453.22932000000003
+    },
+    "PR.SD94": {
+      "start": 584.896205,
+      "center": 585.696205,
+      "end": 586.4962049999999
+    },
+    "PR-SECTION-85": {
+      "start": 528.06754,
+      "center": 531.0691325,
+      "end": 534.070725
+    },
+    "PR-SECTION-84": {
+      "start": 522.064355,
+      "center": 525.0659475,
+      "end": 528.06754
+    },
+    "PR-SECTION-34": {
+      "start": 207.905105,
+      "center": 210.90669749999998,
+      "end": 213.90828999999997
+    },
+    "PR.UA88": {
+      "start": 549.077095,
+      "center": 551.2786874999999,
+      "end": 553.4802799999999
+    },
+    "PR.SD50": {
+      "start": 308.156065,
+      "center": 308.956065,
+      "end": 309.75606500000004
+    },
+    "PR.SD61": {
+      "start": 376.9911,
+      "center": 378.4911,
+      "end": 379.9911
+    },
+    "PR-SECTION-56": {
+      "start": 345.575175,
+      "center": 349.2767675,
+      "end": 352.97836
+    },
+    "PR-SECTION-43": {
+      "start": 264.73377,
+      "center": 267.7353625,
+      "end": 270.736955
+    },
+    "PR-SECTOR-03": {
+      "start": 125.66370000000002,
+      "center": 157.07962500000002,
+      "end": 188.49555000000004
+    },
+    "PR.SD38": {
+      "start": 233.31784499999998,
+      "center": 234.117845,
+      "end": 234.917845
+    },
+    "PR-SECTOR-05": {
+      "start": 251.3274,
+      "center": 282.743325,
+      "end": 314.15925000000004
+    },
+    "PR.UA56": {
+      "start": 348.575175,
+      "center": 350.7767675,
+      "end": 352.97836
+    },
+    "PR.UA67": {
+      "start": 417.41021000000006,
+      "center": 419.61180250000007,
+      "end": 421.81339500000007
+    },
+    "PR.UA68": {
+      "start": 423.41339500000004,
+      "center": 425.61498750000004,
+      "end": 427.81658000000004
+    },
+    "PR.SD16": {
+      "start": 94.247775,
+      "center": 95.747775,
+      "end": 97.247775
+    },
+    "PR.SD01": {
+      "start": 0.0,
+      "center": 1.5,
+      "end": 3.0
+    },
+    "PR.UA51": {
+      "start": 317.15925,
+      "center": 319.3608425,
+      "end": 321.562435
+    },
+    "PR.SD06": {
+      "start": 31.415925,
+      "center": 32.915925,
+      "end": 34.415925
+    },
+    "PR-SECTION-54": {
+      "start": 333.568805,
+      "center": 336.5703975,
+      "end": 339.57199
+    },
+    "PR.SD24": {
+      "start": 145.07325500000002,
+      "center": 145.87325500000003,
+      "end": 146.67325500000004
+    },
+    "PR.SD56": {
+      "start": 345.575175,
+      "center": 347.075175,
+      "end": 348.575175
+    }
+  },
+  "explicit_beam_interfaces": 0,
+  "warnings": [
+    "skipped 266 object(s) with missing ancestors",
+    "split 4 LDB type name(s) because geometry and/or color initial varies",
+    "displayed 3476 zero-length object(s) with dz=0.1 m",
+    "kept 4133 zero optic length(s) as exact stored frames; no magnetic/beam axis",
+    "omitted 101 reference drifts with absolute length <= 1e-10 m",
+    "rebased 17 closed-ring seam references onto parent span centers, preserving the object hierarchy"
+  ],
+  "coincident_bends": {},
+  "omitted_zero_drifts": 101,
+  "seam_reference_stations": {
+    "PR.XSE01.A": 0.0,
+    "PR.XSE01.B": 0.0,
+    "PR.VCS01.A": 0.0,
+    "PR.VCS01.B": 0.0,
+    "PR-SECTION-09": 0.0,
+    "PR.HMT01": 0.0,
+    "PR-SECTION-01": 0.0,
+    "PR-SECTION-07": 0.0,
+    "PR-SECTION-05": 0.0,
+    "PR-SECTION-10": 0.0,
+    "PR-SECTION-06": 0.0,
+    "PR-SECTION-03": 0.0,
+    "PR.UA01": 0.0,
+    "PR-SECTION-08": 0.0,
+    "PR-SECTION-02": 0.0,
+    "PR-SECTION-04": 0.0,
+    "PR.SD01": 0.0
+  }
+}

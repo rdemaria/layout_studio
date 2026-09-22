@@ -1,0 +1,21 @@
+{
+  "machine": "PR",
+  "version": "LS3",
+  "artifacts": {
+    "PR--LS3.pickle": {
+      "bytes": 1161538,
+      "sha256": "cc76f7f4c80e5064f1c11aa4beccbae8d487fb91cd5af5e1dda52ac22d0e47ae",
+      "role": "source Machine snapshot"
+    },
+    "PR--LS3.json.gz": {
+      "bytes": 56149,
+      "sha256": "18ac2c69328c5045dd5cc13b1ed3c07d9682e421f2b822edb416af62a560796a",
+      "role": "generated Layout Studio model"
+    },
+    "PR--LS3.layout-report.json": {
+      "bytes": 69163,
+      "sha256": "a51b8a296e0b5123c2d2acf388feb309df1a9e8f35adef6207d3523a7d5bc308",
+      "role": "conversion report"
+    }
+  }
+}

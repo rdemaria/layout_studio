@@ -8,8 +8,10 @@ from dataclasses import asdict, dataclass, field
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from ldb_machine_to_layout import ConversionError, ConversionReport, machine_to_layout, validate_layout_json, main as run
+    from _ring_conversion import rebase_seam_references
 else:
     from ..ldb_machine_to_layout import ConversionError, ConversionReport, machine_to_layout, validate_layout_json, main as run
+    from .._ring_conversion import rebase_seam_references
 
 
 SPAN_TYPES = frozenset({
@@ -44,32 +46,7 @@ def convert(machine, *, span_types=(), **options):
         tf.length = 0.0  # Internal placeholder; geometry and endpoints removed below.
         tf.target_type += " (length unavailable)"
     result = machine_to_layout(prepared, span_types=SPAN_TYPES | set(span_types), **options)
-    seam_stations = {}
-    for name, obj in result.layout["objects"].items():
-        source = machine.transformations[name]
-        parent_span = result.report.span_objects.get(source.ref)
-        if parent_span is None:
-            continue
-        parent = machine.transformations[source.ref]
-        offsets = {
-            "MECHANICAL START": -parent.length / 2,
-            "MECHANICAL MIDDLE": 0,
-            "MECHANICAL END": parent.length / 2,
-            "OPTIC START": parent.optic_offset - parent.optic_length / 2,
-            "OPTIC MIDDLE": parent.optic_offset,
-            "OPTIC END": parent.optic_offset + parent.optic_length / 2,
-        }
-        station = parent_span["center"] + offsets[source.ref_point]
-        if min(abs(station), abs(station - result.report.machine_length)) > 1e-7:
-            continue
-        # The seam has two equally valid geometric stations. Use the parent
-        # span's unambiguous center and shift back to the source boundary,
-        # retaining the object parent without changing the placed frame.
-        position = obj["position"]
-        position["reference"] = {"kind": "object_frame", "object": source.ref, "frame": "anchor"}
-        position["reference_curve"] = result.report.curve_name
-        position["transformation"].insert(0, ["ts", station - parent_span["center"]])
-        seam_stations[name] = station
+    seam_stations = rebase_seam_references(machine, result)
     kept_unknown = sorted(unknown & result.layout["objects"].keys())
     for name in kept_unknown:
         type_ = result.layout["types"][result.layout["objects"][name]["type"]]

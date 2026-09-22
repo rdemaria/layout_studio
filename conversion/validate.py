@@ -12,8 +12,10 @@ import numpy as np
 
 try:
     from .ldb_machine_to_layout import load_machine_pickle
+    from ._ring_conversion import RingMachine
 except ImportError:
     from ldb_machine_to_layout import load_machine_pickle
+    from _ring_conversion import RingMachine
 
 # Use this checkout's matching positioning model when it is available.
 api_source = Path(__file__).resolve().parents[1] / "python_api" / "src"
@@ -30,8 +32,10 @@ def validate_conversion(input_path: Path, output_path: Path, report_path: Path) 
         data = gzip.decompress(data)
     layout = Layout.from_dict(json.loads(data))
     layout.validate()
-    source = machine.get_ref_curve(machine_length=report["machine_length"],
-                                   start=machine.ref_curve.start)
+    reference_machine = (RingMachine(machine, merge_coincident_bends=machine.name == "BR")
+                         if machine.name in {"BR", "PR"} else machine)
+    source = reference_machine.get_ref_curve(machine_length=report["machine_length"],
+                                             start=machine.ref_curve.start)
     curve_name = report["curve_name"]
     result = {"objects_resolved": 0, "frames_resolved": 0,
               "curve_frames_checked": 0, "span_frames_checked": 0,
