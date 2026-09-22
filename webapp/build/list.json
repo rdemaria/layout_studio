@@ -18,5 +18,13 @@
   {
     "path": "layouts/M2--LS3.json",
     "label": "M2 LS3"
+  },
+  {
+    "path": "layouts/BR--LS3.json",
+    "label": "BR LS3"
+  },
+  {
+    "path": "layouts/PR--LS3.json",
+    "label": "PR LS3"
   }
 ]

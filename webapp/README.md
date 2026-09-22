@@ -163,7 +163,7 @@ Only same-origin HTTP(S) paths from the catalog are offered. Prefer relative pat
 so a layout continues to work when the app is mounted below an origin root. The
 bundled catalog includes the sample layout, the
 [Xsuite RBend independent-axis example](../python_api/examples/xsuite_rbend_axes.md),
-and the SPS LS3 and M2 LS3 conversions
+and the SPS LS3, M2 LS3, BR LS3, and PR LS3 conversions
 as plain JSON files.
 
 **Import file** and URL loading use plain `.json`. Files are parsed directly from
